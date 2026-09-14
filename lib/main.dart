@@ -296,25 +296,93 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         children: [
           WebViewWidget(controller: _controller),
           if (_isLoading) Container(color: kBg, child: const Center(child: CircularProgressIndicator(color: kGold))),
-          Positioned(top: 40, right: 15, child: Material(color: Colors.transparent, child: InkWell(onTap: () => _showSettings(context), borderRadius: BorderRadius.circular(20), child: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.black.withOpacity(0.5), shape: BoxShape.circle), child: const Icon(Icons.settings, color: kGold, size: 20)))),
+          Positioned(
+            top: 40,
+            right: 15,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () => _showSettings(context),
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.5),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.settings, color: kGold, size: 20),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
   void _showSettings(BuildContext context) {
-    showModalBottomSheet(context: context, backgroundColor: const Color(0xFF1E1E1E), shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))), builder: (ctx) => StatefulBuilder(builder: (context, setModal) => Padding(padding: const EdgeInsets.all(20), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Text('⚙️ App Settings', style: TextStyle(color: kGold, fontSize: 18, fontWeight: FontWeight.bold)),
-      const SizedBox(height: 12),
-      Text('জমা আছে: HTF $_cHtf/6 • ENTRY $_cEntry/4 • CORR $_cCorr/1', style: const TextStyle(color: Colors.white70, fontSize: 13)),
-      Text('Bubble-এ অপেক্ষমাণ SS: ${_pending.length}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
-      const SizedBox(height: 8),
-      SwitchListTile(title: const Text('Floating Bubble (ꫝ)', style: TextStyle(color: Colors.white)), value: _overlayShown, activeColor: kGold, onChanged: (_) async { await _toggleOverlay(); setModal(() {}); }),
-      SwitchListTile(title: const Text('Capture ON (SS ধরা)', style: TextStyle(color: Colors.white)), value: _captureOn, activeColor: kGold, onChanged: (v) async { setState(() => _captureOn = v); final p = await SharedPreferences.getInstance(); await p.setBool('cap', v); _pushState(); setModal(() {}); }),
-      SwitchListTile(title: const Text('Gallery Auto-Delete', style: TextStyle(color: Colors.white)), subtitle: const Text('জমা হওয়ার পর সিস্টেম ডায়ালগে Allow চাপলে ডিলিট হবে', style: TextStyle(color: Colors.white54, fontSize: 12)), value: _autoDelete, activeColor: kGold, onChanged: (v) async { setState(() => _autoDelete = v); final p = await SharedPreferences.getInstance(); await p.setBool('ad', v); setModal(() {}); }),
-      const SizedBox(height: 8),
-      ElevatedButton(onPressed: () { setState(() => _pending.clear()); _pushState(); Navigator.pop(context); _snack('অপেক্ষমাণ SS লিস্ট রিসেট হয়েছে'); }, style: ElevatedButton.styleFrom(backgroundColor: Colors.red.withOpacity(0.8)), child: const Text('🔄 Reset Pending Count', style: TextStyle(color: Colors.white))),
-      const SizedBox(height: 10),
-    ]))));
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModal) => Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('⚙️ App Settings', style: TextStyle(color: kGold, fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              Text('জমা আছে: HTF $_cHtf/6 • ENTRY $_cEntry/4 • CORR $_cCorr/1', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+              Text('Bubble-এ অপেক্ষমাণ SS: ${_pending.length}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                title: const Text('Floating Bubble (ꫝ)', style: TextStyle(color: Colors.white)),
+                value: _overlayShown,
+                activeColor: kGold,
+                onChanged: (_) async { await _toggleOverlay(); setModal(() {}); },
+              ),
+              SwitchListTile(
+                title: const Text('Capture ON (SS ধরা)', style: TextStyle(color: Colors.white)),
+                value: _captureOn,
+                activeColor: kGold,
+                onChanged: (v) async {
+                  setState(() => _captureOn = v);
+                  final p = await SharedPreferences.getInstance();
+                  await p.setBool('cap', v);
+                  _pushState();
+                  setModal(() {});
+                },
+              ),
+              SwitchListTile(
+                title: const Text('Gallery Auto-Delete', style: TextStyle(color: Colors.white)),
+                subtitle: const Text('জমা হওয়ার পর সিস্টেম ডায়ালগে Allow চাপলে ডিলিট হবে', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                value: _autoDelete,
+                activeColor: kGold,
+                onChanged: (v) async {
+                  setState(() => _autoDelete = v);
+                  final p = await SharedPreferences.getInstance();
+                  await p.setBool('ad', v);
+                  setModal(() {});
+                },
+              ),
+              const SizedBox(height: 8),
+              ElevatedButton(
+                onPressed: () {
+                  setState(() => _pending.clear());
+                  _pushState();
+                  Navigator.pop(context);
+                  _snack('অপেক্ষমাণ SS লিস্ট রিসেট হয়েছে');
+                },
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.red.withOpacity(0.8)),
+                child: const Text('🔄 Reset Pending Count', style: TextStyle(color: Colors.white)),
+              ),
+              const SizedBox(height: 10),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
