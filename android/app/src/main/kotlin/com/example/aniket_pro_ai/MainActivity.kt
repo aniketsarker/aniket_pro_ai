@@ -54,14 +54,14 @@ class MainActivity : FlutterActivity() {
         contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, selection, arrayOf(path), null)?.use { c ->
             if (c.moveToFirst()) {
                 val id = c.getLong(0)
-                return Uri.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                return ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
             }
         }
         return null
     }
 
     private fun startScreenshotObserver() {
-        observer = ScreenshotObserver(this, Handler(Looper.getMainLooper())) { path ->
+        observer = ScreenshotObserver(applicationContext, Handler(Looper.getMainLooper())) { path ->
             screenshotChannel?.invokeMethod("onScreenshot", path)
         }
         contentResolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, observer!!)
