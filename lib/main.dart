@@ -88,7 +88,9 @@ class MainWebViewScreen extends StatefulWidget {
 class _MainWebViewScreenState extends State<MainWebViewScreen> {
   late final WebViewController _controller;
   bool _isLoading = true;
-  bool _captureOn = false;
+  bool _firstLoad = true;
+  double _progress = 0;
+  bool _captureOn = true;
   bool _autoDelete = false;
   bool _overlayShown = false;
   int _cHtf = 0;
@@ -109,7 +111,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   Future<void> _loadPrefs() async {
     final p = await SharedPreferences.getInstance();
     setState(() {
-      _captureOn = p.getBool('cap') ?? false;
+      _captureOn = p.getBool('cap') ?? true;
       _autoDelete = p.getBool('ad') ?? false;
       _cHtf = p.getInt('c_htf') ?? 0;
       _cEntry = p.getInt('c_entry') ?? 0;
@@ -243,10 +245,19 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         }
       })
       ..setNavigationDelegate(NavigationDelegate(
+        onProgress: (p) {
+          if (mounted) setState(() => _progress = p / 100);
+        },
         onPageStarted: (_) => setState(() => _isLoading = true),
         onPageFinished: (_) async {
-          setState(() => _isLoading = false);
-          setState(() { _cHtf = 0; _cEntry = 0; _cCorr = 0; });
+          setState(() {
+            _isLoading = false;
+            _firstLoad = false;
+            _progress = 1;
+            _cHtf = 0;
+            _cEntry = 0;
+            _cCorr = 0;
+          });
           await _saveCounts();
           _pushState();
           await _controller.runJavaScript(_pageHookJs());
@@ -276,7 +287,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     final granted = await FlutterOverlayWindow.isPermissionGranted();
     if (!granted) {
       final ok = await FlutterOverlayWindow.requestPermission();
-      if (ok != true) { _snack('Overlay permission দিন: Settings > Display over other apps'); return; }
+      if (ok != true) {
+        _snack('Settings খুলবে → "Display over other apps" → ANIKET PRO AI → Allow দিন → তারপর ব্যাক চাপুন');
+        return;
+      }
     }
     if (_overlayShown) { await FlutterOverlayWindow.closeOverlay(); _overlayShown = false; } 
     else {
@@ -292,30 +306,46 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Stack(
-        children: [
-          WebViewWidget(controller: _controller),
-          if (_isLoading) Container(color: kBg, child: const Center(child: CircularProgressIndicator(color: kGold))),
-          Positioned(
-            top: 40,
-            right: 15,
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: () => _showSettings(context),
-                borderRadius: BorderRadius.circular(20),
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.5),
-                    shape: BoxShape.circle,
+      body: SafeArea(
+        bottom: false,
+        child: Stack(
+          children: [
+            WebViewWidget(controller: _controller),
+            if (_isLoading && _firstLoad)
+              Container(color: kBg, child: const Center(child: CircularProgressIndicator(color: kGold))),
+            if (_isLoading && !_firstLoad)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: LinearProgressIndicator(
+                  value: _progress,
+                  minHeight: 3,
+                  color: kGold,
+                  backgroundColor: Colors.transparent,
+                ),
+              ),
+            Positioned(
+              top: 8,
+              right: 8,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () => _showSettings(context),
+                  borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.5),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.settings, color: kGold, size: 20),
                   ),
-                  child: const Icon(Icons.settings, color: kGold, size: 20),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
