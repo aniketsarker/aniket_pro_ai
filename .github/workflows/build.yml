@@ -1,0 +1,44 @@
+name: Build ANIKET PRO AI APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.24.5
+
+      - name: Scaffold Android if missing
+        run: flutter create --platforms=android --project-name aniket_pro_ai .
+
+      - name: Patch build.gradle (SDK 35)
+        run: |
+          printf '\next {\n    compileSdkVersion = 35\n    targetSdkVersion = 34\n    minSdkVersion = 21\n}\n' >> android/build.gradle
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: aniket-pro-ai-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
