@@ -45,7 +45,7 @@ class MainActivity : FlutterActivity() {
             return
         }
         try {
-            val pendingIntent = MediaStore.createDeleteRequest(this, uris)
+            val pendingIntent = MediaStore.createDeleteRequest(contentResolver, uris)
             startIntentSenderForResult(pendingIntent.intentSender, 9001, null, 0, 0, 0)
             result.success(1)
         } catch (e: Exception) {
