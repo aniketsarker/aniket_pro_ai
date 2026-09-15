@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -50,7 +49,7 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _init() async {
-    await [Permission.photos, Permission.storage, Permission.systemAlertWindow].request();
+    await [Permission.photos, Permission.storage].request();
     await Future.delayed(const Duration(seconds: 2));
     if (mounted) {
       Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const MainWebViewScreen()));
@@ -104,7 +103,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     super.initState();
     _loadPrefs();
     _initWebView();
-    _initOverlayListener();
     _initScreenshotListener();
   }
 
@@ -128,33 +126,35 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   }
 
   void _pushState() {
-    FlutterOverlayWindow.shareData('STATE:${_pending.length}|$_cHtf|$_cEntry|$_cCorr|${_captureOn ? 1 : 0}');
+    try {
+      _galleryChannel.invokeMethod('updateBubble', {
+        'pending': _pending.length,
+        'htf': _cHtf,
+        'entry': _cEntry,
+        'corr': _cCorr,
+        'capture': _captureOn ? 1 : 0,
+      });
+    } catch (e) {}
   }
 
   void _initScreenshotListener() {
     _screenshotChannel.setMethodCallHandler((call) async {
-      if (call.method == 'onScreenshot' && _captureOn) {
-        final path = call.arguments as String;
-        if (!_pending.contains(path)) {
-          setState(() => _pending.add(path));
-          _pushState();
+      if (call.method == 'onScreenshot') {
+        if (_captureOn) {
+          final path = call.arguments as String;
+          if (!_pending.contains(path)) {
+            setState(() => _pending.add(path));
+            _pushState();
+          }
         }
-      }
-    });
-  }
-
-  void _initOverlayListener() {
-    FlutterOverlayWindow.overlayListener.listen((event) async {
-      final s = event.toString();
-      if (s == 'CAPTURE_TOGGLE') {
+      } else if (call.method == 'onBubbleTap') {
         setState(() => _captureOn = !_captureOn);
         final p = await SharedPreferences.getInstance();
         await p.setBool('cap', _captureOn);
         _pushState();
-      } else if (s == 'REQ_STATE') {
-        _pushState();
-      } else if (s.startsWith('DELIVER:')) {
-        await _deliver(s.substring(8));
+        _snack(_captureOn ? 'Capture ON — SS ধরা হবে' : 'Capture OFF');
+      } else if (call.method == 'onBubbleAction') {
+        await _deliver(call.arguments as String);
       }
     });
   }
@@ -184,7 +184,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     final count = box == 'htf' ? _cHtf : (box == 'entry' ? _cEntry : _cCorr);
     final slots = max - count;
     if (slots <= 0 || _pending.isEmpty) {
-      FlutterOverlayWindow.shareData('TOAST:কিছু জমা করার নেই');
+      _snack('কিছু জমা করার নেই');
       return;
     }
     final batch = _pending.take(slots).toList();
@@ -198,11 +198,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         if (res.toString().contains('ok')) {
           done++;
         } else {
-          FlutterOverlayWindow.shareData('TOAST:ওয়েবসাইটে input পাওয়া যায়নি');
+          _snack('ওয়েবসাইটে input পাওয়া যায়নি');
           break;
         }
       } catch (e) {
-        FlutterOverlayWindow.shareData('TOAST:ফাইল পড়া যায়নি');
+        _snack('ফাইল পড়া যায়নি');
         break;
       }
     }
@@ -304,17 +304,17 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   }
 
   Future<void> _toggleOverlay() async {
-    final granted = await FlutterOverlayWindow.isPermissionGranted();
-    if (!granted) {
-      final ok = await FlutterOverlayWindow.requestPermission();
-      if (ok != true) {
-        _snack('Settings খুলবে → "Display over other apps" → ANIKET PRO AI → Allow দিন → তারপর ব্যাক চাপুন');
-        return;
-      }
+    final can = await _galleryChannel.invokeMethod<bool>('canOverlay') ?? false;
+    if (!can) {
+      await _galleryChannel.invokeMethod('openOverlaySettings');
+      _snack('Allow দিন → ব্যাক চাপুন → আবার ON করুন');
+      return;
     }
-    if (_overlayShown) { await FlutterOverlayWindow.closeOverlay(); _overlayShown = false; } 
-    else {
-      await FlutterOverlayWindow.showOverlay(width: 160, height: 80, enableDrag: true, alignment: OverlayAlignment.topRight, overlayTitle: 'ANIKET PRO AI', overlayContent: '');
+    if (_overlayShown) {
+      await _galleryChannel.invokeMethod('hideBubble');
+      _overlayShown = false;
+    } else {
+      await _galleryChannel.invokeMethod('showBubble');
       _overlayShown = true;
       _pushState();
     }
@@ -388,7 +388,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
               Text('Bubble-এ অপেক্ষমাণ SS: ${_pending.length}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
               const SizedBox(height: 8),
               SwitchListTile(
-                title: const Text('Floating Bubble (ꫝ)', style: TextStyle(color: Colors.white)),
+                title: const Text('Floating Bubble (📸)', style: TextStyle(color: Colors.white)),
                 value: _overlayShown,
                 activeColor: kGold,
                 onChanged: (_) async { await _toggleOverlay(); setModal(() {}); },
