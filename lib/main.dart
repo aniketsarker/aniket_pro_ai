@@ -84,11 +84,11 @@ class MainWebViewScreen extends StatefulWidget {
   State<MainWebViewScreen> createState() => _MainWebViewScreenState();
 }
 
-class _MainWebViewScreenState extends State<MainWebViewScreen> {
+class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindingObserver {
   late final WebViewController _controller;
+  final ValueNotifier<double> _progressN = ValueNotifier<double>(1);
   bool _isLoading = true;
   bool _firstLoad = true;
-  double _progress = 0;
   bool _captureOn = true;
   bool _autoDelete = false;
   bool _overlayShown = false;
@@ -96,14 +96,32 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   int _cEntry = 0;
   int _cCorr = 0;
   final List<String> _pending = [];
+  VoidCallback? _sheetRefresh;
   static const Map<String, int> _max = {'htf': 6, 'entry': 4, 'corr': 1};
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadPrefs();
     _initWebView();
     _initScreenshotListener();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _progressN.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      setState(() {});
+      _pushState();
+      _sheetRefresh?.call();
+    }
   }
 
   Future<void> _loadPrefs() async {
@@ -159,6 +177,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
             setState(() => _pending.add(path));
             await _savePend();
             _pushState();
+            _sheetRefresh?.call();
           }
         }
       } else if (call.method == 'onBubbleTap') {
@@ -173,32 +192,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     });
   }
 
-  Future<void> _addManual() async {
-    try {
-      final res = await _galleryChannel.invokeMethod<List<Object?>>('pickFiles');
-      final list = (res ?? []).map((e) => e.toString()).toList();
-      if (list.isEmpty) {
-        _snack('কোনো ছবি বাছা হয়নি');
-        return;
-      }
-      setState(() {
-        for (final p in list) {
-          if (!_pending.contains(p)) _pending.add(p);
-        }
-      });
-      await _savePend();
-      _pushState();
-      _snack('${list.length}টি SS যোগ হয়েছে — Bubble-এ ১ সেকেন্ড চেপে জমা দিন');
-    } catch (e) {
-      _snack('ছবি বাছা যায়নি');
-    }
-  }
-
   Future<void> _pickAndInject(String box) async {
     try {
       final res = await _galleryChannel.invokeMethod<List<Object?>>('pickFiles');
       final list = (res ?? []).map((e) => e.toString()).toList();
-      if (list.isEmpty) return;
+      if (list.isEmpty) {
+        _toast('কোনো SS বাছা হয়নি');
+        return;
+      }
       int ok = 0;
       for (final path in list) {
         try {
@@ -212,7 +213,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       if (ok > 0) {
         _toast('$okটি SS ${box.toUpperCase()} বক্সে যোগ হয়েছে ✅');
       } else {
-        _toast('বক্সে যোগ করা যায়নি ❌');
+        setState(() {
+          for (final p in list) {
+            if (!_pending.contains(p)) _pending.add(p);
+          }
+        });
+        await _savePend();
+        _pushState();
+        _toast('বক্সে যায়নি — pending-এ রাখলাম, bubble থেকে জমা দিন');
       }
     } catch (e) {
       _toast('Picker খোলা যায়নি ❌');
@@ -257,6 +265,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       await _savePend();
       await _saveCounts();
       _pushState();
+      _sheetRefresh?.call();
       _toast('${box.toUpperCase()} +$done জমা হয়েছে ✅');
       if (_autoDelete) {
         try {
@@ -310,18 +319,21 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       })
       ..setNavigationDelegate(NavigationDelegate(
         onProgress: (p) {
-          if (mounted) setState(() => _progress = p / 100);
+          _progressN.value = p / 100;
         },
-        onPageStarted: (_) => setState(() => _isLoading = true),
+        onPageStarted: (_) {
+          _progressN.value = 0;
+          if (_firstLoad) setState(() => _isLoading = true);
+        },
         onPageFinished: (_) async {
           setState(() {
             _isLoading = false;
             _firstLoad = false;
-            _progress = 1;
             _cHtf = 0;
             _cEntry = 0;
             _cCorr = 0;
           });
+          _progressN.value = 1;
           await _saveCounts();
           _pushState();
           await _controller.runJavaScript(_pageHookJs());
@@ -332,10 +344,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
   String _pageHookJs() {
     return '''(function(){
-      var badges = document.querySelectorAll('a[href*="netlify"], div[id*="netlify"], .netlify-badge');
-      badges.forEach(function(el){ el.remove(); });
-      var all = document.querySelectorAll('*');
-      for (var i=0;i<all.length;i++){ if (all[i].innerText && all[i].innerText.includes('Powered by Netlify')){ all[i].style.display='none'; } }
+      if (window.__aniketHook) return;
+      window.__aniketHook = true;
+      function clean(){
+        var bad = document.querySelectorAll('#netlify-badge, .netlify-badge, [id*="netlify" i], [class*="netlify" i], a[href*="netlify.com"], a[href*="netlify.app"]');
+        bad.forEach(function(el){ el.remove(); });
+      }
+      clean();
+      setInterval(clean, 2000);
       document.addEventListener('click', function(e){
         var t = e.target;
         var inp = null;
@@ -403,18 +419,18 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
             WebViewWidget(controller: _controller),
             if (_isLoading && _firstLoad)
               Container(color: kBg, child: const Center(child: CircularProgressIndicator(color: kGold))),
-            if (_isLoading && !_firstLoad)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: LinearProgressIndicator(
-                  value: _progress,
-                  minHeight: 3,
-                  color: kGold,
-                  backgroundColor: Colors.transparent,
-                ),
-              ),
+            ValueListenableBuilder<double>(
+              valueListenable: _progressN,
+              builder: (context, v, _) {
+                if (_firstLoad || v >= 1) return const SizedBox.shrink();
+                return Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: LinearProgressIndicator(value: v, minHeight: 3, color: kGold, backgroundColor: Colors.transparent),
+                );
+              },
+            ),
             Positioned(
               top: 8,
               right: 8,
@@ -446,73 +462,67 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       backgroundColor: const Color(0xFF1E1E1E),
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) => StatefulBuilder(
-        builder: (context, setModal) => Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('⚙️ App Settings', style: TextStyle(color: kGold, fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 12),
-              Text('জমা আছে: HTF $_cHtf/6 • ENTRY $_cEntry/4 • CORR $_cCorr/1', style: const TextStyle(color: Colors.white70, fontSize: 13)),
-              Text('Bubble-এ অপেক্ষমাণ SS: ${_pending.length}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
-              const SizedBox(height: 8),
-              SwitchListTile(
-                title: const Text('Floating Bubble (📸)', style: TextStyle(color: Colors.white)),
-                value: _overlayShown,
-                activeColor: kGold,
-                onChanged: (_) async { await _toggleOverlay(); setModal(() {}); },
-              ),
-              SwitchListTile(
-                title: const Text('Capture ON (SS ধরা)', style: TextStyle(color: Colors.white)),
-                value: _captureOn,
-                activeColor: kGold,
-                onChanged: (v) async {
-                  setState(() => _captureOn = v);
-                  final p = await SharedPreferences.getInstance();
-                  await p.setBool('cap', v);
-                  _pushState();
-                  setModal(() {});
-                },
-              ),
-              SwitchListTile(
-                title: const Text('Gallery Auto-Delete', style: TextStyle(color: Colors.white)),
-                subtitle: const Text('জমা হওয়ার পর সিস্টেম ডায়ালগে Allow চাপলে ডিলিট হবে', style: TextStyle(color: Colors.white54, fontSize: 12)),
-                value: _autoDelete,
-                activeColor: kGold,
-                onChanged: (v) async {
-                  setState(() => _autoDelete = v);
-                  final p = await SharedPreferences.getInstance();
-                  await p.setBool('ad', v);
-                  setModal(() {});
-                },
-              ),
-              const SizedBox(height: 8),
-              ElevatedButton(
-                onPressed: () async {
-                  Navigator.pop(context);
-                  await _addManual();
-                },
-                style: ElevatedButton.styleFrom(backgroundColor: kGold),
-                child: const Text('📂 Gallery থেকে SS add', style: TextStyle(color: Colors.black)),
-              ),
-              const SizedBox(height: 8),
-              ElevatedButton(
-                onPressed: () {
-                  setState(() => _pending.clear());
-                  _savePend();
-                  _pushState();
-                  Navigator.pop(context);
-                  _snack('অপেক্ষমাণ SS লিস্ট রিসেট হয়েছে');
-                },
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.red.withOpacity(0.8)),
-                child: const Text('🔄 Reset Pending Count', style: TextStyle(color: Colors.white)),
-              ),
-              const SizedBox(height: 10),
-            ],
-          ),
-        ),
+        builder: (context, setModal) {
+          _sheetRefresh = () => setModal(() {});
+          return Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('⚙️ App Settings', style: TextStyle(color: kGold, fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
+                Text('জমা আছে: HTF $_cHtf/6 • ENTRY $_cEntry/4 • CORR $_cCorr/1', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                Text('Bubble-এ অপেক্ষমাণ SS: ${_pending.length}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  title: const Text('Floating Bubble (📸)', style: TextStyle(color: Colors.white)),
+                  value: _overlayShown,
+                  activeColor: kGold,
+                  onChanged: (_) async { await _toggleOverlay(); setModal(() {}); },
+                ),
+                SwitchListTile(
+                  title: const Text('Capture ON (SS ধরা)', style: TextStyle(color: Colors.white)),
+                  value: _captureOn,
+                  activeColor: kGold,
+                  onChanged: (v) async {
+                    setState(() => _captureOn = v);
+                    final p = await SharedPreferences.getInstance();
+                    await p.setBool('cap', v);
+                    _pushState();
+                    setModal(() {});
+                  },
+                ),
+                SwitchListTile(
+                  title: const Text('Gallery Auto-Delete', style: TextStyle(color: Colors.white)),
+                  subtitle: const Text('জমা হওয়ার পর সিস্টেম ডায়ালগে Allow চাপলে ডিলিট হবে', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                  value: _autoDelete,
+                  activeColor: kGold,
+                  onChanged: (v) async {
+                    setState(() => _autoDelete = v);
+                    final p = await SharedPreferences.getInstance();
+                    await p.setBool('ad', v);
+                    setModal(() {});
+                  },
+                ),
+                const SizedBox(height: 8),
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() => _pending.clear());
+                    _savePend();
+                    _pushState();
+                    Navigator.pop(context);
+                    _snack('অপেক্ষমাণ SS লিস্ট রিসেট হয়েছে');
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red.withOpacity(0.8)),
+                  child: const Text('🔄 Reset Pending Count', style: TextStyle(color: Colors.white)),
+                ),
+                const SizedBox(height: 10),
+              ],
+            ),
+          );
+        },
       ),
-    );
+    ).whenComplete(() => _sheetRefresh = null);
   }
 }
