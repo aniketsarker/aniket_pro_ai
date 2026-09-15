@@ -8,8 +8,7 @@ import android.content.Intent
 import android.database.ContentObserver
 import android.database.Cursor
 import android.graphics.Color
-import android.graphics.PixelFormat
-import android.graphics.drawable.GradientDrawable
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -19,7 +18,9 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -35,6 +36,7 @@ class MainActivity : FlutterActivity() {
 
     private var wm: WindowManager? = null
     private var bubbleView: TextView? = null
+    private var menuDialog: AlertDialog? = null
     private var bPending = 0
     private var bHtf = 0
     private var bEntry = 0
@@ -59,6 +61,11 @@ class MainActivity : FlutterActivity() {
                     "pickFiles" -> {
                         pendingPick = result
                         launchPicker()
+                    }
+                    "toast" -> {
+                        val m = call.arguments as? String ?: ""
+                        Toast.makeText(applicationContext, m, Toast.LENGTH_SHORT).show()
+                        result.success(1)
                     }
                     "canOverlay" -> result.success(Settings.canDrawOverlays(this))
                     "openOverlaySettings" -> {
@@ -107,21 +114,17 @@ class MainActivity : FlutterActivity() {
         val view = TextView(this)
         view.text = bubbleText()
         view.setTextColor(Color.parseColor("#F5E6C8"))
-        view.textSize = 18f
+        view.textSize = 24f
         view.gravity = Gravity.CENTER
-        val gd = GradientDrawable()
-        gd.setColor(Color.parseColor("#EE121212"))
-        gd.cornerRadius = 60f
-        gd.setStroke(3, Color.parseColor("#F5E6C8"))
-        view.background = gd
-        view.setPadding(44, 26, 44, 26)
+        view.setShadowLayer(10f, 0f, 0f, Color.BLACK)
+        view.setPadding(24, 12, 24, 12)
         view.alpha = if (bCapture) 1.0f else 0.45f
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
+            android.graphics.PixelFormat.TRANSLUCENT
         )
         params.gravity = Gravity.TOP or Gravity.END
         params.x = 24
@@ -143,29 +146,50 @@ class MainActivity : FlutterActivity() {
             }
         }
         bubbleView = null
+        menuDialog?.dismiss()
+        menuDialog = null
     }
 
     private fun openMenu() {
-        val items = arrayOf(
-            "HTF  ($bHtf/6)",
-            "ENTRY  ($bEntry/4)",
-            "CORRELATION  ($bCorr/1)",
-            "Close"
-        )
-        val builder = AlertDialog.Builder(this)
-        builder.setTitle("Joma din  •  Pending: $bPending")
-        builder.setItems(items) { d, which ->
-            when (which) {
-                0 -> screenshotChannel?.invokeMethod("onBubbleAction", "htf")
-                1 -> screenshotChannel?.invokeMethod("onBubbleAction", "entry")
-                2 -> screenshotChannel?.invokeMethod("onBubbleAction", "corr")
+        val ctx = this
+        val container = LinearLayout(ctx)
+        container.orientation = LinearLayout.VERTICAL
+        container.setBackgroundColor(Color.parseColor("#F2121212"))
+        container.setPadding(48, 36, 48, 28)
+
+        val title = TextView(ctx)
+        title.text = "Joma din  •  Pending: $bPending"
+        title.setTextColor(Color.parseColor("#F5E6C8"))
+        title.textSize = 18f
+        title.setTypeface(title.typeface, Typeface.BOLD)
+        title.setPadding(8, 8, 8, 24)
+        container.addView(title)
+
+        val labels = arrayOf("HTF  ($bHtf/6)", "ENTRY  ($bEntry/4)", "CORRELATION  ($bCorr/1)", "Close")
+        for (i in labels.indices) {
+            val tv = TextView(ctx)
+            tv.text = labels[i]
+            tv.setTextColor(if (i == 3) Color.parseColor("#8D8D8D") else Color.parseColor("#F5E6C8"))
+            tv.textSize = 16f
+            tv.setPadding(16, 30, 16, 30)
+            tv.setOnClickListener {
+                menuDialog?.dismiss()
+                when (i) {
+                    0 -> screenshotChannel?.invokeMethod("onBubbleAction", "htf")
+                    1 -> screenshotChannel?.invokeMethod("onBubbleAction", "entry")
+                    2 -> screenshotChannel?.invokeMethod("onBubbleAction", "corr")
+                }
             }
-            d.dismiss()
+            container.addView(tv)
         }
-        val dialog = builder.create()
+
+        val dialog = AlertDialog.Builder(ctx, android.R.style.Theme_Translucent_NoTitleBar).create()
+        dialog.setView(container)
         dialog.window?.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
         try {
             dialog.show()
+            dialog.window?.setLayout(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT)
+            menuDialog = dialog
         } catch (e: Exception) {
         }
     }
@@ -353,33 +377,31 @@ class MainActivity : FlutterActivity() {
 
         override fun onChange(selfChange: Boolean, uri: Uri?) {
             super.onChange(selfChange, uri)
-            uri?.let { u ->
-                val path = getPathFromUri(u)
-                if (path != null && path != lastPath && path.contains("Screenshots", ignoreCase = true)) {
-                    lastPath = path
-                    handler.post { onScreenshot(path) }
-                }
-            }
-        }
-
-        private fun getPathFromUri(uri: Uri): String? {
-            var path: String? = null
-            val projection = arrayOf(MediaStore.Images.Media.DATA)
+            if (uri == null) return
+            if (uri.lastPathSegment?.toLongOrNull() == null) return
+            val projection = arrayOf(MediaStore.Images.Media.DATA, MediaStore.Images.Media.DATE_ADDED)
             val cursor: Cursor? = try {
                 context.contentResolver.query(uri, projection, null, null, null)
             } catch (e: Exception) {
                 null
             }
+            var path: String? = null
+            var dateAdded: Long = 0
             if (cursor != null) {
                 if (cursor.moveToFirst()) {
-                    val index = cursor.getColumnIndex(MediaStore.Images.Media.DATA)
-                    if (index >= 0) {
-                        path = cursor.getString(index)
-                    }
+                    val di = cursor.getColumnIndex(MediaStore.Images.Media.DATA)
+                    val ti = cursor.getColumnIndex(MediaStore.Images.Media.DATE_ADDED)
+                    if (di >= 0) path = cursor.getString(di)
+                    if (ti >= 0) dateAdded = cursor.getLong(ti)
                 }
                 cursor.close()
             }
-            return path
+            val nowSec = System.currentTimeMillis() / 1000
+            val fresh = (nowSec - dateAdded) in 0..15
+            if (path != null && fresh && path.contains("Screenshots", true) && path != lastPath) {
+                lastPath = path
+                handler.post { onScreenshot(path) }
+            }
         }
     }
 }
