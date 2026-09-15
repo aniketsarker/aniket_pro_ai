@@ -10,8 +10,10 @@ import android.database.Cursor
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.Settings
 import android.view.Gravity
@@ -98,6 +100,15 @@ class MainActivity : FlutterActivity() {
             }
     }
 
+    private fun bringAppFront() {
+        try {
+            val intent = packageManager.getLaunchIntentForPackage(packageName)
+            intent?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
+            intent?.let { startActivity(it) }
+        } catch (e: Exception) {
+        }
+    }
+
     private fun bubbleText(): String = "\uD83D\uDCF8 $bPending"
 
     private fun refreshBubble() {
@@ -175,9 +186,11 @@ class MainActivity : FlutterActivity() {
             tv.setOnClickListener {
                 menuDialog?.dismiss()
                 when (i) {
-                    0 -> screenshotChannel?.invokeMethod("onBubbleAction", "htf")
-                    1 -> screenshotChannel?.invokeMethod("onBubbleAction", "entry")
-                    2 -> screenshotChannel?.invokeMethod("onBubbleAction", "corr")
+                    0, 1, 2 -> {
+                        bringAppFront()
+                        val box = if (i == 0) "htf" else if (i == 1) "entry" else "corr"
+                        screenshotChannel?.invokeMethod("onBubbleAction", box)
+                    }
                 }
             }
             container.addView(tv)
@@ -256,10 +269,17 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun launchPicker() {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            type = "image/*"
-            addCategory(Intent.CATEGORY_OPENABLE)
-            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        val intent = if (Build.VERSION.SDK_INT >= 33) {
+            Intent(MediaStore.ACTION_PICK_IMAGES).apply {
+                type = "image/*"
+                putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 6)
+            }
+        } else {
+            Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "image/*"
+                addCategory(Intent.CATEGORY_OPENABLE)
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            }
         }
         try {
             startActivityForResult(intent, PICK_REQ)
@@ -322,6 +342,7 @@ class MainActivity : FlutterActivity() {
         }
         try {
             val pendingIntent = MediaStore.createDeleteRequest(contentResolver, uris)
+            Toast.makeText(applicationContext, "System dialog-e Allow chapun — SS muche jabe", Toast.LENGTH_LONG).show()
             startIntentSenderForResult(pendingIntent.intentSender, 9001, null, 0, 0, 0)
             result.success(1)
         } catch (e: Exception) {
@@ -373,13 +394,18 @@ class MainActivity : FlutterActivity() {
         private val onScreenshot: (String) -> Unit
     ) : ContentObserver(handler) {
 
-        private var lastPath = ""
+        private var lastId = -1L
+        private var lastTime = 0L
 
         override fun onChange(selfChange: Boolean, uri: Uri?) {
             super.onChange(selfChange, uri)
             if (uri == null) return
-            if (uri.lastPathSegment?.toLongOrNull() == null) return
-            val projection = arrayOf(MediaStore.Images.Media.DATA, MediaStore.Images.Media.DATE_ADDED)
+            val id = uri.lastPathSegment?.toLongOrNull() ?: return
+            val projection = arrayOf(
+                MediaStore.Images.Media.DATA,
+                MediaStore.Images.Media.DATE_ADDED,
+                MediaStore.Images.Media.IS_PENDING
+            )
             val cursor: Cursor? = try {
                 context.contentResolver.query(uri, projection, null, null, null)
             } catch (e: Exception) {
@@ -387,19 +413,28 @@ class MainActivity : FlutterActivity() {
             }
             var path: String? = null
             var dateAdded: Long = 0
+            var pendingFlag = 0
             if (cursor != null) {
                 if (cursor.moveToFirst()) {
                     val di = cursor.getColumnIndex(MediaStore.Images.Media.DATA)
                     val ti = cursor.getColumnIndex(MediaStore.Images.Media.DATE_ADDED)
+                    val pi = cursor.getColumnIndex(MediaStore.Images.Media.IS_PENDING)
                     if (di >= 0) path = cursor.getString(di)
                     if (ti >= 0) dateAdded = cursor.getLong(ti)
+                    if (pi >= 0) pendingFlag = cursor.getInt(pi)
                 }
                 cursor.close()
             }
+            if (path == null) return
+            if (pendingFlag == 1) return
+            if (path.contains(".pending", true)) return
+            val now = SystemClock.uptimeMillis()
+            if (id == lastId && (now - lastTime) < 5000) return
             val nowSec = System.currentTimeMillis() / 1000
             val fresh = (nowSec - dateAdded) in 0..15
-            if (path != null && fresh && path.contains("Screenshots", true) && path != lastPath) {
-                lastPath = path
+            if (fresh && path.contains("Screenshots", true)) {
+                lastId = id
+                lastTime = now
                 handler.post { onScreenshot(path) }
             }
         }
