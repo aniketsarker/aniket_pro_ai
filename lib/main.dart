@@ -114,8 +114,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       _cHtf = p.getInt('c_htf') ?? 0;
       _cEntry = p.getInt('c_entry') ?? 0;
       _cCorr = p.getInt('c_corr') ?? 0;
+      _pending.clear();
+      _pending.addAll(p.getStringList('pend') ?? []);
     });
     _pushState();
+  }
+
+  Future<void> _savePend() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setStringList('pend', _pending);
   }
 
   Future<void> _saveCounts() async {
@@ -137,6 +144,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     } catch (e) {}
   }
 
+  void _toast(String t) {
+    try {
+      _galleryChannel.invokeMethod('toast', t);
+    } catch (e) {}
+  }
+
   void _initScreenshotListener() {
     _screenshotChannel.setMethodCallHandler((call) async {
       if (call.method == 'onScreenshot') {
@@ -144,6 +157,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           final path = call.arguments as String;
           if (!_pending.contains(path)) {
             setState(() => _pending.add(path));
+            await _savePend();
             _pushState();
           }
         }
@@ -152,7 +166,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         final p = await SharedPreferences.getInstance();
         await p.setBool('cap', _captureOn);
         _pushState();
-        _snack(_captureOn ? 'Capture ON — SS ধরা হবে' : 'Capture OFF');
+        _toast(_captureOn ? 'Capture ON — SS ধরা হবে' : 'Capture OFF');
       } else if (call.method == 'onBubbleAction') {
         await _deliver(call.arguments as String);
       }
@@ -172,10 +186,36 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           if (!_pending.contains(p)) _pending.add(p);
         }
       });
+      await _savePend();
       _pushState();
       _snack('${list.length}টি SS যোগ হয়েছে — Bubble-এ ১ সেকেন্ড চেপে জমা দিন');
     } catch (e) {
       _snack('ছবি বাছা যায়নি');
+    }
+  }
+
+  Future<void> _pickAndInject(String box) async {
+    try {
+      final res = await _galleryChannel.invokeMethod<List<Object?>>('pickFiles');
+      final list = (res ?? []).map((e) => e.toString()).toList();
+      if (list.isEmpty) return;
+      int ok = 0;
+      for (final path in list) {
+        try {
+          final bytes = await File(path).readAsBytes();
+          final b64 = base64Encode(bytes);
+          final name = path.split('/').last;
+          final r = await _controller.runJavaScriptReturningResult(_injectJs(box, b64, name));
+          if (r.toString().contains('ok')) ok++;
+        } catch (e) {}
+      }
+      if (ok > 0) {
+        _toast('$okটি SS ${box.toUpperCase()} বক্সে যোগ হয়েছে ✅');
+      } else {
+        _toast('বক্সে যোগ করা যায়নি ❌');
+      }
+    } catch (e) {
+      _toast('Picker খোলা যায়নি ❌');
     }
   }
 
@@ -184,7 +224,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     final count = box == 'htf' ? _cHtf : (box == 'entry' ? _cEntry : _cCorr);
     final slots = max - count;
     if (slots <= 0 || _pending.isEmpty) {
-      _snack('কিছু জমা করার নেই');
+      _toast('জমা করার SS নেই ❌');
       return;
     }
     final batch = _pending.take(slots).toList();
@@ -198,11 +238,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         if (res.toString().contains('ok')) {
           done++;
         } else {
-          _snack('ওয়েবসাইটে input পাওয়া যায়নি');
+          _toast('ওয়েবসাইটে input পাওয়া যায়নি ❌');
           break;
         }
       } catch (e) {
-        _snack('ফাইল পড়া যায়নি');
+        _toast('ফাইল পড়া যায়নি ❌');
         break;
       }
     }
@@ -214,8 +254,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         else { _cCorr += done; }
         _pending.removeWhere((p) => delivered.contains(p));
       });
+      await _savePend();
       await _saveCounts();
       _pushState();
+      _toast('${box.toUpperCase()} +$done জমা হয়েছে ✅');
       if (_autoDelete) {
         try {
           await _galleryChannel.invokeMethod('deleteFiles', {'paths': delivered});
@@ -251,7 +293,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(kBg)
-      ..addJavaScriptChannel('FlutterBridge', onMessageReceived: (msg) {
+      ..addJavaScriptChannel('FlutterBridge', onMessageReceived: (msg) async {
         final m = msg.message;
         if (m.startsWith('CLEARED:')) {
           setState(() {
@@ -262,6 +304,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           });
           _saveCounts();
           _pushState();
+        } else if (m.startsWith('PICK:')) {
+          await _pickAndInject(m.substring(5));
         }
       })
       ..setNavigationDelegate(NavigationDelegate(
@@ -293,12 +337,38 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       var all = document.querySelectorAll('*');
       for (var i=0;i<all.length;i++){ if (all[i].innerText && all[i].innerText.includes('Powered by Netlify')){ all[i].style.display='none'; } }
       document.addEventListener('click', function(e){
+        var t = e.target;
+        var inp = null;
+        if (t && t.tagName === 'INPUT' && t.type === 'file') inp = t;
+        if (!inp && t && t.closest) {
+          var lab = t.closest('label');
+          if (lab) {
+            var forId = lab.getAttribute('for');
+            if (forId) { var el2 = document.getElementById(forId); if (el2 && el2.type === 'file') inp = el2; }
+            if (!inp) { var el3 = lab.querySelector('input[type=file]'); if (el3) inp = el3; }
+          }
+        }
+        if (inp) {
+          e.preventDefault();
+          e.stopPropagation();
+          var box = 'htf';
+          var host = inp;
+          for (var up=0; up<5 && host; up++){
+            var txt = ((host.innerText||'') + ' ' + (host.id||'')).toUpperCase();
+            if (txt.includes('ENTRY')) { box='entry'; break; }
+            if (txt.includes('CORRELATION') || txt.includes('DXY')) { box='corr'; break; }
+            if (txt.includes('HTF')) { box='htf'; break; }
+            host = host.parentElement;
+          }
+          FlutterBridge.postMessage('PICK:' + box);
+          return;
+        }
         var b = e.target.closest ? e.target.closest('button') : null;
         if(!b) return;
-        var t=(b.innerText||'').toUpperCase();
-        if (t.includes('HTF')) FlutterBridge.postMessage('CLEARED:htf');
-        else if (t.includes('CORRELATION')) FlutterBridge.postMessage('CLEARED:corr');
-        else if (t.includes('ENTRY')) FlutterBridge.postMessage('CLEARED:entry');
+        var t2=(b.innerText||'').toUpperCase();
+        if (t2.includes('HTF')) FlutterBridge.postMessage('CLEARED:htf');
+        else if (t2.includes('CORRELATION')) FlutterBridge.postMessage('CLEARED:corr');
+        else if (t2.includes('ENTRY')) FlutterBridge.postMessage('CLEARED:entry');
       }, true);
     })();''';
   }
@@ -430,6 +500,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
               ElevatedButton(
                 onPressed: () {
                   setState(() => _pending.clear());
+                  _savePend();
                   _pushState();
                   Navigator.pop(context);
                   _snack('অপেক্ষমাণ SS লিস্ট রিসেট হয়েছে');
