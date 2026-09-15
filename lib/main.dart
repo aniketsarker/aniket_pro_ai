@@ -159,6 +159,26 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     });
   }
 
+  Future<void> _addManual() async {
+    try {
+      final res = await _galleryChannel.invokeMethod<List<Object?>>('pickFiles');
+      final list = (res ?? []).map((e) => e.toString()).toList();
+      if (list.isEmpty) {
+        _snack('কোনো ছবি বাছা হয়নি');
+        return;
+      }
+      setState(() {
+        for (final p in list) {
+          if (!_pending.contains(p)) _pending.add(p);
+        }
+      });
+      _pushState();
+      _snack('${list.length}টি SS যোগ হয়েছে — Bubble-এ ১ সেকেন্ড চেপে জমা দিন');
+    } catch (e) {
+      _snack('ছবি বাছা যায়নি');
+    }
+  }
+
   Future<void> _deliver(String box) async {
     final max = _max[box] ?? 0;
     final count = box == 'htf' ? _cHtf : (box == 'entry' ? _cEntry : _cCorr);
@@ -396,6 +416,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
                   await p.setBool('ad', v);
                   setModal(() {});
                 },
+              ),
+              const SizedBox(height: 8),
+              ElevatedButton(
+                onPressed: () async {
+                  Navigator.pop(context);
+                  await _addManual();
+                },
+                style: ElevatedButton.styleFrom(backgroundColor: kGold),
+                child: const Text('📂 Gallery থেকে SS add', style: TextStyle(color: Colors.black)),
               ),
               const SizedBox(height: 8),
               ElevatedButton(
