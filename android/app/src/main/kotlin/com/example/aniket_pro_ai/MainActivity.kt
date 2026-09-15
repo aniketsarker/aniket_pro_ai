@@ -1,15 +1,25 @@
 package com.example.aniket_pro_ai
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.database.ContentObserver
 import android.database.Cursor
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.provider.Settings
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
+import android.widget.TextView
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -22,6 +32,14 @@ class MainActivity : FlutterActivity() {
     private var screenshotChannel: MethodChannel? = null
     private var observer: ScreenshotObserver? = null
     private var pendingPick: MethodChannel.Result? = null
+
+    private var wm: WindowManager? = null
+    private var bubbleView: TextView? = null
+    private var bPending = 0
+    private var bHtf = 0
+    private var bEntry = 0
+    private var bCorr = 0
+    private var bCapture = true
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -42,9 +60,175 @@ class MainActivity : FlutterActivity() {
                         pendingPick = result
                         launchPicker()
                     }
+                    "canOverlay" -> result.success(Settings.canDrawOverlays(this))
+                    "openOverlaySettings" -> {
+                        try {
+                            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                            result.success(1)
+                        } catch (e: Exception) {
+                            result.success(0)
+                        }
+                    }
+                    "showBubble" -> {
+                        showBubble()
+                        result.success(1)
+                    }
+                    "hideBubble" -> {
+                        hideBubble()
+                        result.success(1)
+                    }
+                    "updateBubble" -> {
+                        bPending = call.argument<Int>("pending") ?: bPending
+                        bHtf = call.argument<Int>("htf") ?: bHtf
+                        bEntry = call.argument<Int>("entry") ?: bEntry
+                        bCorr = call.argument<Int>("corr") ?: bCorr
+                        bCapture = (call.argument<Int>("capture") ?: 1) == 1
+                        refreshBubble()
+                        result.success(1)
+                    }
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    private fun bubbleText(): String = "\uD83D\uDCF8 $bPending"
+
+    private fun refreshBubble() {
+        bubbleView?.let { v ->
+            v.text = bubbleText()
+            v.alpha = if (bCapture) 1.0f else 0.45f
+        }
+    }
+
+    private fun showBubble() {
+        if (bubbleView != null) return
+        if (!Settings.canDrawOverlays(this)) return
+        wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        val view = TextView(this)
+        view.text = bubbleText()
+        view.setTextColor(Color.parseColor("#F5E6C8"))
+        view.textSize = 18f
+        view.gravity = Gravity.CENTER
+        val gd = GradientDrawable()
+        gd.setColor(Color.parseColor("#EE121212"))
+        gd.cornerRadius = 60f
+        gd.setStroke(3, Color.parseColor("#F5E6C8"))
+        view.background = gd
+        view.setPadding(44, 26, 44, 26)
+        view.alpha = if (bCapture) 1.0f else 0.45f
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        )
+        params.gravity = Gravity.TOP or Gravity.END
+        params.x = 24
+        params.y = 140
+        view.setOnTouchListener(DragListener(params, view))
+        bubbleView = view
+        try {
+            wm?.addView(view, params)
+        } catch (e: Exception) {
+            bubbleView = null
+        }
+    }
+
+    private fun hideBubble() {
+        bubbleView?.let { v ->
+            try {
+                wm?.removeView(v)
+            } catch (e: Exception) {
+            }
+        }
+        bubbleView = null
+    }
+
+    private fun openMenu() {
+        val items = arrayOf(
+            "HTF  ($bHtf/6)",
+            "ENTRY  ($bEntry/4)",
+            "CORRELATION  ($bCorr/1)",
+            "Close"
+        )
+        val builder = AlertDialog.Builder(this)
+        builder.setTitle("Joma din  •  Pending: $bPending")
+        builder.setItems(items) { d, which ->
+            when (which) {
+                0 -> screenshotChannel?.invokeMethod("onBubbleAction", "htf")
+                1 -> screenshotChannel?.invokeMethod("onBubbleAction", "entry")
+                2 -> screenshotChannel?.invokeMethod("onBubbleAction", "corr")
+            }
+            d.dismiss()
+        }
+        val dialog = builder.create()
+        dialog.window?.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+        try {
+            dialog.show()
+        } catch (e: Exception) {
+        }
+    }
+
+    private inner class DragListener(
+        private val params: WindowManager.LayoutParams,
+        private val view: View
+    ) : View.OnTouchListener {
+        private val handler = Handler(Looper.getMainLooper())
+        private var initialX = 0
+        private var initialY = 0
+        private var touchX = 0f
+        private var touchY = 0f
+        private var moved = false
+        private var longFired = false
+        private val longRun = Runnable {
+            longFired = true
+            openMenu()
+        }
+
+        override fun onTouch(v: View, e: MotionEvent): Boolean {
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    initialX = params.x
+                    initialY = params.y
+                    touchX = e.rawX
+                    touchY = e.rawY
+                    moved = false
+                    longFired = false
+                    handler.postDelayed(longRun, 700)
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (e.rawX - touchX).toInt()
+                    val dy = (e.rawY - touchY).toInt()
+                    if (!moved && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
+                        moved = true
+                        handler.removeCallbacks(longRun)
+                    }
+                    if (moved) {
+                        params.x = initialX - dx
+                        params.y = initialY + dy
+                        try {
+                            wm?.updateViewLayout(view, params)
+                        } catch (ex: Exception) {
+                        }
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_UP -> {
+                    handler.removeCallbacks(longRun)
+                    if (!moved && !longFired) {
+                        screenshotChannel?.invokeMethod("onBubbleTap", null)
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    handler.removeCallbacks(longRun)
+                    return true
+                }
+            }
+            return false
+        }
     }
 
     private fun launchPicker() {
