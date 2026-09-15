@@ -12,7 +12,6 @@ dependencies:
   webview_flutter: ^4.7.0
   shared_preferences: ^2.2.3
   permission_handler: ^11.3.1
-  flutter_overlay_window: ^0.4.3
 
 dev_dependencies:
   flutter_test:
