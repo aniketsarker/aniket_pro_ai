@@ -1,5 +1,6 @@
 package com.example.aniket_pro_ai
 
+import android.accounts.AccountManager
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ContentUris
@@ -7,8 +8,6 @@ import android.content.Context
 import android.content.Intent
 import android.database.ContentObserver
 import android.database.Cursor
-import android.graphics.Color
-import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -16,12 +15,6 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.Settings
-import android.view.Gravity
-import android.view.MotionEvent
-import android.view.View
-import android.view.WindowManager
-import android.widget.LinearLayout
-import android.widget.TextView
 import android.widget.Toast
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -36,22 +29,12 @@ class MainActivity : FlutterActivity() {
     private var observer: ScreenshotObserver? = null
     private var pendingPick: MethodChannel.Result? = null
 
-    private var wm: WindowManager? = null
-    private var bubbleView: TextView? = null
-    private var menuDialog: AlertDialog? = null
-    private var bPending = 0
-    private var bHtf = 0
-    private var bEntry = 0
-    private var bCorr = 0
-    private var bCapture = true
-
-    companion object {
-        var liveBubble: TextView? = null
-    }
-
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         screenshotChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SCREENSHOT_CHANNEL)
+        BubbleService.onAction = { method, arg ->
+            runOnUiThread { screenshotChannel?.invokeMethod(method, arg) }
+        }
         setupGalleryChannel(flutterEngine)
         startScreenshotObserver()
     }
@@ -72,6 +55,9 @@ class MainActivity : FlutterActivity() {
                         pendingPick = result
                         launchPicker()
                     }
+                    "pickGoogleAccount" -> {
+                        pickGoogleAccount(result)
+                    }
                     "toast" -> {
                         val m = call.arguments as? String ?: ""
                         Toast.makeText(applicationContext, m, Toast.LENGTH_SHORT).show()
@@ -87,21 +73,22 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "showBubble" -> {
-                        showBubble()
+                        BubbleService.show(this)
                         result.success(1)
                     }
                     "hideBubble" -> {
-                        hideBubble()
+                        BubbleService.hide(this)
                         result.success(1)
                     }
-                    "bubbleAlive" -> result.success(liveBubble != null)
+                    "bubbleAlive" -> result.success(BubbleService.instance != null)
                     "updateBubble" -> {
-                        bPending = call.argument<Int>("pending") ?: bPending
-                        bHtf = call.argument<Int>("htf") ?: bHtf
-                        bEntry = call.argument<Int>("entry") ?: bEntry
-                        bCorr = call.argument<Int>("corr") ?: bCorr
-                        bCapture = (call.argument<Int>("capture") ?: 1) == 1
-                        refreshBubble()
+                        BubbleService.bText = call.argument<String>("text") ?: BubbleService.bText
+                        BubbleService.bHtf = call.argument<Int>("htf") ?: BubbleService.bHtf
+                        BubbleService.bEntry = call.argument<Int>("entry") ?: BubbleService.bEntry
+                        BubbleService.bCorr = call.argument<Int>("corr") ?: BubbleService.bCorr
+                        BubbleService.bActive = call.argument<String>("active") ?: ""
+                        BubbleService.bCapture = (call.argument<Int>("capture") ?: 1) == 1
+                        BubbleService.instance?.refresh()
                         result.success(1)
                     }
                     else -> result.notImplemented()
@@ -109,191 +96,25 @@ class MainActivity : FlutterActivity() {
             }
     }
 
-    private fun bringAppFront() {
+    private fun pickGoogleAccount(result: MethodChannel.Result) {
         try {
-            val intent = packageManager.getLaunchIntentForPackage(packageName)
-            intent?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
-            intent?.let { startActivity(it) }
+            val am = AccountManager.get(this)
+            val accounts = am.getAccountsByType("com.google")
+            if (accounts.isEmpty()) {
+                result.success(null)
+                return
+            }
+            val names = accounts.map { it.name }.toTypedArray()
+            val builder = AlertDialog.Builder(this)
+            builder.setTitle("Gmail bacchun")
+            builder.setItems(names) { d, which ->
+                d.dismiss()
+                result.success(names[which])
+            }
+            builder.setOnCancelListener { result.success(null) }
+            builder.show()
         } catch (e: Exception) {
-        }
-    }
-
-    private fun bubbleText(): String = "\uD83D\uDCF8 $bPending"
-
-    private fun refreshBubble() {
-        bubbleView?.let { v ->
-            v.text = bubbleText()
-            v.alpha = if (bCapture) 1.0f else 0.45f
-        }
-    }
-
-    private fun showBubble() {
-        liveBubble?.let { old ->
-            try {
-                wm?.removeView(old)
-            } catch (e: Exception) {
-            }
-        }
-        liveBubble = null
-        if (bubbleView != null) return
-        if (!Settings.canDrawOverlays(this)) return
-        wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        val view = TextView(this)
-        view.text = bubbleText()
-        view.setTextColor(Color.parseColor("#F5E6C8"))
-        view.textSize = 24f
-        view.gravity = Gravity.CENTER
-        view.setShadowLayer(10f, 0f, 0f, Color.BLACK)
-        view.setPadding(24, 12, 24, 12)
-        view.alpha = if (bCapture) 1.0f else 0.45f
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            android.graphics.PixelFormat.TRANSLUCENT
-        )
-        params.gravity = Gravity.TOP or Gravity.END
-        params.x = 24
-        params.y = 140
-        view.setOnTouchListener(DragListener(params, view))
-        bubbleView = view
-        liveBubble = view
-        try {
-            wm?.addView(view, params)
-        } catch (e: Exception) {
-            bubbleView = null
-            liveBubble = null
-        }
-    }
-
-    private fun hideBubble() {
-        bubbleView?.let { v ->
-            try {
-                wm?.removeView(v)
-            } catch (e: Exception) {
-            }
-        }
-        bubbleView = null
-        liveBubble = null
-        menuDialog?.dismiss()
-        menuDialog = null
-    }
-
-    private fun openMenu() {
-        val ctx = this
-        val container = LinearLayout(ctx)
-        container.orientation = LinearLayout.VERTICAL
-        container.setBackgroundColor(Color.parseColor("#F2121212"))
-        container.setPadding(48, 36, 48, 28)
-
-        val title = TextView(ctx)
-        title.text = "Joma din  •  Pending: $bPending"
-        title.setTextColor(Color.parseColor("#F5E6C8"))
-        title.textSize = 18f
-        title.setTypeface(title.typeface, Typeface.BOLD)
-        title.setPadding(8, 8, 8, 24)
-        container.addView(title)
-
-        val labels = arrayOf("HTF  ($bHtf/6)", "ENTRY  ($bEntry/4)", "CORRELATION  ($bCorr/1)", "OKAY ✔", "Close")
-        for (i in labels.indices) {
-            val tv = TextView(ctx)
-            tv.text = labels[i]
-            if (i == 3) {
-                tv.setTextColor(Color.parseColor("#7CFC9B"))
-                tv.setTypeface(tv.typeface, Typeface.BOLD)
-            } else if (i == 4) {
-                tv.setTextColor(Color.parseColor("#8D8D8D"))
-            } else {
-                tv.setTextColor(Color.parseColor("#F5E6C8"))
-            }
-            tv.textSize = 16f
-            tv.setPadding(16, 30, 16, 30)
-            tv.setOnClickListener {
-                menuDialog?.dismiss()
-                when (i) {
-                    0, 1, 2 -> {
-                        val box = if (i == 0) "htf" else if (i == 1) "entry" else "corr"
-                        screenshotChannel?.invokeMethod("onBubbleAction", box)
-                    }
-                    3 -> {
-                        bringAppFront()
-                        screenshotChannel?.invokeMethod("onBubbleOk", null)
-                    }
-                }
-            }
-            container.addView(tv)
-        }
-
-        val dialog = AlertDialog.Builder(ctx, android.R.style.Theme_Translucent_NoTitleBar).create()
-        dialog.setView(container)
-        dialog.window?.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
-        try {
-            dialog.show()
-            dialog.window?.setLayout(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT)
-            menuDialog = dialog
-        } catch (e: Exception) {
-        }
-    }
-
-    private inner class DragListener(
-        private val params: WindowManager.LayoutParams,
-        private val view: View
-    ) : View.OnTouchListener {
-        private val handler = Handler(Looper.getMainLooper())
-        private var initialX = 0
-        private var initialY = 0
-        private var touchX = 0f
-        private var touchY = 0f
-        private var moved = false
-        private var longFired = false
-        private val longRun = Runnable {
-            longFired = true
-            openMenu()
-        }
-
-        override fun onTouch(v: View, e: MotionEvent): Boolean {
-            when (e.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    initialX = params.x
-                    initialY = params.y
-                    touchX = e.rawX
-                    touchY = e.rawY
-                    moved = false
-                    longFired = false
-                    handler.postDelayed(longRun, 700)
-                    return true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = (e.rawX - touchX).toInt()
-                    val dy = (e.rawY - touchY).toInt()
-                    if (!moved && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
-                        moved = true
-                        handler.removeCallbacks(longRun)
-                    }
-                    if (moved) {
-                        params.x = initialX - dx
-                        params.y = initialY + dy
-                        try {
-                            wm?.updateViewLayout(view, params)
-                        } catch (ex: Exception) {
-                        }
-                    }
-                    return true
-                }
-                MotionEvent.ACTION_UP -> {
-                    handler.removeCallbacks(longRun)
-                    if (!moved && !longFired) {
-                        screenshotChannel?.invokeMethod("onBubbleTap", null)
-                    }
-                    return true
-                }
-                MotionEvent.ACTION_CANCEL -> {
-                    handler.removeCallbacks(longRun)
-                    return true
-                }
-            }
-            return false
+            result.success(null)
         }
     }
 
@@ -414,12 +235,6 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         observer?.let { contentResolver.unregisterContentObserver(it) }
-        hideBubble()
-        try {
-            getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
-                .edit().putBoolean("flutter.bubble", false).apply()
-        } catch (e: Exception) {
-        }
         super.onDestroy()
     }
 
