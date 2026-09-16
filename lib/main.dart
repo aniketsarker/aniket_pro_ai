@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -404,12 +406,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   bool _autoDelete = false;
   bool _overlayShown = false;
   bool _owner = false;
-  bool _warnedNoBox = false;
-  String? _activeBox;
+  String _activeBox = 'none';
   int _cHtf = 0;
   int _cEntry = 0;
   int _cCorr = 0;
+  final Map<String, int> _siteCount = {'htf': 0, 'entry': 0, 'corr': 0};
+  final Map<String, String> _deliveredBox = {};
   final List<String> _deliveredOk = [];
+  Future<void> _injectLock = Future.value();
+  DateTime _lastErrPop = DateTime(2000);
   VoidCallback? _sheetRefresh;
   static const Map<String, int> _max = {'htf': 6, 'entry': 4, 'corr': 1};
 
@@ -432,20 +437,25 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _syncBubbleSwitch();
+      _syncBubble();
       setState(() {});
       _pushState();
       _sheetRefresh?.call();
     }
   }
 
-  Future<void> _syncBubbleSwitch() async {
+  Future<void> _syncBubble() async {
     try {
       final alive = await _galleryChannel.invokeMethod<bool>('bubbleAlive') ?? false;
+      if (!alive && _overlayShown) {
+        await _galleryChannel.invokeMethod('showBubble');
+        _pushState();
+      }
       if (alive != _overlayShown) {
         _overlayShown = alive;
         final p = await SharedPreferences.getInstance();
         await p.setBool('bubble', alive);
+        if (alive) _pushState();
       }
     } catch (e) {}
   }
@@ -457,7 +467,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       _autoDelete = p.getBool('ad') ?? false;
       _overlayShown = p.getBool('bubble') ?? false;
       _owner = p.getBool('owner') ?? false;
-      _activeBox = p.getString('abox');
+      _activeBox = (p.getString('abox') ?? 'none');
+      if (_activeBox.isEmpty) _activeBox = 'none';
       _cHtf = p.getInt('c_htf') ?? 0;
       _cEntry = p.getInt('c_entry') ?? 0;
       _cCorr = p.getInt('c_corr') ?? 0;
@@ -470,15 +481,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     await p.setInt('c_htf', _cHtf);
     await p.setInt('c_entry', _cEntry);
     await p.setInt('c_corr', _cCorr);
-    await p.setString('abox', _activeBox ?? '');
+    await p.setString('abox', _activeBox);
   }
 
   int _countOf(String box) => box == 'htf' ? _cHtf : (box == 'entry' ? _cEntry : _cCorr);
 
   String _bubbleText() {
-    if (_activeBox == null) return '📸 0';
-    final c = _countOf(_activeBox!);
-    final m = _max[_activeBox!] ?? 0;
+    if (_activeBox == 'none') return '📸 0';
+    final c = _countOf(_activeBox);
+    final m = _max[_activeBox] ?? 0;
     return c >= m ? 'FULL' : '📸 $c';
   }
 
@@ -489,7 +500,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         'htf': _cHtf,
         'entry': _cEntry,
         'corr': _cCorr,
-        'active': _activeBox ?? '',
+        'active': _activeBox,
         'capture': _captureOn ? 1 : 0,
       });
     } catch (e) {}
@@ -501,19 +512,25 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     } catch (e) {}
   }
 
+  void _errPop(String t) {
+    final now = DateTime.now();
+    if (now.difference(_lastErrPop).inMilliseconds < 2000) return;
+    _lastErrPop = now;
+    try {
+      _galleryChannel.invokeMethod('errorPop', t);
+    } catch (e) {}
+  }
+
   void _initScreenshotListener() {
     _screenshotChannel.setMethodCallHandler((call) async {
       if (call.method == 'onScreenshot') {
         if (_captureOn) {
           final path = call.arguments as String;
-          if (_activeBox == null) {
-            if (!_warnedNoBox) {
-              _warnedNoBox = true;
-              _toast('Kono box select nei — bubble menu theke select korun');
-            }
+          if (_activeBox == 'none') {
+            _errPop('❌ SS bondho — box select korun');
             return;
           }
-          await _autoDeliver(path, _activeBox!);
+          await _autoDeliver(path, _activeBox);
         }
       } else if (call.method == 'onBubbleTap') {
         setState(() => _captureOn = !_captureOn);
@@ -524,19 +541,68 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       } else if (call.method == 'onBubbleSelect') {
         final box = call.arguments as String;
         setState(() => _activeBox = box);
-        _warnedNoBox = false;
         await _saveCounts();
         _pushState();
-        final m = _max[box] ?? 0;
-        if (_countOf(box) >= m) {
-          _toast('${box.toUpperCase()} FULL — onno box select korun');
+        if (box == 'none') {
+          _toast('NO BOX — SS joma hobe na');
         } else {
-          _toast('${box.toUpperCase()} select — SS auto-upload ON');
+          final m = _max[box] ?? 0;
+          if (_countOf(box) >= m) {
+            _toast('${box.toUpperCase()} FULL — onno box select korun');
+          } else {
+            _toast('${box.toUpperCase()} select — SS auto-upload ON');
+          }
         }
       } else if (call.method == 'onBubbleOk') {
         await _onOkay();
       }
     });
+  }
+
+  Future<Uint8List> _downscale(Uint8List bytes) async {
+    try {
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final src = frame.image;
+      const maxDim = 1200;
+      if (src.width <= maxDim && src.height <= maxDim) {
+        final out = await src.toByteData(format: ui.ImageByteFormat.png);
+        src.dispose();
+        codec.dispose();
+        return out!.buffer.asUint8List();
+      }
+      final scale = maxDim / math.max(src.width, src.height);
+      final w = (src.width * scale).round();
+      final h = (src.height * scale).round();
+      final recorder = ui.PictureRecorder();
+      final canvas = ui.Canvas(recorder);
+      canvas.drawImageRect(
+          src,
+          Rect.fromLTWH(0, 0, src.width.toDouble(), src.height.toDouble()),
+          Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
+          ui.Paint());
+      final pic = recorder.endRecording();
+      final outImg = await pic.toImage(w, h);
+      final data = await outImg.toByteData(format: ui.ImageByteFormat.png);
+      src.dispose();
+      codec.dispose();
+      outImg.dispose();
+      pic.dispose();
+      return data!.buffer.asUint8List();
+    } catch (e) {
+      return bytes;
+    }
+  }
+
+  Future<int> _inject(String box, String b64, String name) async {
+    try {
+      final r = await _controller.runJavaScriptReturningResult(_injectJs(box, b64, name));
+      final s = r.toString().replaceAll('"', '');
+      if (s.startsWith('ok:')) return int.tryParse(s.substring(3)) ?? -1;
+      return -1;
+    } catch (e) {
+      return -1;
+    }
   }
 
   Future<void> _autoDeliver(String path, String box) async {
@@ -545,24 +611,35 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       _toast('${box.toUpperCase()} FULL — onno box select korun');
       return;
     }
+    _injectLock = _injectLock.then((_) => _doAuto(path, box));
+    await _injectLock;
+  }
+
+  Future<void> _doAuto(String path, String box) async {
     try {
-      final bytes = await File(path).readAsBytes();
+      var bytes = await File(path).readAsBytes();
+      bytes = await _downscale(bytes);
       final b64 = base64Encode(bytes);
       final name = path.split('/').last;
-      final res = await _controller.runJavaScriptReturningResult(_injectJs(box, b64, name));
-      if (res.toString().contains('ok')) {
+      final expect = (_siteCount[box] ?? 0) + 1;
+      int got = await _inject(box, b64, name);
+      if (got != expect) got = await _inject(box, b64, name);
+      if (got == expect) {
+        _siteCount[box] = expect;
         setState(() {
           if (box == 'htf') { _cHtf++; } 
           else if (box == 'entry') { _cEntry++; } 
           else { _cCorr++; }
           _deliveredOk.add(path);
+          _deliveredBox[path] = box;
         });
         await _saveCounts();
         _pushState();
         final c = _countOf(box);
+        final m = _max[box] ?? 0;
         _toast(c >= m ? '${box.toUpperCase()} FULL ✔' : '${box.toUpperCase()} $c/$m ✅');
       } else {
-        _toast('Website input পায়নি ❌');
+        _toast('SS upload মিলল না ❌');
       }
     } catch (e) {
       _toast('SS upload ব্যর্থ ❌');
@@ -575,11 +652,28 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       return;
     }
     final List<String> toDel = List<String>.from(_deliveredOk);
+    final Set<String> boxes = _deliveredBox.values.toSet();
     _deliveredOk.clear();
+    _deliveredBox.clear();
+    bool deleted = false;
     if (_autoDelete) {
       try {
-        await _galleryChannel.invokeMethod('deleteFiles', {'paths': toDel});
+        final r = await _galleryChannel.invokeMethod<int>('deleteFiles', {'paths': toDel});
+        deleted = (r ?? 0) == 1;
       } catch (e) {}
+    }
+    if (deleted || !_autoDelete) {
+      setState(() {
+        for (final b in boxes) {
+          if (b == 'htf') { _cHtf = 0; } 
+          else if (b == 'entry') { _cEntry = 0; } 
+          else if (b == 'corr') { _cCorr = 0; }
+          _siteCount[b] = 0;
+        }
+      });
+      await _saveCounts();
+      _pushState();
+      if (deleted) _toast('Delete Allow-এর পর count reset ✅');
     }
     await _controller.runJavaScript('''(function(){
       var els = document.querySelectorAll('nav button, nav a, button, a, div[role="button"]');
@@ -601,13 +695,22 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       }
       int ok = 0;
       for (final path in list) {
-        try {
-          final bytes = await File(path).readAsBytes();
-          final b64 = base64Encode(bytes);
-          final name = path.split('/').last;
-          final r = await _controller.runJavaScriptReturningResult(_injectJs(box, b64, name));
-          if (r.toString().contains('ok')) ok++;
-        } catch (e) {}
+        _injectLock = _injectLock.then((_) async {
+          try {
+            var bytes = await File(path).readAsBytes();
+            bytes = await _downscale(bytes);
+            final b64 = base64Encode(bytes);
+            final name = path.split('/').last;
+            final expect = (_siteCount[box] ?? 0) + 1;
+            int got = await _inject(box, b64, name);
+            if (got != expect) got = await _inject(box, b64, name);
+            if (got == expect) {
+              _siteCount[box] = expect;
+              ok++;
+            }
+          } catch (e) {}
+        });
+        await _injectLock;
       }
       if (ok > 0) {
         _toast('$okটি SS ${box.toUpperCase()} বক্সে যোগ হয়েছে ✅');
@@ -622,12 +725,13 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   String _injectJs(String box, String b64, String name) {
     return '''(function(){
       function findInput(){
-        var ids = {htf:['htfFiles','htf_files','htfInput','htf','htfSs','htf_ss'], entry:['entryFiles','entry_files','entryInput','entry','entrySs','entry_ss'], corr:['corrFile','corr_file','corrInput','corr','correlation','correlationFile','dxy']};
+        var ids = {htf:['htfFiles','htf_files','htfInput','htf','htfSs','htf_ss'], entry:['entryFiles','entry_files','entryInput','entry','entrySs','entry_ss'], corr:['corrFile','corr_file','corrInput','corr','correlation','correlationFile','dxy','dxyFile']};
         var list = ids['$box'] || [];
         for (var k=0;k<list.length;k++){ var el=document.getElementById(list[k]); if(el && el.type==='file') return el; }
         var kw = {htf:'HTF', entry:'ENTRY', corr:'CORRELATION'}['$box'];
         var inputs=document.querySelectorAll('input[type=file]');
         for (var i=0;i<inputs.length;i++){ var host=inputs[i]; for (var up=0; up<4 && host; up++){ var txt=(host.innerText||'').toUpperCase(); if (txt.includes(kw)) return inputs[i]; host=host.parentElement; } }
+        if ('$box' === 'corr') { for (var j=0;j<inputs.length;j++){ if (!inputs[j].multiple) return inputs[j]; } }
         return null;
       }
       var inp=findInput();
@@ -638,7 +742,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       if (inp.multiple && inp.files){ for (var j=0;j<inp.files.length;j++) dt.items.add(inp.files[j]); }
       dt.items.add(new File([arr],'$name',{type:'image/png'}));
       inp.files=dt.files; inp.dispatchEvent(new Event('change',{bubbles:true}));
-      return 'ok';
+      return 'ok:'+inp.files.length;
     })();''';
   }
 
@@ -651,9 +755,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         if (m.startsWith('CLEARED:')) {
           setState(() {
             final b = m.substring(8);
-            if (b == 'htf') { _cHtf = 0; } 
-            else if (b == 'entry') { _cEntry = 0; } 
-            else { _cCorr = 0; }
+            if (b == 'htf') { _cHtf = 0; _siteCount['htf'] = 0; } 
+            else if (b == 'entry') { _cEntry = 0; _siteCount['entry'] = 0; } 
+            else { _cCorr = 0; _siteCount['corr'] = 0; }
           });
           _saveCounts();
           _pushState();
@@ -676,6 +780,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             _cHtf = 0;
             _cEntry = 0;
             _cCorr = 0;
+            _siteCount['htf'] = 0;
+            _siteCount['entry'] = 0;
+            _siteCount['corr'] = 0;
           });
           _progressN.value = 1;
           await _saveCounts();
@@ -693,20 +800,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       var st = document.createElement('style');
       st.innerHTML = '#netlify-badge, .netlify-badge, [id*="netlify" i], [class*="netlify" i], a[href*="netlify.com"], a[href*="netlify.app"] { display:none !important; visibility:hidden !important; opacity:0 !important; pointer-events:none !important; }';
       document.documentElement.appendChild(st);
-      function clean(){
-        var bad = document.querySelectorAll('#netlify-badge, .netlify-badge, [id*="netlify" i], [class*="netlify" i], a[href*="netlify.com"], a[href*="netlify.app"]');
-        bad.forEach(function(el){ el.remove(); });
-        var all = document.querySelectorAll('div, section, aside, iframe');
-        for (var i=0;i<all.length;i++){
-          var el = all[i];
-          if (el.tagName === 'IFRAME') { var src = (el.src||'').toLowerCase(); if (src.includes('netlify')) { el.remove(); } continue; }
-          if (el.shadowRoot) { var sb = el.shadowRoot.querySelectorAll('[id*="netlify" i], [class*="netlify" i]'); sb.forEach(function(x){ x.remove(); }); }
-          var tx = (el.innerText||'');
-          if (tx.length < 200 && tx.includes('Netlify') && el.parentElement) { el.remove(); }
-        }
+      function lightClean(){
+        var b = document.querySelector('#netlify-badge, .netlify-badge, [id*="netlify" i], [class*="netlify" i], a[href*="netlify.com"], a[href*="netlify.app"]');
+        if (b) { b.remove(); }
       }
-      clean();
-      setInterval(clean, 2000);
+      lightClean();
+      setInterval(lightClean, 20);
+      try {
+        new MutationObserver(function(){ lightClean(); }).observe(document.documentElement, {childList:true, subtree:true});
+      } catch(e){}
       document.addEventListener('click', function(e){
         var t = e.target;
         var inp = null;
@@ -829,7 +931,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
               children: [
                 const Text('⚙️ App Settings', style: TextStyle(color: kGold, fontSize: 18, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
-                Text('Active box: ${_activeBox == null ? 'কেউ না' : _activeBox!.toUpperCase()}  •  HTF $_cHtf/6 • ENTRY $_cEntry/4 • CORR $_cCorr/1', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                Text('Active box: ${_activeBox == 'none' ? 'NO BOX' : _activeBox.toUpperCase()}  •  HTF $_cHtf/6 • ENTRY $_cEntry/4 • CORR $_cCorr/1', style: const TextStyle(color: Colors.white70, fontSize: 13)),
                 const SizedBox(height: 8),
                 SwitchListTile(
                   title: const Text('Floating Bubble (📸)', style: TextStyle(color: Colors.white)),
