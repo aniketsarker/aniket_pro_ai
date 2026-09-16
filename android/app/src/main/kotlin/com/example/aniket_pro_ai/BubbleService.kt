@@ -26,6 +26,7 @@ class BubbleService : Service() {
 
     private var wm: WindowManager? = null
     private var bubbleView: TextView? = null
+    private var errorView: TextView? = null
     private var menuDialog: AlertDialog? = null
     private val handler = Handler(Looper.getMainLooper())
 
@@ -37,7 +38,7 @@ class BubbleService : Service() {
         var bHtf = 0
         var bEntry = 0
         var bCorr = 0
-        var bActive = ""
+        var bActive = "none"
         var bCapture = true
 
         fun show(ctx: Context) {
@@ -52,6 +53,11 @@ class BubbleService : Service() {
                 ctx.stopService(Intent(ctx, BubbleService::class.java))
             } catch (e: Exception) {
             }
+        }
+
+        fun showError(ctx: Context, msg: String) {
+            val inst = instance ?: return
+            inst.handler.post { inst.showErrorView(msg) }
         }
     }
 
@@ -109,6 +115,42 @@ class BubbleService : Service() {
         }
     }
 
+    private fun showErrorView(msg: String) {
+        errorView?.let { v ->
+            try {
+                wm?.removeView(v)
+            } catch (e: Exception) {
+            }
+        }
+        val v = TextView(this)
+        v.text = msg
+        v.setTextColor(Color.WHITE)
+        v.textSize = 14f
+        v.setBackgroundColor(Color.parseColor("#CC000000"))
+        v.setPadding(40, 16, 40, 16)
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT
+        )
+        params.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+        params.y = 120
+        errorView = v
+        try {
+            wm?.addView(v, params)
+            handler.postDelayed({
+                try {
+                    wm?.removeView(v)
+                } catch (e: Exception) {
+                }
+                if (errorView == v) errorView = null
+            }, 2000)
+        } catch (e: Exception) {
+        }
+    }
+
     private fun removeBubble() {
         bubbleView?.let { v ->
             try {
@@ -117,6 +159,13 @@ class BubbleService : Service() {
             }
         }
         bubbleView = null
+        errorView?.let { v ->
+            try {
+                wm?.removeView(v)
+            } catch (e: Exception) {
+            }
+        }
+        errorView = null
         menuDialog?.dismiss()
         menuDialog = null
     }
@@ -164,7 +213,7 @@ class BubbleService : Service() {
         container.setPadding(48, 36, 48, 28)
 
         val title = TextView(ctx)
-        val actName = if (bActive.isEmpty()) "no box" else bActive.uppercase()
+        val actName = if (bActive.isEmpty() || bActive == "none") "no box" else bActive.uppercase()
         title.text = "Joma din  •  $actName active"
         title.setTextColor(Color.parseColor("#F5E6C8"))
         title.textSize = 18f
@@ -172,10 +221,12 @@ class BubbleService : Service() {
         title.setPadding(8, 8, 8, 24)
         container.addView(title)
 
+        val act = if (bActive.isEmpty()) "none" else bActive
         val labels = arrayOf(
-            "HTF  (" + (if (bHtf >= 6) "FULL" else "$bHtf/6") + ")" + (if (bActive == "htf") "  ✔" else ""),
-            "ENTRY  (" + (if (bEntry >= 4) "FULL" else "$bEntry/4") + ")" + (if (bActive == "entry") "  ✔" else ""),
-            "CORRELATION  (" + (if (bCorr >= 1) "FULL" else "$bCorr/1") + ")" + (if (bActive == "corr") "  ✔" else ""),
+            "HTF  (" + (if (bHtf >= 6) "FULL" else "$bHtf/6") + ")" + (if (act == "htf") "  ✔" else ""),
+            "ENTRY  (" + (if (bEntry >= 4) "FULL" else "$bEntry/4") + ")" + (if (act == "entry") "  ✔" else ""),
+            "CORRELATION  (" + (if (bCorr >= 1) "FULL" else "$bCorr/1") + ")" + (if (act == "corr") "  ✔" else ""),
+            "NO BOX (OFF)" + (if (act == "none") "  ✔" else ""),
             "OKAY ✔",
             "Close"
         )
@@ -184,20 +235,22 @@ class BubbleService : Service() {
             tv.text = labels[i]
             tv.setTextColor(
                 when (i) {
-                    3 -> Color.parseColor("#7CFC9B")
-                    4 -> Color.parseColor("#8D8D8D")
+                    3 -> Color.parseColor("#8D8D8D")
+                    4 -> Color.parseColor("#7CFC9B")
+                    5 -> Color.parseColor("#8D8D8D")
                     else -> Color.parseColor("#F5E6C8")
                 }
             )
             tv.textSize = 16f
-            tv.setPadding(16, 30, 16, 30)
+            tv.setPadding(16, 26, 16, 26)
             tv.setOnClickListener {
                 menuDialog?.dismiss()
                 when (i) {
                     0 -> onAction?.invoke("onBubbleSelect", "htf")
                     1 -> onAction?.invoke("onBubbleSelect", "entry")
                     2 -> onAction?.invoke("onBubbleSelect", "corr")
-                    3 -> onAction?.invoke("onBubbleOk", null)
+                    3 -> onAction?.invoke("onBubbleSelect", "none")
+                    4 -> onAction?.invoke("onBubbleOk", null)
                 }
             }
             container.addView(tv)
@@ -251,7 +304,7 @@ class BubbleService : Service() {
                     }
                     if (moved) {
                         params.x = initialX - dx
-                        params.y = initialY + dy
+                        params.y = initialY - dy
                         try {
                             wm?.updateViewLayout(view, params)
                         } catch (ex: Exception) {
