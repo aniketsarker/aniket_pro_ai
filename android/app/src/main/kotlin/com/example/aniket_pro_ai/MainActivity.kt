@@ -45,6 +45,10 @@ class MainActivity : FlutterActivity() {
     private var bCorr = 0
     private var bCapture = true
 
+    companion object {
+        var liveBubble: TextView? = null
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         screenshotChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SCREENSHOT_CHANNEL)
@@ -56,6 +60,10 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, GALLERY_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "deviceId" -> {
+                        val id = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
+                        result.success("ANK-" + id.take(4).uppercase() + "-" + id.substring(4, 8).uppercase())
+                    }
                     "deleteFiles" -> {
                         val paths = call.argument<List<String>>("paths") ?: emptyList()
                         handleDelete(paths, result)
@@ -86,6 +94,7 @@ class MainActivity : FlutterActivity() {
                         hideBubble()
                         result.success(1)
                     }
+                    "bubbleAlive" -> result.success(liveBubble != null)
                     "updateBubble" -> {
                         bPending = call.argument<Int>("pending") ?: bPending
                         bHtf = call.argument<Int>("htf") ?: bHtf
@@ -119,6 +128,13 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun showBubble() {
+        liveBubble?.let { old ->
+            try {
+                wm?.removeView(old)
+            } catch (e: Exception) {
+            }
+        }
+        liveBubble = null
         if (bubbleView != null) return
         if (!Settings.canDrawOverlays(this)) return
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -142,10 +158,12 @@ class MainActivity : FlutterActivity() {
         params.y = 140
         view.setOnTouchListener(DragListener(params, view))
         bubbleView = view
+        liveBubble = view
         try {
             wm?.addView(view, params)
         } catch (e: Exception) {
             bubbleView = null
+            liveBubble = null
         }
     }
 
@@ -157,6 +175,7 @@ class MainActivity : FlutterActivity() {
             }
         }
         bubbleView = null
+        liveBubble = null
         menuDialog?.dismiss()
         menuDialog = null
     }
@@ -176,20 +195,30 @@ class MainActivity : FlutterActivity() {
         title.setPadding(8, 8, 8, 24)
         container.addView(title)
 
-        val labels = arrayOf("HTF  ($bHtf/6)", "ENTRY  ($bEntry/4)", "CORRELATION  ($bCorr/1)", "Close")
+        val labels = arrayOf("HTF  ($bHtf/6)", "ENTRY  ($bEntry/4)", "CORRELATION  ($bCorr/1)", "OKAY ✔", "Close")
         for (i in labels.indices) {
             val tv = TextView(ctx)
             tv.text = labels[i]
-            tv.setTextColor(if (i == 3) Color.parseColor("#8D8D8D") else Color.parseColor("#F5E6C8"))
+            if (i == 3) {
+                tv.setTextColor(Color.parseColor("#7CFC9B"))
+                tv.setTypeface(tv.typeface, Typeface.BOLD)
+            } else if (i == 4) {
+                tv.setTextColor(Color.parseColor("#8D8D8D"))
+            } else {
+                tv.setTextColor(Color.parseColor("#F5E6C8"))
+            }
             tv.textSize = 16f
             tv.setPadding(16, 30, 16, 30)
             tv.setOnClickListener {
                 menuDialog?.dismiss()
                 when (i) {
                     0, 1, 2 -> {
-                        bringAppFront()
                         val box = if (i == 0) "htf" else if (i == 1) "entry" else "corr"
                         screenshotChannel?.invokeMethod("onBubbleAction", box)
+                    }
+                    3 -> {
+                        bringAppFront()
+                        screenshotChannel?.invokeMethod("onBubbleOk", null)
                     }
                 }
             }
@@ -385,6 +414,12 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         observer?.let { contentResolver.unregisterContentObserver(it) }
+        hideBubble()
+        try {
+            getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+                .edit().putBoolean("flutter.bubble", false).apply()
+        } catch (e: Exception) {
+        }
         super.onDestroy()
     }
 
