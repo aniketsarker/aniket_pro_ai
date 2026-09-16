@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -10,8 +11,42 @@ import 'package:webview_flutter/webview_flutter.dart';
 const Color kGold = Color(0xFFF5E6C8);
 const Color kBg = Color(0xFF121212);
 const String kUrl = 'https://aniketsarker1726.netlify.app';
+const String kSheetUrl = 'https://script.google.com/macros/s/AKfycbysLY93ie5plvuUrv42-E9vxG9IWcDImkuj-fUv3jg4tqSvyPcz0H1yZlkrocNFIiDO/exec';
+const String kMasterKey = 'atp1726';
 const MethodChannel _galleryChannel = MethodChannel('aniket_pro_ai/gallery');
 const MethodChannel _screenshotChannel = MethodChannel('aniket_pro_ai/screenshot');
+
+Future<String> _httpGet(String url) async {
+  final client = HttpClient();
+  client.connectionTimeout = const Duration(seconds: 8);
+  try {
+    final req = await client.getUrl(Uri.parse(url));
+    final res = await req.close().timeout(const Duration(seconds: 10));
+    return await res.transform(utf8.decoder).join();
+  } finally {
+    client.close();
+  }
+}
+
+Future<bool> _httpPost(String url, Map<String, String> fields) async {
+  final client = HttpClient();
+  client.connectionTimeout = const Duration(seconds: 8);
+  try {
+    final req = await client.postUrl(Uri.parse(url));
+    req.headers.set('Content-Type', 'application/x-www-form-urlencoded');
+    final body = fields.entries
+        .map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}')
+        .join('&');
+    req.write(body);
+    final res = await req.close().timeout(const Duration(seconds: 10));
+    await res.drain();
+    return res.statusCode == 200;
+  } catch (e) {
+    return false;
+  } finally {
+    client.close();
+  }
+}
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,50 +65,299 @@ class AniketProAIApp extends StatelessWidget {
         useMaterial3: true,
         scaffoldBackgroundColor: kBg,
       ),
-      home: const SplashScreen(),
+      home: const GateScreen(),
     );
   }
 }
 
-class SplashScreen extends StatefulWidget {
-  const SplashScreen({super.key});
+class GateScreen extends StatefulWidget {
+  const GateScreen({super.key});
   @override
-  State<SplashScreen> createState() => _SplashScreenState();
+  State<GateScreen> createState() => _GateScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen> {
+class _GateScreenState extends State<GateScreen> {
+  String _stage = 'loading';
+  String _deviceId = '';
+  bool _owner = false;
+  bool _permsAsked = false;
+  String _myId = '';
+  int _logoTaps = 0;
+  Timer? _poll;
+  final _fbCtrl = TextEditingController();
+  final _gmCtrl = TextEditingController();
+
   @override
   void initState() {
     super.initState();
-    _init();
+    _boot();
   }
 
-  Future<void> _init() async {
-    await [Permission.photos, Permission.storage].request();
-    await Future.delayed(const Duration(seconds: 2));
-    if (mounted) {
-      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const MainWebViewScreen()));
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _boot() async {
+    final p = await SharedPreferences.getInstance();
+    _owner = p.getBool('owner') ?? false;
+    _permsAsked = p.getBool('permsAsked') ?? false;
+    _myId = p.getString('myId') ?? '';
+    try {
+      _deviceId = (await _galleryChannel.invokeMethod<String>('deviceId')) ?? '';
+    } catch (e) {
+      _deviceId = 'unknown';
     }
+    if (_owner) {
+      setState(() => _stage = 'main');
+      return;
+    }
+    final approved = p.getBool('approved') ?? false;
+    if (approved) {
+      setState(() => _stage = _permsAsked ? 'main' : 'perms');
+      return;
+    }
+    await _checkStatus();
+    if (_stage == 'wait') {
+      _poll = Timer.periodic(const Duration(seconds: 20), (_) => _checkStatus());
+    }
+  }
+
+  Future<void> _checkStatus() async {
+    try {
+      final raw = await _httpGet(kSheetUrl);
+      final rows = (jsonDecode(raw) as List).cast<List<dynamic>>();
+      String status = 'none';
+      for (final r in rows) {
+        if (r.length < 4) continue;
+        final type = r[1].toString();
+        final dev = r[3].toString();
+        if (dev == _deviceId && (type == 'approve' || type == 'ban')) status = type;
+      }
+      if (status == 'approve') {
+        _poll?.cancel();
+        final p = await SharedPreferences.getInstance();
+        await p.setBool('approved', true);
+        setState(() => _stage = _permsAsked ? 'main' : 'perms');
+      } else if (status == 'ban') {
+        _poll?.cancel();
+        final p = await SharedPreferences.getInstance();
+        await p.setBool('approved', false);
+        setState(() => _stage = 'connect');
+      } else {
+        setState(() => _stage = _myId.isEmpty ? 'connect' : 'wait');
+      }
+    } catch (e) {
+      setState(() => _stage = _myId.isEmpty ? 'connect' : 'wait');
+    }
+  }
+
+  Future<void> _submit(String fb, String gm) async {
+    final id = gm.trim().isNotEmpty ? gm.trim() : fb.trim();
+    final method = gm.trim().isNotEmpty ? 'Gmail' : 'Facebook';
+    final p = await SharedPreferences.getInstance();
+    await p.setString('myId', id);
+    _myId = id;
+    await _httpPost(kSheetUrl, {'type': 'request', 'id': id, 'device': _deviceId, 'method': method, 'perms': ''});
+    setState(() => _stage = 'wait');
+    _poll?.cancel();
+    _poll = Timer.periodic(const Duration(seconds: 20), (_) => _checkStatus());
+  }
+
+  Future<void> _askPerms() async {
+    await Permission.photos.request();
+    final p = await SharedPreferences.getInstance();
+    await p.setBool('permsAsked', true);
+    _permsAsked = true;
+    await _httpPost(kSheetUrl, {'type': 'perms', 'id': _myId, 'device': _deviceId, 'method': '', 'perms': 'gallery:1'});
+    setState(() => _stage = 'main');
+  }
+
+  Future<void> _masterDialog() async {
+    final c = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: const Text('Master Key', style: TextStyle(color: kGold)),
+        content: TextField(controller: c, obscureText: true, style: const TextStyle(color: Colors.white)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('X', style: TextStyle(color: Colors.white54))),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('OK', style: TextStyle(color: kGold))),
+        ],
+      ),
+    );
+    if (ok == true && c.text == kMasterKey) {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool('owner', true);
+      _owner = true;
+      setState(() => _stage = 'main');
+    }
+  }
+
+  InputDecoration _dec(String h) => InputDecoration(
+        hintText: h,
+        hintStyle: const TextStyle(color: Colors.white38),
+        filled: true,
+        fillColor: const Color(0xFF1E1E1E),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: kGold.withOpacity(0.4))),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    if (_stage == 'main') return const MainWebViewScreen();
+    if (_stage == 'perms') {
+      Future.microtask(_askPerms);
+    }
+    return Scaffold(
+      backgroundColor: kBg,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              GestureDetector(
+                onTap: () {
+                  _logoTaps++;
+                  if (_logoTaps >= 7) {
+                    _logoTaps = 0;
+                    _masterDialog();
+                  }
+                },
+                child: Image.asset('assets/logo.png', width: 120, height: 120),
+              ),
+              const SizedBox(height: 18),
+              const Text('ANIKET PRO AI', style: TextStyle(color: kGold, fontSize: 22, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 30),
+              if (_stage == 'loading') const CircularProgressIndicator(color: kGold),
+              if (_stage == 'connect') ...[
+                TextField(_fbCtrl, decoration: _dec('Connect your Facebook')),
+                const SizedBox(height: 14),
+                TextField(_gmCtrl, decoration: _dec('Connect your Gmail ID')),
+                const SizedBox(height: 22),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: kGold),
+                    onPressed: () {
+                      if (_fbCtrl.text.trim().isEmpty && _gmCtrl.text.trim().isEmpty) return;
+                      _submit(_fbCtrl.text, _gmCtrl.text);
+                    },
+                    child: const Text('Connect', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+              if (_stage == 'wait') ...[
+                const CircularProgressIndicator(color: kGold),
+                const SizedBox(height: 18),
+                const Text('Connecting… Owner approval pending', style: TextStyle(color: Colors.white70)),
+                const SizedBox(height: 14),
+                TextButton(onPressed: _checkStatus, child: const Text('Retry', style: TextStyle(color: kGold))),
+              ],
+              if (_stage == 'perms') const CircularProgressIndicator(color: kGold),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class OwnerPanelScreen extends StatefulWidget {
+  const OwnerPanelScreen({super.key});
+  @override
+  State<OwnerPanelScreen> createState() => _OwnerPanelScreenState();
+}
+
+class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
+  List<Map<String, String>> _rows = [];
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _busy = true);
+    try {
+      final raw = await _httpGet(kSheetUrl);
+      final rows = (jsonDecode(raw) as List).cast<List<dynamic>>();
+      final Map<String, Map<String, String>> map = {};
+      for (final r in rows) {
+        if (r.length < 5) continue;
+        final type = r[1].toString();
+        final id = r[2].toString();
+        final dev = r[3].toString();
+        final method = r[4].toString();
+        final perms = r.length > 5 ? r[5].toString() : '';
+        final e = map.putIfAbsent(dev, () => {'id': '', 'method': '', 'perms': '', 'status': 'PENDING', 'time': ''});
+        if (type == 'request') {
+          e['id'] = id;
+          e['method'] = method;
+          e['time'] = r[0].toString();
+        }
+        if (type == 'perms') e['perms'] = perms;
+        if (type == 'approve') e['status'] = 'APPROVED';
+        if (type == 'ban') e['status'] = 'BANNED';
+      }
+      _rows = map.entries.map((e) => {'device': e.key, ...e.value}).toList();
+      _rows.sort((a, b) => (b['time'] ?? '').compareTo(a['time'] ?? ''));
+    } catch (e) {}
+    setState(() => _busy = false);
+  }
+
+  Future<void> _act(String dev, String type) async {
+    await _httpPost(kSheetUrl, {'type': type, 'id': '', 'device': dev, 'method': '', 'perms': ''});
+    await _load();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: kBg,
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Image.asset('assets/logo.png', width: 150, height: 150),
-            const SizedBox(height: 16),
-            const Text('ANIKET PRO AI', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: kGold, letterSpacing: 1.2)),
-            const SizedBox(height: 8),
-            const Text('Loading SMC Engine...', style: TextStyle(color: Colors.white54)),
-            const SizedBox(height: 24),
-            const CircularProgressIndicator(color: kGold),
-          ],
-        ),
+      appBar: AppBar(
+        backgroundColor: kBg,
+        title: const Text('🕵️ Owner Panel', style: TextStyle(color: kGold)),
+        actions: [IconButton(onPressed: _load, icon: const Icon(Icons.refresh, color: kGold))],
       ),
+      body: _busy && _rows.isEmpty
+          ? const Center(child: CircularProgressIndicator(color: kGold))
+          : _rows.isEmpty
+              ? const Center(child: Text('এখনো কোনো request আসেনি', style: TextStyle(color: Colors.white70)))
+              : ListView.builder(
+                  itemCount: _rows.length,
+                  itemBuilder: (_, i) {
+                    final r = _rows[i];
+                    final st = r['status'] ?? '';
+                    return Card(
+                      color: const Color(0xFF1E1E1E),
+                      margin: const EdgeInsets.all(8),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('${i + 1}) ${r['id']}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                            Text('ID: ${r['device']}  •  ${r['method']}', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                            Text('Perms: ${(r['perms'] ?? '').isEmpty ? '—' : r['perms']}  •  $st', style: TextStyle(color: st == 'BANNED' ? Colors.red : (st == 'APPROVED' ? Colors.green : Colors.orange), fontSize: 12)),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                ElevatedButton(onPressed: () => _act(r['device']!, 'approve'), style: ElevatedButton.styleFrom(backgroundColor: Colors.green), child: const Text('ADD', style: TextStyle(color: Colors.white))),
+                                const SizedBox(width: 8),
+                                ElevatedButton(onPressed: () => _act(r['device']!, 'ban'), style: ElevatedButton.styleFrom(backgroundColor: Colors.red), child: const Text('BAN', style: TextStyle(color: Colors.white))),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
     );
   }
 }
@@ -92,10 +376,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   bool _captureOn = true;
   bool _autoDelete = false;
   bool _overlayShown = false;
+  bool _owner = false;
   int _cHtf = 0;
   int _cEntry = 0;
   int _cCorr = 0;
   final List<String> _pending = [];
+  final List<String> _deliveredOk = [];
   VoidCallback? _sheetRefresh;
   static const Map<String, int> _max = {'htf': 6, 'entry': 4, 'corr': 1};
 
@@ -118,10 +404,22 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _syncBubbleSwitch();
       setState(() {});
       _pushState();
       _sheetRefresh?.call();
     }
+  }
+
+  Future<void> _syncBubbleSwitch() async {
+    try {
+      final alive = await _galleryChannel.invokeMethod<bool>('bubbleAlive') ?? false;
+      if (alive != _overlayShown) {
+        _overlayShown = alive;
+        final p = await SharedPreferences.getInstance();
+        await p.setBool('bubble', alive);
+      }
+    } catch (e) {}
   }
 
   Future<void> _loadPrefs() async {
@@ -129,6 +427,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     setState(() {
       _captureOn = p.getBool('cap') ?? true;
       _autoDelete = p.getBool('ad') ?? false;
+      _overlayShown = p.getBool('bubble') ?? false;
+      _owner = p.getBool('owner') ?? false;
       _cHtf = p.getInt('c_htf') ?? 0;
       _cEntry = p.getInt('c_entry') ?? 0;
       _cCorr = p.getInt('c_corr') ?? 0;
@@ -188,8 +488,32 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         _toast(_captureOn ? 'Capture ON — SS ধরা হবে' : 'Capture OFF');
       } else if (call.method == 'onBubbleAction') {
         await _deliver(call.arguments as String);
+      } else if (call.method == 'onBubbleOk') {
+        await _onOkay();
       }
     });
+  }
+
+  Future<void> _onOkay() async {
+    if (_deliveredOk.isEmpty) {
+      _toast('কোনো নতুন জমা নেই');
+      return;
+    }
+    final List<String> toDel = List<String>.from(_deliveredOk);
+    _deliveredOk.clear();
+    if (_autoDelete) {
+      try {
+        await _galleryChannel.invokeMethod('deleteFiles', {'paths': toDel});
+      } catch (e) {}
+    }
+    await _controller.runJavaScript('''(function(){
+      var els = document.querySelectorAll('nav button, nav a, button, a, div[role="button"]');
+      for (var i=0;i<els.length;i++){
+        var t=(els[i].innerText||'').trim();
+        if (t==='Analysis'){ els[i].click(); return 'ok'; }
+      }
+      return 'fail';
+    })();''');
   }
 
   Future<void> _pickAndInject(String box) async {
@@ -261,17 +585,13 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         else if (box == 'entry') { _cEntry += done; } 
         else { _cCorr += done; }
         _pending.removeWhere((p) => delivered.contains(p));
+        _deliveredOk.addAll(delivered);
       });
       await _savePend();
       await _saveCounts();
       _pushState();
       _sheetRefresh?.call();
       _toast('${box.toUpperCase()} +$done জমা হয়েছে ✅');
-      if (_autoDelete) {
-        try {
-          await _galleryChannel.invokeMethod('deleteFiles', {'paths': delivered});
-        } catch (e) {}
-      }
     }
   }
 
@@ -349,6 +669,13 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       function clean(){
         var bad = document.querySelectorAll('#netlify-badge, .netlify-badge, [id*="netlify" i], [class*="netlify" i], a[href*="netlify.com"], a[href*="netlify.app"]');
         bad.forEach(function(el){ el.remove(); });
+        var all = document.querySelectorAll('div, section, aside');
+        for (var i=0;i<all.length;i++){
+          var el = all[i];
+          if (el.shadowRoot) { var sb = el.shadowRoot.querySelectorAll('[id*="netlify" i], [class*="netlify" i]'); sb.forEach(function(x){ x.remove(); }); }
+          var tx = (el.innerText||'');
+          if (tx.length < 200 && tx.includes('Netlify') && el.parentElement) { el.remove(); }
+        }
       }
       clean();
       setInterval(clean, 2000);
@@ -404,6 +731,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       _overlayShown = true;
       _pushState();
     }
+    final p = await SharedPreferences.getInstance();
+    await p.setBool('bubble', _overlayShown);
     setState(() {});
   }
 
@@ -495,7 +824,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                 ),
                 SwitchListTile(
                   title: const Text('Gallery Auto-Delete', style: TextStyle(color: Colors.white)),
-                  subtitle: const Text('জমা হওয়ার পর সিস্টেম ডায়ালগে Allow চাপলে ডিলিট হবে', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                  subtitle: const Text('OKAY চাপলে সিস্টেম ডায়ালগে Allow চাপলে ডিলিট হবে', style: TextStyle(color: Colors.white54, fontSize: 12)),
                   value: _autoDelete,
                   activeColor: kGold,
                   onChanged: (v) async {
@@ -505,6 +834,17 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                     setModal(() {});
                   },
                 ),
+                if (_owner) ...[
+                  const SizedBox(height: 8),
+                  ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const OwnerPanelScreen()));
+                    },
+                    style: ElevatedButton.styleFrom(backgroundColor: kGold),
+                    child: const Text('🕵️ Owner Panel', style: TextStyle(color: Colors.black)),
+                  ),
+                ],
                 const SizedBox(height: 8),
                 ElevatedButton(
                   onPressed: () {
