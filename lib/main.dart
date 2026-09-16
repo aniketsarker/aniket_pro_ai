@@ -83,6 +83,7 @@ class _GateScreenState extends State<GateScreen> {
   String _deviceId = '';
   bool _owner = false;
   bool _permsAsked = false;
+  bool _permsAsking = false;
   String _myId = '';
   int _logoTaps = 0;
   Timer? _poll;
@@ -174,19 +175,22 @@ class _GateScreenState extends State<GateScreen> {
         _gmCtrl.text = acc;
         setState(() {});
       } else {
-        _toast('Kono Gmail account paoa যায়নি — লিখে দিন');
+        _toast('No Gmail account found — type it');
       }
     } catch (e) {
-      _toast('Gmail list খোলা যায়নি');
+      _toast('Gmail list unavailable');
     }
   }
 
   Future<void> _askPerms() async {
+    if (_permsAsking) return;
+    _permsAsking = true;
     await Permission.photos.request();
     final p = await SharedPreferences.getInstance();
     await p.setBool('permsAsked', true);
     _permsAsked = true;
     await _httpPost(kSheetUrl, {'type': 'perms', 'id': _myId, 'device': _deviceId, 'method': '', 'perms': 'gallery:1'});
+    _permsAsking = false;
     setState(() => _stage = 'main');
   }
 
@@ -350,13 +354,13 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
       backgroundColor: kBg,
       appBar: AppBar(
         backgroundColor: kBg,
-        title: const Text('🕵️ Owner Panel', style: TextStyle(color: kGold)),
+        title: const Text('Owner Panel', style: TextStyle(color: kGold)),
         actions: [IconButton(onPressed: _load, icon: const Icon(Icons.refresh, color: kGold))],
       ),
       body: _busy && _rows.isEmpty
           ? const Center(child: CircularProgressIndicator(color: kGold))
           : _rows.isEmpty
-              ? const Center(child: Text('এখনো কোনো request আসেনি', style: TextStyle(color: Colors.white70)))
+              ? const Center(child: Text('No requests yet', style: TextStyle(color: Colors.white70)))
               : ListView.builder(
                   itemCount: _rows.length,
                   itemBuilder: (_, i) {
@@ -407,6 +411,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   bool _overlayShown = false;
   bool _owner = false;
   String _activeBox = 'none';
+  String _deviceId = '';
   int _cHtf = 0;
   int _cEntry = 0;
   int _cCorr = 0;
@@ -415,6 +420,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   final List<String> _deliveredOk = [];
   Future<void> _injectLock = Future.value();
   DateTime _lastErrPop = DateTime(2000);
+  Timer? _banTimer;
   VoidCallback? _sheetRefresh;
   static const Map<String, int> _max = {'htf': 6, 'entry': 4, 'corr': 1};
 
@@ -425,13 +431,43 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     _loadPrefs();
     _initWebView();
     _initScreenshotListener();
+    _startBanWatch();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _banTimer?.cancel();
     _progressN.dispose();
     super.dispose();
+  }
+
+  void _startBanWatch() {
+    _banTimer = Timer.periodic(const Duration(seconds: 60), (_) async {
+      if (_owner) return;
+      try {
+        if (_deviceId.isEmpty) {
+          _deviceId = (await _galleryChannel.invokeMethod<String>('deviceId')) ?? '';
+        }
+        final raw = await _httpGet(kSheetUrl);
+        final rows = (jsonDecode(raw) as List).cast<List<dynamic>>();
+        String status = 'none';
+        for (final r in rows) {
+          if (r.length < 4) continue;
+          final type = r[1].toString();
+          final dev = r[3].toString();
+          if (dev == _deviceId && (type == 'approve' || type == 'ban')) status = type;
+        }
+        if (status == 'ban') {
+          final p = await SharedPreferences.getInstance();
+          await p.setBool('approved', false);
+          _toast('Access removed by owner');
+          if (mounted) {
+            Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const GateScreen()));
+          }
+        }
+      } catch (e) {}
+    });
   }
 
   @override
@@ -448,8 +484,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     try {
       final alive = await _galleryChannel.invokeMethod<bool>('bubbleAlive') ?? false;
       if (!alive && _overlayShown) {
-        await _galleryChannel.invokeMethod('showBubble');
-        _pushState();
+        _overlayShown = false;
+        final p = await SharedPreferences.getInstance();
+        await p.setBool('bubble', false);
       }
       if (alive != _overlayShown) {
         _overlayShown = alive;
@@ -527,7 +564,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         if (_captureOn) {
           final path = call.arguments as String;
           if (_activeBox == 'none') {
-            _errPop('❌ SS bondho — box select korun');
+            _errPop('❌ SS disabled — select a box');
             return;
           }
           await _autoDeliver(path, _activeBox);
@@ -537,20 +574,20 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         final p = await SharedPreferences.getInstance();
         await p.setBool('cap', _captureOn);
         _pushState();
-        _toast(_captureOn ? 'Capture ON — SS ধরা হবে' : 'Capture OFF');
+        _toast(_captureOn ? 'Capture ON — SS will be captured' : 'Capture OFF');
       } else if (call.method == 'onBubbleSelect') {
         final box = call.arguments as String;
         setState(() => _activeBox = box);
         await _saveCounts();
         _pushState();
         if (box == 'none') {
-          _toast('NO BOX — SS joma hobe na');
+          _toast('NO BOX — SS will not be saved');
         } else {
           final m = _max[box] ?? 0;
           if (_countOf(box) >= m) {
-            _toast('${box.toUpperCase()} FULL — onno box select korun');
+            _toast('${box.toUpperCase()} FULL — select another box');
           } else {
-            _toast('${box.toUpperCase()} select — SS auto-upload ON');
+            _toast('${box.toUpperCase()} select — auto-upload ON');
           }
         }
       } else if (call.method == 'onBubbleOk') {
@@ -608,7 +645,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   Future<void> _autoDeliver(String path, String box) async {
     final m = _max[box] ?? 0;
     if (_countOf(box) >= m) {
-      _toast('${box.toUpperCase()} FULL — onno box select korun');
+      _toast('${box.toUpperCase()} FULL — select another box');
       return;
     }
     _injectLock = _injectLock.then((_) => _doAuto(path, box));
@@ -624,8 +661,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       final expect = (_siteCount[box] ?? 0) + 1;
       int got = await _inject(box, b64, name);
       if (got != expect) got = await _inject(box, b64, name);
-      if (got == expect) {
-        _siteCount[box] = expect;
+      if (got > 0) {
+        _siteCount[box] = got;
         setState(() {
           if (box == 'htf') { _cHtf++; } 
           else if (box == 'entry') { _cEntry++; } 
@@ -639,16 +676,16 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         final m = _max[box] ?? 0;
         _toast(c >= m ? '${box.toUpperCase()} FULL ✔' : '${box.toUpperCase()} $c/$m ✅');
       } else {
-        _toast('SS upload মিলল না ❌');
+        _toast('SS upload failed ❌');
       }
     } catch (e) {
-      _toast('SS upload ব্যর্থ ❌');
+      _toast('SS upload failed ❌');
     }
   }
 
   Future<void> _onOkay() async {
     if (_deliveredOk.isEmpty) {
-      _toast('কোনো নতুন জমা নেই');
+      _toast('No new deliveries');
       return;
     }
     final List<String> toDel = List<String>.from(_deliveredOk);
@@ -662,7 +699,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         deleted = (r ?? 0) == 1;
       } catch (e) {}
     }
-    if (deleted || !_autoDelete) {
+    if (deleted) {
       setState(() {
         for (final b in boxes) {
           if (b == 'htf') { _cHtf = 0; } 
@@ -672,8 +709,13 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         }
       });
       await _saveCounts();
-      _pushState();
-      if (deleted) _toast('Delete Allow-এর পর count reset ✅');
+      _overlayShown = false;
+      final p = await SharedPreferences.getInstance();
+      await p.setBool('bubble', false);
+      try {
+        await _galleryChannel.invokeMethod('hideBubble');
+      } catch (e) {}
+      _toast('Delivered + deleted — bubble OFF');
     }
     await _controller.runJavaScript('''(function(){
       var els = document.querySelectorAll('nav button, nav a, button, a, div[role="button"]');
@@ -690,7 +732,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       final res = await _galleryChannel.invokeMethod<List<Object?>>('pickFiles');
       final list = (res ?? []).map((e) => e.toString()).toList();
       if (list.isEmpty) {
-        _toast('কোনো SS বাছা হয়নি');
+        _toast('No SS selected');
         return;
       }
       int ok = 0;
@@ -704,8 +746,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             final expect = (_siteCount[box] ?? 0) + 1;
             int got = await _inject(box, b64, name);
             if (got != expect) got = await _inject(box, b64, name);
-            if (got == expect) {
-              _siteCount[box] = expect;
+            if (got > 0) {
+              _siteCount[box] = got;
               ok++;
             }
           } catch (e) {}
@@ -713,28 +755,44 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         await _injectLock;
       }
       if (ok > 0) {
-        _toast('$okটি SS ${box.toUpperCase()} বক্সে যোগ হয়েছে ✅');
+        _toast('$ok SS added to ${box.toUpperCase()} ✅');
       } else {
-        _toast('বক্সে যোগ করা যায়নি ❌');
+        _toast('Could not add to box ❌');
       }
     } catch (e) {
-      _toast('Picker খোলা যায়নি ❌');
+      _toast('Picker unavailable ❌');
     }
   }
 
   String _injectJs(String box, String b64, String name) {
     return '''(function(){
-      function findInput(){
-        var ids = {htf:['htfFiles','htf_files','htfInput','htf','htfSs','htf_ss'], entry:['entryFiles','entry_files','entryInput','entry','entrySs','entry_ss'], corr:['corrFile','corr_file','corrInput','corr','correlation','correlationFile','dxy','dxyFile']};
-        var list = ids['$box'] || [];
-        for (var k=0;k<list.length;k++){ var el=document.getElementById(list[k]); if(el && el.type==='file') return el; }
-        var kw = {htf:'HTF', entry:'ENTRY', corr:'CORRELATION'}['$box'];
+      function classify(inp){
+        var host = inp;
+        for (var up=0; up<8 && host; up++){
+          var txt = (host.innerText||'').toUpperCase();
+          if (txt.length>0 && txt.length<400){
+            if (txt.indexOf('CORRELATION')>=0 || txt.indexOf('DXY')>=0) return 'corr';
+            if (txt.indexOf('ENTRY')>=0) return 'entry';
+            if (txt.indexOf('HTF')>=0) return 'htf';
+          }
+          host = host.parentElement;
+        }
         var inputs=document.querySelectorAll('input[type=file]');
-        for (var i=0;i<inputs.length;i++){ var host=inputs[i]; for (var up=0; up<4 && host; up++){ var txt=(host.innerText||'').toUpperCase(); if (txt.includes(kw)) return inputs[i]; host=host.parentElement; } }
-        if ('$box' === 'corr') { for (var j=0;j<inputs.length;j++){ if (!inputs[j].multiple) return inputs[j]; } }
+        var idx = Array.prototype.indexOf.call(inputs, inp);
+        if (idx===0) return 'entry';
+        if (idx===1) return 'corr';
+        if (idx===2) return 'htf';
+        return inp.multiple ? 'htf' : 'corr';
+      }
+      function inputFor(b){
+        var inputs=document.querySelectorAll('input[type=file]');
+        for (var i=0;i<inputs.length;i++){ if (classify(inputs[i])===b) return inputs[i]; }
+        if (b==='corr'){ for (var j=0;j<inputs.length;j++){ if(!inputs[j].multiple) return inputs[j]; } }
+        if (b==='entry' && inputs.length) return inputs[0];
+        if (b==='htf'){ for (var k=0;k<inputs.length;k++){ if(inputs[k].multiple) return inputs[k]; } }
         return null;
       }
-      var inp=findInput();
+      var inp=inputFor('$box');
       if(!inp) return 'fail';
       var bin=atob('$b64'); var arr=new Uint8Array(bin.length);
       for (var i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
@@ -800,15 +858,57 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       var st = document.createElement('style');
       st.innerHTML = '#netlify-badge, .netlify-badge, [id*="netlify" i], [class*="netlify" i], a[href*="netlify.com"], a[href*="netlify.app"] { display:none !important; visibility:hidden !important; opacity:0 !important; pointer-events:none !important; }';
       document.documentElement.appendChild(st);
-      function lightClean(){
-        var b = document.querySelector('#netlify-badge, .netlify-badge, [id*="netlify" i], [class*="netlify" i], a[href*="netlify.com"], a[href*="netlify.app"]');
-        if (b) { b.remove(); }
+      function kill(el){ try { el.remove(); } catch(e){} }
+      function heavyClean(){
+        document.querySelectorAll('#netlify-badge, .netlify-badge, [id*="netlify" i], [class*="netlify" i], a[href*="netlify.com"], a[href*="netlify.app"]').forEach(kill);
+        var all = document.querySelectorAll('*');
+        for (var i=0;i<all.length;i++){
+          var el = all[i];
+          if (el.shadowRoot) {
+            var t = '';
+            try { t = el.shadowRoot.textContent || ''; } catch(e){}
+            if (t.toLowerCase().indexOf('netlify')>=0) { try { el.shadowRoot.innerHTML = ''; } catch(e){} kill(el); }
+          }
+          if (el.tagName === 'IFRAME') {
+            var s = (el.getAttribute('src') || '').toLowerCase();
+            if (s.indexOf('netlify')>=0) kill(el);
+          }
+        }
+        var nodes = document.querySelectorAll('body *');
+        for (var j=0;j<nodes.length;j++){
+          var el2 = nodes[j];
+          if (el2.children.length === 0) continue;
+          var txt = el2.textContent || '';
+          if (txt.length < 120 && txt.indexOf('Netlify')>=0) kill(el2);
+        }
       }
-      lightClean();
-      setInterval(lightClean, 20);
+      heavyClean();
+      setInterval(heavyClean, 400);
+      var last = 0;
       try {
-        new MutationObserver(function(){ lightClean(); }).observe(document.documentElement, {childList:true, subtree:true});
+        new MutationObserver(function(){
+          var now = Date.now();
+          if (now - last > 300) { last = now; heavyClean(); }
+        }).observe(document.documentElement, {childList:true, subtree:true});
       } catch(e){}
+      function classify(inp){
+        var host = inp;
+        for (var up=0; up<8 && host; up++){
+          var txt = (host.innerText||'').toUpperCase();
+          if (txt.length>0 && txt.length<400){
+            if (txt.indexOf('CORRELATION')>=0 || txt.indexOf('DXY')>=0) return 'corr';
+            if (txt.indexOf('ENTRY')>=0) return 'entry';
+            if (txt.indexOf('HTF')>=0) return 'htf';
+          }
+          host = host.parentElement;
+        }
+        var inputs=document.querySelectorAll('input[type=file]');
+        var idx = Array.prototype.indexOf.call(inputs, inp);
+        if (idx===0) return 'entry';
+        if (idx===1) return 'corr';
+        if (idx===2) return 'htf';
+        return inp.multiple ? 'htf' : 'corr';
+      }
       document.addEventListener('click', function(e){
         var t = e.target;
         var inp = null;
@@ -824,24 +924,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         if (inp) {
           e.preventDefault();
           e.stopPropagation();
-          var box = 'htf';
-          var host = inp;
-          for (var up=0; up<5 && host; up++){
-            var txt = ((host.innerText||'') + ' ' + (host.id||'')).toUpperCase();
-            if (txt.includes('ENTRY')) { box='entry'; break; }
-            if (txt.includes('CORRELATION') || txt.includes('DXY')) { box='corr'; break; }
-            if (txt.includes('HTF')) { box='htf'; break; }
-            host = host.parentElement;
-          }
-          FlutterBridge.postMessage('PICK:' + box);
+          FlutterBridge.postMessage('PICK:' + classify(inp));
           return;
         }
         var b = e.target.closest ? e.target.closest('button') : null;
         if(!b) return;
         var t2=(b.innerText||'').toUpperCase();
-        if (t2.includes('HTF')) FlutterBridge.postMessage('CLEARED:htf');
-        else if (t2.includes('CORRELATION')) FlutterBridge.postMessage('CLEARED:corr');
-        else if (t2.includes('ENTRY')) FlutterBridge.postMessage('CLEARED:entry');
+        if (t2.indexOf('HTF')>=0) FlutterBridge.postMessage('CLEARED:htf');
+        else if (t2.indexOf('CORRELATION')>=0) FlutterBridge.postMessage('CLEARED:corr');
+        else if (t2.indexOf('ENTRY')>=0) FlutterBridge.postMessage('CLEARED:entry');
       }, true);
     })();''';
   }
@@ -850,7 +941,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     final can = await _galleryChannel.invokeMethod<bool>('canOverlay') ?? false;
     if (!can) {
       await _galleryChannel.invokeMethod('openOverlaySettings');
-      _snack('Allow দিন → ব্যাক চাপুন → আবার ON করুন');
+      _snack('Allow overlay permission, press back, turn ON again');
       return;
     }
     if (_overlayShown) {
@@ -929,18 +1020,18 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('⚙️ App Settings', style: TextStyle(color: kGold, fontSize: 18, fontWeight: FontWeight.bold)),
+                const Text('App Settings', style: TextStyle(color: kGold, fontSize: 18, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
-                Text('Active box: ${_activeBox == 'none' ? 'NO BOX' : _activeBox.toUpperCase()}  •  HTF $_cHtf/6 • ENTRY $_cEntry/4 • CORR $_cCorr/1', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                Text('Active: ${_activeBox == 'none' ? 'NO BOX' : _activeBox.toUpperCase()}  •  HTF $_cHtf/6 • ENTRY $_cEntry/4 • CORR $_cCorr/1', style: const TextStyle(color: Colors.white70, fontSize: 13)),
                 const SizedBox(height: 8),
                 SwitchListTile(
-                  title: const Text('Floating Bubble (📸)', style: TextStyle(color: Colors.white)),
+                  title: const Text('Floating Bubble', style: TextStyle(color: Colors.white)),
                   value: _overlayShown,
                   activeColor: kGold,
                   onChanged: (_) async { await _toggleOverlay(); setModal(() {}); },
                 ),
                 SwitchListTile(
-                  title: const Text('Capture ON (SS ধরা)', style: TextStyle(color: Colors.white)),
+                  title: const Text('Capture ON (SS capture)', style: TextStyle(color: Colors.white)),
                   value: _captureOn,
                   activeColor: kGold,
                   onChanged: (v) async {
@@ -953,7 +1044,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                 ),
                 SwitchListTile(
                   title: const Text('Gallery Auto-Delete', style: TextStyle(color: Colors.white)),
-                  subtitle: const Text('OKAY চাপলে সিস্টেম ডায়ালগে Allow চাপলে ডিলিট হবে', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                  subtitle: const Text('After OKAY, tap Allow in system dialog to delete', style: TextStyle(color: Colors.white54, fontSize: 12)),
                   value: _autoDelete,
                   activeColor: kGold,
                   onChanged: (v) async {
@@ -971,7 +1062,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                       Navigator.push(context, MaterialPageRoute(builder: (_) => const OwnerPanelScreen()));
                     },
                     style: ElevatedButton.styleFrom(backgroundColor: kGold),
-                    child: const Text('🕵️ Owner Panel', style: TextStyle(color: Colors.black)),
+                    child: const Text('Owner Panel', style: TextStyle(color: Colors.black)),
                   ),
                 ],
                 const SizedBox(height: 10),
