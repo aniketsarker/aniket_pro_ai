@@ -406,6 +406,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   final ValueNotifier<double> _progressN = ValueNotifier<double>(1);
   bool _isLoading = true;
   bool _firstLoad = true;
+  bool _fg = true;
+  bool _flushing = false;
   bool _captureOn = true;
   bool _autoDelete = false;
   bool _overlayShown = false;
@@ -415,6 +417,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   int _cHtf = 0;
   int _cEntry = 0;
   int _cCorr = 0;
+  final List<String> _queue = [];
   final Map<String, int> _siteCount = {'htf': 0, 'entry': 0, 'corr': 0};
   final Map<String, String> _deliveredBox = {};
   final List<String> _deliveredOk = [];
@@ -473,10 +476,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _fg = true;
       _syncBubble();
       setState(() {});
       _pushState();
+      _flush();
       _sheetRefresh?.call();
+    } else if (state == AppLifecycleState.paused) {
+      _fg = false;
     }
   }
 
@@ -509,6 +516,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       _cHtf = p.getInt('c_htf') ?? 0;
       _cEntry = p.getInt('c_entry') ?? 0;
       _cCorr = p.getInt('c_corr') ?? 0;
+      _queue.clear();
+      _queue.addAll(p.getStringList('queue') ?? []);
     });
     _pushState();
   }
@@ -519,6 +528,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     await p.setInt('c_entry', _cEntry);
     await p.setInt('c_corr', _cCorr);
     await p.setString('abox', _activeBox);
+    await p.setStringList('queue', _queue);
   }
 
   int _countOf(String box) => box == 'htf' ? _cHtf : (box == 'entry' ? _cEntry : _cCorr);
@@ -567,7 +577,23 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             _errPop('❌ SS disabled — select a box');
             return;
           }
-          await _autoDeliver(path, _activeBox);
+          final box = _activeBox;
+          final m = _max[box] ?? 0;
+          if (_countOf(box) >= m) {
+            _toast('${box.toUpperCase()} FULL — select another box');
+            return;
+          }
+          setState(() {
+            if (box == 'htf') { _cHtf++; } 
+            else if (box == 'entry') { _cEntry++; } 
+            else { _cCorr++; }
+            _queue.add('$box|$path');
+          });
+          await _saveCounts();
+          _pushState();
+          final c = _countOf(box);
+          _toast(c >= m ? '${box.toUpperCase()} FULL ✔' : '${box.toUpperCase()} $c/$m ✅');
+          if (_fg) _flush();
         }
       } else if (call.method == 'onBubbleTap') {
         setState(() => _captureOn = !_captureOn);
@@ -642,48 +668,43 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
   }
 
-  Future<void> _autoDeliver(String path, String box) async {
-    final m = _max[box] ?? 0;
-    if (_countOf(box) >= m) {
-      _toast('${box.toUpperCase()} FULL — select another box');
-      return;
-    }
-    _injectLock = _injectLock.then((_) => _doAuto(path, box));
-    await _injectLock;
-  }
-
-  Future<void> _doAuto(String path, String box) async {
-    try {
-      var bytes = await File(path).readAsBytes();
-      bytes = await _downscale(bytes);
-      final b64 = base64Encode(bytes);
-      final name = path.split('/').last;
-      final expect = (_siteCount[box] ?? 0) + 1;
-      int got = await _inject(box, b64, name);
-      if (got != expect) got = await _inject(box, b64, name);
-      if (got > 0) {
-        _siteCount[box] = got;
-        setState(() {
-          if (box == 'htf') { _cHtf++; } 
-          else if (box == 'entry') { _cEntry++; } 
-          else { _cCorr++; }
-          _deliveredOk.add(path);
-          _deliveredBox[path] = box;
-        });
-        await _saveCounts();
-        _pushState();
-        final c = _countOf(box);
-        final m = _max[box] ?? 0;
-        _toast(c >= m ? '${box.toUpperCase()} FULL ✔' : '${box.toUpperCase()} $c/$m ✅');
-      } else {
-        _toast('SS upload failed ❌');
+  Future<void> _flush() async {
+    if (_flushing || !_fg || _queue.isEmpty) return;
+    _flushing = true;
+    final pending = List<String>.from(_queue);
+    for (final item in pending) {
+      final sep = item.indexOf('|');
+      if (sep < 0) continue;
+      final box = item.substring(0, sep);
+      final path = item.substring(sep + 1);
+      try {
+        var bytes = await File(path).readAsBytes();
+        bytes = await _downscale(bytes);
+        final b64 = base64Encode(bytes);
+        final name = path.split('/').last;
+        final expect = (_siteCount[box] ?? 0) + 1;
+        int got = await _inject(box, b64, name);
+        if (got != expect) got = await _inject(box, b64, name);
+        if (got > 0) {
+          _siteCount[box] = got;
+          setState(() {
+            _queue.remove(item);
+            _deliveredOk.add(path);
+            _deliveredBox[path] = box;
+          });
+          await _saveCounts();
+        } else {
+          break;
+        }
+      } catch (e) {
+        break;
       }
-    } catch (e) {
-      _toast('SS upload failed ❌');
     }
+    _flushing = false;
   }
 
   Future<void> _onOkay() async {
+    await _flush();
     if (_deliveredOk.isEmpty) {
       _toast('No new deliveries');
       return;
@@ -811,11 +832,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       ..addJavaScriptChannel('FlutterBridge', onMessageReceived: (msg) async {
         final m = msg.message;
         if (m.startsWith('CLEARED:')) {
+          final b = m.substring(8);
           setState(() {
-            final b = m.substring(8);
             if (b == 'htf') { _cHtf = 0; _siteCount['htf'] = 0; } 
             else if (b == 'entry') { _cEntry = 0; _siteCount['entry'] = 0; } 
             else { _cCorr = 0; _siteCount['corr'] = 0; }
+            _queue.removeWhere((q) => q.startsWith('$b|'));
+            _deliveredOk.removeWhere((p) => _deliveredBox[p] == b);
+            _deliveredBox.removeWhere((k, v) => v == b);
           });
           _saveCounts();
           _pushState();
@@ -846,6 +870,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           await _saveCounts();
           _pushState();
           await _controller.runJavaScript(_pageHookJs());
+          _flush();
         },
       ))
       ..loadRequest(Uri.parse(kUrl));
