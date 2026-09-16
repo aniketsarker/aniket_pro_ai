@@ -1,11 +1,13 @@
 package com.example.aniket_pro_ai
 
+import android.Manifest
 import android.accounts.AccountManager
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.database.Cursor
 import android.net.Uri
@@ -16,6 +18,8 @@ import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.Settings
 import android.widget.Toast
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -25,9 +29,11 @@ class MainActivity : FlutterActivity() {
     private val GALLERY_CHANNEL = "aniket_pro_ai/gallery"
     private val SCREENSHOT_CHANNEL = "aniket_pro_ai/screenshot"
     private val PICK_REQ = 9002
+    private val ACCOUNT_REQ = 7001
     private var screenshotChannel: MethodChannel? = null
     private var observer: ScreenshotObserver? = null
     private var pendingPick: MethodChannel.Result? = null
+    private var pendingAccount: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -102,6 +108,24 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun pickGoogleAccount(result: MethodChannel.Result) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.GET_ACCOUNTS) != PackageManager.PERMISSION_GRANTED) {
+            pendingAccount = result
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.GET_ACCOUNTS), ACCOUNT_REQ)
+            return
+        }
+        showAccountPicker(result)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == ACCOUNT_REQ) {
+            val res = pendingAccount
+            pendingAccount = null
+            if (res != null) showAccountPicker(res)
+        }
+    }
+
+    private fun showAccountPicker(result: MethodChannel.Result) {
         try {
             val am = AccountManager.get(this)
             val accounts = am.getAccountsByType("com.google")
@@ -111,7 +135,7 @@ class MainActivity : FlutterActivity() {
             }
             val names = accounts.map { it.name }.toTypedArray()
             val builder = AlertDialog.Builder(this)
-            builder.setTitle("Gmail bacchun")
+            builder.setTitle("Choose Gmail")
             builder.setItems(names) { d, which ->
                 d.dismiss()
                 result.success(names[which])
@@ -197,7 +221,7 @@ class MainActivity : FlutterActivity() {
         }
         try {
             val pendingIntent = MediaStore.createDeleteRequest(contentResolver, uris)
-            Toast.makeText(applicationContext, "System dialog-e Allow chapun — SS muche jabe", Toast.LENGTH_LONG).show()
+            Toast.makeText(applicationContext, "Tap Allow in system dialog — SS will be deleted", Toast.LENGTH_LONG).show()
             startIntentSenderForResult(pendingIntent.intentSender, 9001, null, 0, 0, 0)
             result.success(1)
         } catch (e: Exception) {
