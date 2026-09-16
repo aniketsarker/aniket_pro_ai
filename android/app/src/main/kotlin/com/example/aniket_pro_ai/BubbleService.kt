@@ -213,8 +213,8 @@ class BubbleService : Service() {
         container.setPadding(48, 36, 48, 28)
 
         val title = TextView(ctx)
-        val actName = if (bActive.isEmpty() || bActive == "none") "no box" else bActive.uppercase()
-        title.text = "Joma din  •  $actName active"
+        val actName = if (bActive.isEmpty() || bActive == "none") "NO BOX" else bActive.uppercase()
+        title.text = "Deliver  •  $actName active"
         title.setTextColor(Color.parseColor("#F5E6C8"))
         title.textSize = 18f
         title.setTypeface(title.typeface, Typeface.BOLD)
@@ -250,7 +250,15 @@ class BubbleService : Service() {
                     1 -> onAction?.invoke("onBubbleSelect", "entry")
                     2 -> onAction?.invoke("onBubbleSelect", "corr")
                     3 -> onAction?.invoke("onBubbleSelect", "none")
-                    4 -> onAction?.invoke("onBubbleOk", null)
+                    4 -> {
+                        try {
+                            val li = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
+                            li?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
+                            li?.let { ctx.startActivity(it) }
+                        } catch (e: Exception) {
+                        }
+                        onAction?.invoke("onBubbleOk", null)
+                    }
                 }
             }
             container.addView(tv)
@@ -304,7 +312,7 @@ class BubbleService : Service() {
                     }
                     if (moved) {
                         params.x = initialX - dx
-                        params.y = initialY - dy
+                        params.y = initialY + dy
                         try {
                             wm?.updateViewLayout(view, params)
                         } catch (ex: Exception) {
