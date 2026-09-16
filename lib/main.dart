@@ -233,9 +233,9 @@ class _GateScreenState extends State<GateScreen> {
               const SizedBox(height: 30),
               if (_stage == 'loading') const CircularProgressIndicator(color: kGold),
               if (_stage == 'connect') ...[
-                TextField(_fbCtrl, decoration: _dec('Connect your Facebook')),
+                TextField(controller: _fbCtrl, decoration: _dec('Connect your Facebook')),
                 const SizedBox(height: 14),
-                TextField(_gmCtrl, decoration: _dec('Connect your Gmail ID')),
+                TextField(controller: _gmCtrl, decoration: _dec('Connect your Gmail ID')),
                 const SizedBox(height: 22),
                 SizedBox(
                   width: double.infinity,
