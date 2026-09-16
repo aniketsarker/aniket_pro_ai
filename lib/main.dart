@@ -165,6 +165,20 @@ class _GateScreenState extends State<GateScreen> {
     _poll = Timer.periodic(const Duration(seconds: 20), (_) => _checkStatus());
   }
 
+  Future<void> _pickGmail() async {
+    try {
+      final acc = await _galleryChannel.invokeMethod<String>('pickGoogleAccount');
+      if (acc != null && acc.isNotEmpty) {
+        _gmCtrl.text = acc;
+        setState(() {});
+      } else {
+        _toast('Kono Gmail account paoa যায়নি — লিখে দিন');
+      }
+    } catch (e) {
+      _toast('Gmail list খোলা যায়নি');
+    }
+  }
+
   Future<void> _askPerms() async {
     await Permission.photos.request();
     final p = await SharedPreferences.getInstance();
@@ -194,6 +208,12 @@ class _GateScreenState extends State<GateScreen> {
       _owner = true;
       setState(() => _stage = 'main');
     }
+  }
+
+  void _toast(String t) {
+    try {
+      _galleryChannel.invokeMethod('toast', t);
+    } catch (e) {}
   }
 
   InputDecoration _dec(String h) => InputDecoration(
@@ -235,7 +255,14 @@ class _GateScreenState extends State<GateScreen> {
               if (_stage == 'connect') ...[
                 TextField(controller: _fbCtrl, decoration: _dec('Connect your Facebook')),
                 const SizedBox(height: 14),
-                TextField(controller: _gmCtrl, decoration: _dec('Connect your Gmail ID')),
+                TextField(
+                    controller: _gmCtrl,
+                    decoration: _dec('Connect your Gmail ID').copyWith(
+                          suffixIcon: IconButton(
+                            icon: const Icon(Icons.alternate_email, color: kGold),
+                            onPressed: _pickGmail,
+                          ),
+                        )),
                 const SizedBox(height: 22),
                 SizedBox(
                   width: double.infinity,
@@ -377,10 +404,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   bool _autoDelete = false;
   bool _overlayShown = false;
   bool _owner = false;
+  bool _warnedNoBox = false;
+  String? _activeBox;
   int _cHtf = 0;
   int _cEntry = 0;
   int _cCorr = 0;
-  final List<String> _pending = [];
   final List<String> _deliveredOk = [];
   VoidCallback? _sheetRefresh;
   static const Map<String, int> _max = {'htf': 6, 'entry': 4, 'corr': 1};
@@ -429,18 +457,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       _autoDelete = p.getBool('ad') ?? false;
       _overlayShown = p.getBool('bubble') ?? false;
       _owner = p.getBool('owner') ?? false;
+      _activeBox = p.getString('abox');
       _cHtf = p.getInt('c_htf') ?? 0;
       _cEntry = p.getInt('c_entry') ?? 0;
       _cCorr = p.getInt('c_corr') ?? 0;
-      _pending.clear();
-      _pending.addAll(p.getStringList('pend') ?? []);
     });
     _pushState();
-  }
-
-  Future<void> _savePend() async {
-    final p = await SharedPreferences.getInstance();
-    await p.setStringList('pend', _pending);
   }
 
   Future<void> _saveCounts() async {
@@ -448,15 +470,26 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     await p.setInt('c_htf', _cHtf);
     await p.setInt('c_entry', _cEntry);
     await p.setInt('c_corr', _cCorr);
+    await p.setString('abox', _activeBox ?? '');
+  }
+
+  int _countOf(String box) => box == 'htf' ? _cHtf : (box == 'entry' ? _cEntry : _cCorr);
+
+  String _bubbleText() {
+    if (_activeBox == null) return '📸 0';
+    final c = _countOf(_activeBox!);
+    final m = _max[_activeBox!] ?? 0;
+    return c >= m ? 'FULL' : '📸 $c';
   }
 
   void _pushState() {
     try {
       _galleryChannel.invokeMethod('updateBubble', {
-        'pending': _pending.length,
+        'text': _bubbleText(),
         'htf': _cHtf,
         'entry': _cEntry,
         'corr': _cCorr,
+        'active': _activeBox ?? '',
         'capture': _captureOn ? 1 : 0,
       });
     } catch (e) {}
@@ -473,12 +506,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       if (call.method == 'onScreenshot') {
         if (_captureOn) {
           final path = call.arguments as String;
-          if (!_pending.contains(path)) {
-            setState(() => _pending.add(path));
-            await _savePend();
-            _pushState();
-            _sheetRefresh?.call();
+          if (_activeBox == null) {
+            if (!_warnedNoBox) {
+              _warnedNoBox = true;
+              _toast('Kono box select nei — bubble menu theke select korun');
+            }
+            return;
           }
+          await _autoDeliver(path, _activeBox!);
         }
       } else if (call.method == 'onBubbleTap') {
         setState(() => _captureOn = !_captureOn);
@@ -486,12 +521,52 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         await p.setBool('cap', _captureOn);
         _pushState();
         _toast(_captureOn ? 'Capture ON — SS ধরা হবে' : 'Capture OFF');
-      } else if (call.method == 'onBubbleAction') {
-        await _deliver(call.arguments as String);
+      } else if (call.method == 'onBubbleSelect') {
+        final box = call.arguments as String;
+        setState(() => _activeBox = box);
+        _warnedNoBox = false;
+        await _saveCounts();
+        _pushState();
+        final m = _max[box] ?? 0;
+        if (_countOf(box) >= m) {
+          _toast('${box.toUpperCase()} FULL — onno box select korun');
+        } else {
+          _toast('${box.toUpperCase()} select — SS auto-upload ON');
+        }
       } else if (call.method == 'onBubbleOk') {
         await _onOkay();
       }
     });
+  }
+
+  Future<void> _autoDeliver(String path, String box) async {
+    final m = _max[box] ?? 0;
+    if (_countOf(box) >= m) {
+      _toast('${box.toUpperCase()} FULL — onno box select korun');
+      return;
+    }
+    try {
+      final bytes = await File(path).readAsBytes();
+      final b64 = base64Encode(bytes);
+      final name = path.split('/').last;
+      final res = await _controller.runJavaScriptReturningResult(_injectJs(box, b64, name));
+      if (res.toString().contains('ok')) {
+        setState(() {
+          if (box == 'htf') { _cHtf++; } 
+          else if (box == 'entry') { _cEntry++; } 
+          else { _cCorr++; }
+          _deliveredOk.add(path);
+        });
+        await _saveCounts();
+        _pushState();
+        final c = _countOf(box);
+        _toast(c >= m ? '${box.toUpperCase()} FULL ✔' : '${box.toUpperCase()} $c/$m ✅');
+      } else {
+        _toast('Website input পায়নি ❌');
+      }
+    } catch (e) {
+      _toast('SS upload ব্যর্থ ❌');
+    }
   }
 
   Future<void> _onOkay() async {
@@ -537,61 +612,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       if (ok > 0) {
         _toast('$okটি SS ${box.toUpperCase()} বক্সে যোগ হয়েছে ✅');
       } else {
-        setState(() {
-          for (final p in list) {
-            if (!_pending.contains(p)) _pending.add(p);
-          }
-        });
-        await _savePend();
-        _pushState();
-        _toast('বক্সে যায়নি — pending-এ রাখলাম, bubble থেকে জমা দিন');
+        _toast('বক্সে যোগ করা যায়নি ❌');
       }
     } catch (e) {
       _toast('Picker খোলা যায়নি ❌');
-    }
-  }
-
-  Future<void> _deliver(String box) async {
-    final max = _max[box] ?? 0;
-    final count = box == 'htf' ? _cHtf : (box == 'entry' ? _cEntry : _cCorr);
-    final slots = max - count;
-    if (slots <= 0 || _pending.isEmpty) {
-      _toast('জমা করার SS নেই ❌');
-      return;
-    }
-    final batch = _pending.take(slots).toList();
-    int done = 0;
-    for (final path in batch) {
-      try {
-        final bytes = await File(path).readAsBytes();
-        final b64 = base64Encode(bytes);
-        final name = path.split('/').last;
-        final res = await _controller.runJavaScriptReturningResult(_injectJs(box, b64, name));
-        if (res.toString().contains('ok')) {
-          done++;
-        } else {
-          _toast('ওয়েবসাইটে input পাওয়া যায়নি ❌');
-          break;
-        }
-      } catch (e) {
-        _toast('ফাইল পড়া যায়নি ❌');
-        break;
-      }
-    }
-    if (done > 0) {
-      final List<String> delivered = batch.take(done).toList().cast<String>();
-      setState(() {
-        if (box == 'htf') { _cHtf += done; } 
-        else if (box == 'entry') { _cEntry += done; } 
-        else { _cCorr += done; }
-        _pending.removeWhere((p) => delivered.contains(p));
-        _deliveredOk.addAll(delivered);
-      });
-      await _savePend();
-      await _saveCounts();
-      _pushState();
-      _sheetRefresh?.call();
-      _toast('${box.toUpperCase()} +$done জমা হয়েছে ✅');
     }
   }
 
@@ -666,12 +690,16 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     return '''(function(){
       if (window.__aniketHook) return;
       window.__aniketHook = true;
+      var st = document.createElement('style');
+      st.innerHTML = '#netlify-badge, .netlify-badge, [id*="netlify" i], [class*="netlify" i], a[href*="netlify.com"], a[href*="netlify.app"] { display:none !important; visibility:hidden !important; opacity:0 !important; pointer-events:none !important; }';
+      document.documentElement.appendChild(st);
       function clean(){
         var bad = document.querySelectorAll('#netlify-badge, .netlify-badge, [id*="netlify" i], [class*="netlify" i], a[href*="netlify.com"], a[href*="netlify.app"]');
         bad.forEach(function(el){ el.remove(); });
-        var all = document.querySelectorAll('div, section, aside');
+        var all = document.querySelectorAll('div, section, aside, iframe');
         for (var i=0;i<all.length;i++){
           var el = all[i];
+          if (el.tagName === 'IFRAME') { var src = (el.src||'').toLowerCase(); if (src.includes('netlify')) { el.remove(); } continue; }
           if (el.shadowRoot) { var sb = el.shadowRoot.querySelectorAll('[id*="netlify" i], [class*="netlify" i]'); sb.forEach(function(x){ x.remove(); }); }
           var tx = (el.innerText||'');
           if (tx.length < 200 && tx.includes('Netlify') && el.parentElement) { el.remove(); }
@@ -801,8 +829,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
               children: [
                 const Text('⚙️ App Settings', style: TextStyle(color: kGold, fontSize: 18, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
-                Text('জমা আছে: HTF $_cHtf/6 • ENTRY $_cEntry/4 • CORR $_cCorr/1', style: const TextStyle(color: Colors.white70, fontSize: 13)),
-                Text('Bubble-এ অপেক্ষমাণ SS: ${_pending.length}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                Text('Active box: ${_activeBox == null ? 'কেউ না' : _activeBox!.toUpperCase()}  •  HTF $_cHtf/6 • ENTRY $_cEntry/4 • CORR $_cCorr/1', style: const TextStyle(color: Colors.white70, fontSize: 13)),
                 const SizedBox(height: 8),
                 SwitchListTile(
                   title: const Text('Floating Bubble (📸)', style: TextStyle(color: Colors.white)),
@@ -845,18 +872,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                     child: const Text('🕵️ Owner Panel', style: TextStyle(color: Colors.black)),
                   ),
                 ],
-                const SizedBox(height: 8),
-                ElevatedButton(
-                  onPressed: () {
-                    setState(() => _pending.clear());
-                    _savePend();
-                    _pushState();
-                    Navigator.pop(context);
-                    _snack('অপেক্ষমাণ SS লিস্ট রিসেট হয়েছে');
-                  },
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red.withOpacity(0.8)),
-                  child: const Text('🔄 Reset Pending Count', style: TextStyle(color: Colors.white)),
-                ),
                 const SizedBox(height: 10),
               ],
             ),
