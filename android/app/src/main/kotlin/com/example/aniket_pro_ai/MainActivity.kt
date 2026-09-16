@@ -63,6 +63,11 @@ class MainActivity : FlutterActivity() {
                         Toast.makeText(applicationContext, m, Toast.LENGTH_SHORT).show()
                         result.success(1)
                     }
+                    "errorPop" -> {
+                        val m = call.arguments as? String ?: ""
+                        BubbleService.showError(this, m)
+                        result.success(1)
+                    }
                     "canOverlay" -> result.success(Settings.canDrawOverlays(this))
                     "openOverlaySettings" -> {
                         try {
@@ -86,7 +91,7 @@ class MainActivity : FlutterActivity() {
                         BubbleService.bHtf = call.argument<Int>("htf") ?: BubbleService.bHtf
                         BubbleService.bEntry = call.argument<Int>("entry") ?: BubbleService.bEntry
                         BubbleService.bCorr = call.argument<Int>("corr") ?: BubbleService.bCorr
-                        BubbleService.bActive = call.argument<String>("active") ?: ""
+                        BubbleService.bActive = call.argument<String>("active") ?: "none"
                         BubbleService.bCapture = (call.argument<Int>("capture") ?: 1) == 1
                         BubbleService.instance?.refresh()
                         result.success(1)
