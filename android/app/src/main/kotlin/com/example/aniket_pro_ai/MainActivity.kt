@@ -11,6 +11,8 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.database.Cursor
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -25,6 +27,7 @@ import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
 
 class MainActivity : FlutterActivity() {
 
@@ -52,6 +55,43 @@ class MainActivity : FlutterActivity() {
         startScreenshotObserver()
     }
 
+    private fun compressBytes(src: ByteArray): ByteArray {
+        return try {
+            var bmp = BitmapFactory.decodeByteArray(src, 0, src.size) ?: return src
+            val maxDim = 1600
+            if (bmp.width > maxDim || bmp.height > maxDim) {
+                val scale = maxDim.toFloat() / Math.max(bmp.width, bmp.height)
+                val w = (bmp.width * scale).toInt()
+                val h = (bmp.height * scale).toInt()
+                val scaled = Bitmap.createScaledBitmap(bmp, w, h, true)
+                if (scaled != bmp) bmp.recycle()
+                bmp = scaled
+            }
+            fun enc(q: Int): ByteArray {
+                val bos = ByteArrayOutputStream()
+                bmp.compress(Bitmap.CompressFormat.JPEG, q, bos)
+                return bos.toByteArray()
+            }
+            var out = enc(85)
+            if (out.size > 300 * 1024) out = enc(70)
+            if (out.size > 300 * 1024) out = enc(55)
+            if (out.size > 300 * 1024) {
+                val scale = 1200f / Math.max(bmp.width, bmp.height)
+                if (scale < 1f) {
+                    val s2 = Bitmap.createScaledBitmap(bmp, (bmp.width * scale).toInt(), (bmp.height * scale).toInt(), true)
+                    val bos = ByteArrayOutputStream()
+                    s2.compress(Bitmap.CompressFormat.JPEG, 55, bos)
+                    out = bos.toByteArray()
+                    s2.recycle()
+                }
+            }
+            bmp.recycle()
+            out
+        } catch (e: Exception) {
+            src
+        }
+    }
+
     private fun setupGalleryChannel(flutterEngine: FlutterEngine) {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, GALLERY_CHANNEL)
             .setMethodCallHandler { call, result ->
@@ -59,6 +99,10 @@ class MainActivity : FlutterActivity() {
                     "deviceId" -> {
                         val id = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
                         result.success("ANK-" + id.take(4).uppercase() + "-" + id.substring(4, 8).uppercase())
+                    }
+                    "compress" -> {
+                        val bytes = call.argument<ByteArray>("bytes") ?: ByteArray(0)
+                        result.success(compressBytes(bytes))
                     }
                     "deleteFiles" -> {
                         val paths = call.argument<List<String>>("paths") ?: emptyList()
