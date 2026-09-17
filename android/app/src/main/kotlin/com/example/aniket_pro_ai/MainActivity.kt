@@ -55,10 +55,10 @@ class MainActivity : FlutterActivity() {
         startScreenshotObserver()
     }
 
-    private fun compressBytes(src: ByteArray): ByteArray {
+    private fun compressBytes(src: ByteArray, maxKB: Int): ByteArray {
         return try {
             var bmp = BitmapFactory.decodeByteArray(src, 0, src.size) ?: return src
-            val maxDim = 1600
+            val maxDim = 2000
             if (bmp.width > maxDim || bmp.height > maxDim) {
                 val scale = maxDim.toFloat() / Math.max(bmp.width, bmp.height)
                 val w = (bmp.width * scale).toInt()
@@ -72,15 +72,15 @@ class MainActivity : FlutterActivity() {
                 bmp.compress(Bitmap.CompressFormat.JPEG, q, bos)
                 return bos.toByteArray()
             }
-            var out = enc(85)
-            if (out.size > 300 * 1024) out = enc(70)
-            if (out.size > 300 * 1024) out = enc(55)
-            if (out.size > 300 * 1024) {
-                val scale = 1200f / Math.max(bmp.width, bmp.height)
+            var out = enc(90)
+            if (out.size > maxKB * 1024) out = enc(80)
+            if (out.size > maxKB * 1024) out = enc(70)
+            if (out.size > maxKB * 1024) {
+                val scale = 1600f / Math.max(bmp.width, bmp.height)
                 if (scale < 1f) {
                     val s2 = Bitmap.createScaledBitmap(bmp, (bmp.width * scale).toInt(), (bmp.height * scale).toInt(), true)
                     val bos = ByteArrayOutputStream()
-                    s2.compress(Bitmap.CompressFormat.JPEG, 55, bos)
+                    s2.compress(Bitmap.CompressFormat.JPEG, 70, bos)
                     out = bos.toByteArray()
                     s2.recycle()
                 }
@@ -102,7 +102,8 @@ class MainActivity : FlutterActivity() {
                     }
                     "compress" -> {
                         val bytes = call.argument<ByteArray>("bytes") ?: ByteArray(0)
-                        result.success(compressBytes(bytes))
+                        val maxKB = call.argument<Int>("maxKB") ?: 1024
+                        result.success(compressBytes(bytes, maxKB))
                     }
                     "deleteFiles" -> {
                         val paths = call.argument<List<String>>("paths") ?: emptyList()
@@ -361,7 +362,7 @@ class MainActivity : FlutterActivity() {
             val now = SystemClock.uptimeMillis()
             if (id == lastId && (now - lastTime) < 5000) return
             val nowSec = System.currentTimeMillis() / 1000
-            val fresh = (nowSec - dateAdded) in 0..15
+            val fresh = (nowSec - dateAdded) in 0..60
             if (fresh && path.contains("Screenshots", true)) {
                 lastId = id
                 lastTime = now
