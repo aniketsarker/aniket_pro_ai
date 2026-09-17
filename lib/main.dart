@@ -626,6 +626,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     });
   }
 
+  Future<Uint8List> _compress(Uint8List bytes) async {
+    try {
+      final r = await _galleryChannel.invokeMethod<Uint8List>('compress', {'bytes': bytes});
+      if (r != null && r.isNotEmpty) return r;
+    } catch (e) {}
+    return _downscale(bytes);
+  }
+
   Future<Uint8List> _downscale(Uint8List bytes) async {
     try {
       final codec = await ui.instantiateImageCodec(bytes);
@@ -661,9 +669,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
   }
 
-  Future<int> _injectMany(String box, List<Map<String, String>> files) async {
+  Future<int> _inject(String box, String b64, String name) async {
     try {
-      final r = await _controller.runJavaScriptReturningResult(_injectManyJs(box, files));
+      final r = await _controller.runJavaScriptReturningResult(_injectJs(box, b64, name));
       final s = r.toString().replaceAll('"', '');
       if (s.startsWith('ok:')) return int.tryParse(s.substring(3)) ?? -1;
     } catch (e) {}
@@ -680,44 +688,34 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
     for (final b in boxes) {
       final items = _queue.where((q) => q.startsWith('$b|')).toList();
-      final files = <Map<String, String>>[];
-      final paths = <String>[];
       for (final it in items) {
         final path = it.substring(it.indexOf('|') + 1);
         try {
           var bytes = await File(path).readAsBytes();
-          bytes = await _downscale(bytes);
-          files.add({'b64': base64Encode(bytes), 'name': path.split('/').last});
-          paths.add(path);
-        } catch (e) {}
-      }
-      if (files.isEmpty) {
-        setState(() => _queue.removeWhere((q) => items.contains(q)));
-        await _saveCounts();
-        continue;
-      }
-      final m = _max[b] ?? 0;
-      final room = m - (_siteCount[b] ?? 0);
-      final take = files.length > room ? room : files.length;
-      if (take <= 0) continue;
-      final useFiles = files.take(take).toList();
-      final usePaths = paths.take(take).toList();
-      final expect = (b == 'corr') ? 1 : (_siteCount[b] ?? 0) + take;
-      int got = await _injectMany(b, useFiles);
-      if (got != expect) got = await _injectMany(b, useFiles);
-      if (got == expect || (got > 0 && b == 'corr')) {
-        _siteCount[b] = got;
-        setState(() {
-          for (final p in usePaths) {
-            _queue.remove('$b|$p');
-            _deliveredOk.add(p);
-            _deliveredBox[p] = b;
+          bytes = await _compress(bytes);
+          final b64 = base64Encode(bytes);
+          final name = path.split('/').last;
+          final expect = (b == 'corr') ? 1 : (_siteCount[b] ?? 0) + 1;
+          int got = await _inject(b, b64, name);
+          if (got != expect) got = await _inject(b, b64, name);
+          if (got > 0) {
+            _siteCount[b] = got;
+            setState(() {
+              _queue.remove(it);
+              _deliveredOk.add(path);
+              _deliveredBox[path] = b;
+            });
+            await _saveCounts();
+          } else {
+            _toast('Upload failed — retry on next open');
+            _flushing = false;
+            return;
           }
-        });
-        await _saveCounts();
-      } else {
-        _toast('Upload pending — will retry');
-        break;
+        } catch (e) {
+          _toast('Upload failed — retry on next open');
+          _flushing = false;
+          return;
+        }
       }
     }
     _flushing = false;
@@ -776,24 +774,24 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         _toast('No SS selected');
         return;
       }
-      final files = <Map<String, String>>[];
+      int ok = 0;
       for (final path in list) {
         try {
           var bytes = await File(path).readAsBytes();
-          bytes = await _downscale(bytes);
-          files.add({'b64': base64Encode(bytes), 'name': path.split('/').last});
+          bytes = await _compress(bytes);
+          final b64 = base64Encode(bytes);
+          final name = path.split('/').last;
+          final expect = (box == 'corr') ? 1 : (_siteCount[box] ?? 0) + 1;
+          int got = await _inject(box, b64, name);
+          if (got != expect) got = await _inject(box, b64, name);
+          if (got > 0) {
+            _siteCount[box] = got;
+            ok++;
+          }
         } catch (e) {}
       }
-      if (files.isEmpty) {
-        _toast('Could not read files ❌');
-        return;
-      }
-      final expect = (box == 'corr') ? 1 : (_siteCount[box] ?? 0) + files.length;
-      int got = await _injectMany(box, files);
-      if (got != expect) got = await _injectMany(box, files);
-      if (got > 0) {
-        _siteCount[box] = got;
-        _toast('${got} SS in ${box.toUpperCase()} ✅');
+      if (ok > 0) {
+        _toast('$ok SS in ${box.toUpperCase()} ✅');
       } else {
         _toast('Could not add to box ❌');
       }
@@ -802,8 +800,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
   }
 
-  String _injectManyJs(String box, List<Map<String, String>> files) {
-    final json = jsonEncode(files);
+  String _injectJs(String box, String b64, String name) {
     return '''(function(){
       function classify(inp){
         var host = inp;
@@ -833,14 +830,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       }
       var inp=inputFor('$box');
       if(!inp) return 'fail';
-      var files=$json;
+      var bin=atob('$b64'); var arr=new Uint8Array(bin.length);
+      for (var i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
       var dt=new DataTransfer();
       if (inp.multiple && inp.files){ for (var j=0;j<inp.files.length;j++) dt.items.add(inp.files[j]); }
-      for (var i=0;i<files.length;i++){
-        var bin=atob(files[i].b64); var arr=new Uint8Array(bin.length);
-        for (var k=0;k<bin.length;k++) arr[k]=bin.charCodeAt(k);
-        dt.items.add(new File([arr],files[i].name,{type:'image/png'}));
-      }
+      dt.items.add(new File([arr],'$name',{type:'image/png'}));
       inp.files=dt.files; inp.dispatchEvent(new Event('change',{bubbles:true}));
       return 'ok:'+inp.files.length;
     })();''';
