@@ -89,6 +89,7 @@ class _GateScreenState extends State<GateScreen> {
   Timer? _poll;
   final _fbCtrl = TextEditingController();
   final _gmCtrl = TextEditingController();
+  final _gmFocus = FocusNode();
 
   @override
   void initState() {
@@ -99,6 +100,7 @@ class _GateScreenState extends State<GateScreen> {
   @override
   void dispose() {
     _poll?.cancel();
+    _gmFocus.dispose();
     super.dispose();
   }
 
@@ -175,10 +177,12 @@ class _GateScreenState extends State<GateScreen> {
         _gmCtrl.text = acc;
         setState(() {});
       } else {
-        _toast('No Gmail account found — type it');
+        _gmFocus.requestFocus();
+        _toast('No Gmail found — type it');
       }
     } catch (e) {
-      _toast('Gmail list unavailable');
+      _gmFocus.requestFocus();
+      _toast('No Gmail found — type it');
     }
   }
 
@@ -263,6 +267,7 @@ class _GateScreenState extends State<GateScreen> {
                 const SizedBox(height: 14),
                 TextField(
                     controller: _gmCtrl,
+                    focusNode: _gmFocus,
                     decoration: _dec('Connect your Gmail ID').copyWith(
                           suffixIcon: IconButton(
                             icon: const Icon(Icons.alternate_email, color: kGold),
@@ -421,7 +426,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   final Map<String, int> _siteCount = {'htf': 0, 'entry': 0, 'corr': 0};
   final Map<String, String> _deliveredBox = {};
   final List<String> _deliveredOk = [];
-  Future<void> _injectLock = Future.value();
   DateTime _lastErrPop = DateTime(2000);
   Timer? _banTimer;
   VoidCallback? _sheetRefresh;
@@ -657,46 +661,62 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
   }
 
-  Future<int> _inject(String box, String b64, String name) async {
+  Future<int> _injectMany(String box, List<Map<String, String>> files) async {
     try {
-      final r = await _controller.runJavaScriptReturningResult(_injectJs(box, b64, name));
+      final r = await _controller.runJavaScriptReturningResult(_injectManyJs(box, files));
       final s = r.toString().replaceAll('"', '');
       if (s.startsWith('ok:')) return int.tryParse(s.substring(3)) ?? -1;
-      return -1;
-    } catch (e) {
-      return -1;
-    }
+    } catch (e) {}
+    return -1;
   }
 
   Future<void> _flush() async {
     if (_flushing || !_fg || _queue.isEmpty) return;
     _flushing = true;
-    final pending = List<String>.from(_queue);
-    for (final item in pending) {
-      final sep = item.indexOf('|');
-      if (sep < 0) continue;
-      final box = item.substring(0, sep);
-      final path = item.substring(sep + 1);
-      try {
-        var bytes = await File(path).readAsBytes();
-        bytes = await _downscale(bytes);
-        final b64 = base64Encode(bytes);
-        final name = path.split('/').last;
-        final expect = (_siteCount[box] ?? 0) + 1;
-        int got = await _inject(box, b64, name);
-        if (got != expect) got = await _inject(box, b64, name);
-        if (got > 0) {
-          _siteCount[box] = got;
-          setState(() {
-            _queue.remove(item);
-            _deliveredOk.add(path);
-            _deliveredBox[path] = box;
-          });
-          await _saveCounts();
-        } else {
-          break;
-        }
-      } catch (e) {
+    final boxes = <String>[];
+    for (final q in _queue) {
+      final b = q.split('|').first;
+      if (!boxes.contains(b)) boxes.add(b);
+    }
+    for (final b in boxes) {
+      final items = _queue.where((q) => q.startsWith('$b|')).toList();
+      final files = <Map<String, String>>[];
+      final paths = <String>[];
+      for (final it in items) {
+        final path = it.substring(it.indexOf('|') + 1);
+        try {
+          var bytes = await File(path).readAsBytes();
+          bytes = await _downscale(bytes);
+          files.add({'b64': base64Encode(bytes), 'name': path.split('/').last});
+          paths.add(path);
+        } catch (e) {}
+      }
+      if (files.isEmpty) {
+        setState(() => _queue.removeWhere((q) => items.contains(q)));
+        await _saveCounts();
+        continue;
+      }
+      final m = _max[b] ?? 0;
+      final room = m - (_siteCount[b] ?? 0);
+      final take = files.length > room ? room : files.length;
+      if (take <= 0) continue;
+      final useFiles = files.take(take).toList();
+      final usePaths = paths.take(take).toList();
+      final expect = (b == 'corr') ? 1 : (_siteCount[b] ?? 0) + take;
+      int got = await _injectMany(b, useFiles);
+      if (got != expect) got = await _injectMany(b, useFiles);
+      if (got == expect || (got > 0 && b == 'corr')) {
+        _siteCount[b] = got;
+        setState(() {
+          for (final p in usePaths) {
+            _queue.remove('$b|$p');
+            _deliveredOk.add(p);
+            _deliveredBox[p] = b;
+          }
+        });
+        await _saveCounts();
+      } else {
+        _toast('Upload pending — will retry');
         break;
       }
     }
@@ -756,27 +776,24 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         _toast('No SS selected');
         return;
       }
-      int ok = 0;
+      final files = <Map<String, String>>[];
       for (final path in list) {
-        _injectLock = _injectLock.then((_) async {
-          try {
-            var bytes = await File(path).readAsBytes();
-            bytes = await _downscale(bytes);
-            final b64 = base64Encode(bytes);
-            final name = path.split('/').last;
-            final expect = (_siteCount[box] ?? 0) + 1;
-            int got = await _inject(box, b64, name);
-            if (got != expect) got = await _inject(box, b64, name);
-            if (got > 0) {
-              _siteCount[box] = got;
-              ok++;
-            }
-          } catch (e) {}
-        });
-        await _injectLock;
+        try {
+          var bytes = await File(path).readAsBytes();
+          bytes = await _downscale(bytes);
+          files.add({'b64': base64Encode(bytes), 'name': path.split('/').last});
+        } catch (e) {}
       }
-      if (ok > 0) {
-        _toast('$ok SS added to ${box.toUpperCase()} ✅');
+      if (files.isEmpty) {
+        _toast('Could not read files ❌');
+        return;
+      }
+      final expect = (box == 'corr') ? 1 : (_siteCount[box] ?? 0) + files.length;
+      int got = await _injectMany(box, files);
+      if (got != expect) got = await _injectMany(box, files);
+      if (got > 0) {
+        _siteCount[box] = got;
+        _toast('${got} SS in ${box.toUpperCase()} ✅');
       } else {
         _toast('Could not add to box ❌');
       }
@@ -785,7 +802,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
   }
 
-  String _injectJs(String box, String b64, String name) {
+  String _injectManyJs(String box, List<Map<String, String>> files) {
+    final json = jsonEncode(files);
     return '''(function(){
       function classify(inp){
         var host = inp;
@@ -815,11 +833,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       }
       var inp=inputFor('$box');
       if(!inp) return 'fail';
-      var bin=atob('$b64'); var arr=new Uint8Array(bin.length);
-      for (var i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+      var files=$json;
       var dt=new DataTransfer();
       if (inp.multiple && inp.files){ for (var j=0;j<inp.files.length;j++) dt.items.add(inp.files[j]); }
-      dt.items.add(new File([arr],'$name',{type:'image/png'}));
+      for (var i=0;i<files.length;i++){
+        var bin=atob(files[i].b64); var arr=new Uint8Array(bin.length);
+        for (var k=0;k<bin.length;k++) arr[k]=bin.charCodeAt(k);
+        dt.items.add(new File([arr],files[i].name,{type:'image/png'}));
+      }
       inp.files=dt.files; inp.dispatchEvent(new Event('change',{bubbles:true}));
       return 'ok:'+inp.files.length;
     })();''';
@@ -883,39 +904,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       var st = document.createElement('style');
       st.innerHTML = '#netlify-badge, .netlify-badge, [id*="netlify" i], [class*="netlify" i], a[href*="netlify.com"], a[href*="netlify.app"] { display:none !important; visibility:hidden !important; opacity:0 !important; pointer-events:none !important; }';
       document.documentElement.appendChild(st);
-      function kill(el){ try { el.remove(); } catch(e){} }
-      function heavyClean(){
-        document.querySelectorAll('#netlify-badge, .netlify-badge, [id*="netlify" i], [class*="netlify" i], a[href*="netlify.com"], a[href*="netlify.app"]').forEach(kill);
-        var all = document.querySelectorAll('*');
-        for (var i=0;i<all.length;i++){
-          var el = all[i];
-          if (el.shadowRoot) {
-            var t = '';
-            try { t = el.shadowRoot.textContent || ''; } catch(e){}
-            if (t.toLowerCase().indexOf('netlify')>=0) { try { el.shadowRoot.innerHTML = ''; } catch(e){} kill(el); }
-          }
-          if (el.tagName === 'IFRAME') {
-            var s = (el.getAttribute('src') || '').toLowerCase();
-            if (s.indexOf('netlify')>=0) kill(el);
-          }
-        }
-        var nodes = document.querySelectorAll('body *');
-        for (var j=0;j<nodes.length;j++){
-          var el2 = nodes[j];
-          if (el2.children.length === 0) continue;
-          var txt = el2.textContent || '';
-          if (txt.length < 120 && txt.indexOf('Netlify')>=0) kill(el2);
-        }
+      function lightClean(){
+        var b = document.querySelector('#netlify-badge, .netlify-badge, [id*="netlify" i], [class*="netlify" i], a[href*="netlify.com"], a[href*="netlify.app"]');
+        if (b) { b.remove(); }
       }
-      heavyClean();
-      setInterval(heavyClean, 400);
-      var last = 0;
-      try {
-        new MutationObserver(function(){
-          var now = Date.now();
-          if (now - last > 300) { last = now; heavyClean(); }
-        }).observe(document.documentElement, {childList:true, subtree:true});
-      } catch(e){}
+      lightClean();
+      setInterval(lightClean, 2000);
       function classify(inp){
         var host = inp;
         for (var up=0; up<8 && host; up++){
