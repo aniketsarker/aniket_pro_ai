@@ -11,7 +11,6 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.database.Cursor
-import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -20,9 +19,6 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.Settings
-import android.view.Gravity
-import android.view.View
-import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -40,27 +36,10 @@ class MainActivity : FlutterActivity() {
     private var observer: ScreenshotObserver? = null
     private var pendingPick: MethodChannel.Result? = null
     private var pendingAccount: MethodChannel.Result? = null
-    private var coverView: View? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        addBadgeCover()
-    }
-
-    private fun addBadgeCover() {
-        try {
-            val v = View(this)
-            v.setBackgroundColor(Color.parseColor("#121212"))
-            val dp = resources.displayMetrics.density
-            val lp = FrameLayout.LayoutParams((250 * dp).toInt(), (60 * dp).toInt())
-            lp.gravity = Gravity.BOTTOM or Gravity.END
-            lp.rightMargin = (6 * dp).toInt()
-            lp.bottomMargin = (70 * dp).toInt()
-            addContentView(v, lp)
-            coverView = v
-        } catch (e: Exception) {
-        }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
