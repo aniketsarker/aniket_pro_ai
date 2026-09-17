@@ -494,16 +494,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   Future<void> _syncBubble() async {
     try {
       final alive = await _galleryChannel.invokeMethod<bool>('bubbleAlive') ?? false;
-      if (!alive && _overlayShown) {
-        _overlayShown = false;
-        final p = await SharedPreferences.getInstance();
-        await p.setBool('bubble', false);
-      }
-      if (alive != _overlayShown) {
-        _overlayShown = alive;
-        final p = await SharedPreferences.getInstance();
-        await p.setBool('bubble', alive);
-        if (alive) _pushState();
+      if (alive && !_overlayShown) {
+        await _galleryChannel.invokeMethod('hideBubble');
+      } else if (!alive && _overlayShown) {
+        await _galleryChannel.invokeMethod('showBubble');
+        _pushState();
       }
     } catch (e) {}
   }
@@ -626,9 +621,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     });
   }
 
-  Future<Uint8List> _compress(Uint8List bytes) async {
+  Future<Uint8List> _compress(Uint8List bytes, {int maxKB = 1024}) async {
     try {
-      final r = await _galleryChannel.invokeMethod<Uint8List>('compress', {'bytes': bytes});
+      final r = await _galleryChannel.invokeMethod<Uint8List>('compress', {'bytes': bytes, 'maxKB': maxKB});
       if (r != null && r.isNotEmpty) return r;
     } catch (e) {}
     return _downscale(bytes);
@@ -639,7 +634,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       final codec = await ui.instantiateImageCodec(bytes);
       final frame = await codec.getNextFrame();
       final src = frame.image;
-      const maxDim = 1200;
+      const maxDim = 1600;
       if (src.width <= maxDim && src.height <= maxDim) {
         final out = await src.toByteData(format: ui.ImageByteFormat.png);
         src.dispose();
@@ -678,83 +673,89 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     return -1;
   }
 
+  Future<bool> _sendOne(String box, String path) async {
+    try {
+      final raw = await File(path).readAsBytes();
+      var bytes = await _compress(raw);
+      final name = path.split('/').last;
+      final expect = (box == 'corr') ? 1 : (_siteCount[box] ?? 0) + 1;
+      int got = await _inject(box, base64Encode(bytes), name);
+      if (got != expect) {
+        bytes = await _compress(raw, maxKB: 300);
+        got = await _inject(box, base64Encode(bytes), name);
+      }
+      if (got > 0) {
+        _siteCount[box] = got;
+        setState(() {
+          _queue.remove('$box|$path');
+          _deliveredOk.add(path);
+          _deliveredBox[path] = box;
+        });
+        await _saveCounts();
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
   Future<void> _flush() async {
     if (_flushing || !_fg || _queue.isEmpty) return;
     _flushing = true;
-    final boxes = <String>[];
-    for (final q in _queue) {
-      final b = q.split('|').first;
-      if (!boxes.contains(b)) boxes.add(b);
-    }
-    for (final b in boxes) {
-      final items = _queue.where((q) => q.startsWith('$b|')).toList();
-      for (final it in items) {
-        final path = it.substring(it.indexOf('|') + 1);
-        try {
-          var bytes = await File(path).readAsBytes();
-          bytes = await _compress(bytes);
-          final b64 = base64Encode(bytes);
-          final name = path.split('/').last;
-          final expect = (b == 'corr') ? 1 : (_siteCount[b] ?? 0) + 1;
-          int got = await _inject(b, b64, name);
-          if (got != expect) got = await _inject(b, b64, name);
-          if (got > 0) {
-            _siteCount[b] = got;
-            setState(() {
-              _queue.remove(it);
-              _deliveredOk.add(path);
-              _deliveredBox[path] = b;
-            });
-            await _saveCounts();
-          } else {
-            _toast('Upload failed — retry on next open');
-            _flushing = false;
-            return;
-          }
-        } catch (e) {
-          _toast('Upload failed — retry on next open');
-          _flushing = false;
-          return;
-        }
+    final snapshot = List<String>.from(_queue);
+    for (final it in snapshot) {
+      final sep = it.indexOf('|');
+      if (sep < 0) continue;
+      final box = it.substring(0, sep);
+      final path = it.substring(sep + 1);
+      final ok = await _sendOne(box, path);
+      if (!ok) {
+        _toast('Upload pending — will retry');
+        break;
       }
     }
     _flushing = false;
   }
 
   Future<void> _onOkay() async {
+    await Future.delayed(const Duration(milliseconds: 800));
     await _flush();
     if (_deliveredOk.isEmpty) {
       _toast('No new deliveries');
-      return;
-    }
-    final List<String> toDel = List<String>.from(_deliveredOk);
-    final Set<String> boxes = _deliveredBox.values.toSet();
-    _deliveredOk.clear();
-    _deliveredBox.clear();
-    bool deleted = false;
-    if (_autoDelete) {
-      try {
-        final r = await _galleryChannel.invokeMethod<int>('deleteFiles', {'paths': toDel});
-        deleted = (r ?? 0) == 1;
-      } catch (e) {}
-    }
-    if (deleted) {
-      setState(() {
+    } else {
+      final List<String> toDel = List<String>.from(_deliveredOk);
+      final Set<String> boxes = _deliveredBox.values.toSet();
+      _deliveredOk.clear();
+      _deliveredBox.clear();
+      bool deleted = false;
+      if (_autoDelete) {
+        try {
+          final r = await _galleryChannel.invokeMethod<int>('deleteFiles', {'paths': toDel});
+          deleted = (r ?? 0) == 1;
+        } catch (e) {}
+      }
+      if (deleted) {
+        setState(() {
+          for (final b in boxes) {
+            if (b == 'htf') { _cHtf = 0; } 
+            else if (b == 'entry') { _cEntry = 0; } 
+            else if (b == 'corr') { _cCorr = 0; }
+            _siteCount[b] = 0;
+          }
+        });
+        await _saveCounts();
+        _overlayShown = false;
+        final p = await SharedPreferences.getInstance();
+        await p.setBool('bubble', false);
+        try {
+          await _galleryChannel.invokeMethod('hideBubble');
+        } catch (e) {}
+        _toast('Delivered + deleted — bubble OFF');
         for (final b in boxes) {
-          if (b == 'htf') { _cHtf = 0; } 
-          else if (b == 'entry') { _cEntry = 0; } 
-          else if (b == 'corr') { _cCorr = 0; }
-          _siteCount[b] = 0;
+          try {
+            await _controller.runJavaScript('if(window.__ak){window.__ak["$b"]=[];}');
+          } catch (e) {}
         }
-      });
-      await _saveCounts();
-      _overlayShown = false;
-      final p = await SharedPreferences.getInstance();
-      await p.setBool('bubble', false);
-      try {
-        await _galleryChannel.invokeMethod('hideBubble');
-      } catch (e) {}
-      _toast('Delivered + deleted — bubble OFF');
+      }
     }
     await _controller.runJavaScript('''(function(){
       var els = document.querySelectorAll('nav button, nav a, button, a, div[role="button"]');
@@ -776,19 +777,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       }
       int ok = 0;
       for (final path in list) {
-        try {
-          var bytes = await File(path).readAsBytes();
-          bytes = await _compress(bytes);
-          final b64 = base64Encode(bytes);
-          final name = path.split('/').last;
-          final expect = (box == 'corr') ? 1 : (_siteCount[box] ?? 0) + 1;
-          int got = await _inject(box, b64, name);
-          if (got != expect) got = await _inject(box, b64, name);
-          if (got > 0) {
-            _siteCount[box] = got;
-            ok++;
-          }
-        } catch (e) {}
+        if (await _sendOne(box, path)) ok++;
       }
       if (ok > 0) {
         _toast('$ok SS in ${box.toUpperCase()} ✅');
@@ -830,11 +819,18 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       }
       var inp=inputFor('$box');
       if(!inp) return 'fail';
+      window.__ak = window.__ak || {};
+      var list = window.__ak['$box'];
+      if (!list) {
+        list = [];
+        if (inp.files) { for (var e2=0; e2<inp.files.length; e2++) list.push(inp.files[e2]); }
+        window.__ak['$box'] = list;
+      }
       var bin=atob('$b64'); var arr=new Uint8Array(bin.length);
       for (var i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+      list.push(new File([arr],'$name',{type:'image/jpeg'}));
       var dt=new DataTransfer();
-      if (inp.multiple && inp.files){ for (var j=0;j<inp.files.length;j++) dt.items.add(inp.files[j]); }
-      dt.items.add(new File([arr],'$name',{type:'image/png'}));
+      for (var q2=0; q2<list.length; q2++) dt.items.add(list[q2]);
       inp.files=dt.files; inp.dispatchEvent(new Event('change',{bubbles:true}));
       return 'ok:'+inp.files.length;
     })();''';
@@ -858,6 +854,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           });
           _saveCounts();
           _pushState();
+          try {
+            await _controller.runJavaScript('if(window.__ak){window.__ak["$b"]=[];}');
+          } catch (e) {}
         } else if (m.startsWith('PICK:')) {
           await _pickAndInject(m.substring(5));
         }
@@ -1035,7 +1034,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
               children: [
                 const Text('App Settings', style: TextStyle(color: kGold, fontSize: 18, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
-                Text('Active: ${_activeBox == 'none' ? 'NO BOX' : _activeBox.toUpperCase()}  •  HTF $_cHtf/6 • ENTRY $_cEntry/4 • CORR $_cCorr/1', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                Text('Active: ${_activeBox == 'none' ? 'NO BOX' : _activeBox.toUpperCase()}  •  HTF $_cHtf/6 • ENTRY $_cEntry/4 • CORR $_cCorr/1  •  Queue: ${_queue.length}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
                 const SizedBox(height: 8),
                 SwitchListTile(
                   title: const Text('Floating Bubble', style: TextStyle(color: Colors.white)),
@@ -1067,6 +1066,16 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                     setModal(() {});
                   },
                 ),
+                const SizedBox(height: 8),
+                ElevatedButton(
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    await _flush();
+                    _toast('Queue: ${_queue.length} left');
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: kGold),
+                  child: const Text('Force Upload Now', style: TextStyle(color: Colors.black)),
+                ),
                 if (_owner) ...[
                   const SizedBox(height: 8),
                   ElevatedButton(
@@ -1074,8 +1083,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                       Navigator.pop(context);
                       Navigator.push(context, MaterialPageRoute(builder: (_) => const OwnerPanelScreen()));
                     },
-                    style: ElevatedButton.styleFrom(backgroundColor: kGold),
-                    child: const Text('Owner Panel', style: TextStyle(color: Colors.black)),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.white12),
+                    child: const Text('Owner Panel', style: TextStyle(color: kGold)),
                   ),
                 ],
                 const SizedBox(height: 10),
