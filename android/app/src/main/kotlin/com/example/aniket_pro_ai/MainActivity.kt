@@ -4,12 +4,13 @@ import android.Manifest
 import android.accounts.AccountManager
 import android.app.Activity
 import android.app.AlertDialog
-import android.database.ContentObserver
+import android.app.RecoverableSecurityException
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.database.ContentObserver
 import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -98,6 +99,10 @@ class MainActivity : FlutterActivity() {
     private var watcher: ShotWatcher? = null
     private var pendingPick: MethodChannel.Result? = null
     private var pendingAccount: MethodChannel.Result? = null
+    // NEW: remembers which delete result callback is waiting on the
+    // system confirmation dialog, for both the modern (API 30+) and the
+    // legacy (API 29 RecoverableSecurityException) delete flows.
+    private var pendingDeleteResult: MethodChannel.Result? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -301,6 +306,17 @@ class MainActivity : FlutterActivity() {
             }
             return
         }
+        // NEW: handle the result of the delete-confirmation system dialog,
+        // for both MediaStore.createDeleteRequest (API 30+) and the legacy
+        // RecoverableSecurityException flow (API 29).
+        if (requestCode == 9001) {
+            val res = pendingDeleteResult
+            pendingDeleteResult = null
+            if (res != null) {
+                res.success(if (resultCode == Activity.RESULT_OK) 1 else 0)
+            }
+            return
+        }
         super.onActivityResult(requestCode, resultCode, data)
     }
 
@@ -326,6 +342,11 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    // CHANGED: MediaStore.createDeleteRequest only exists on API 30+ (Android 11).
+    // On older devices this used to throw at runtime and silently fail the
+    // whole delete flow. Now it falls back to a direct contentResolver.delete,
+    // handling the API 29 RecoverableSecurityException case (which needs its
+    // own confirmation dialog) and plain deletes on API < 29.
     private fun handleDelete(ids: List<Long>, paths: List<String>, result: MethodChannel.Result) {
         val uris = mutableListOf<Uri>()
         for (id in ids) {
@@ -346,14 +367,41 @@ class MainActivity : FlutterActivity() {
             result.success(0)
             return
         }
-        try {
-            val pendingIntent = MediaStore.createDeleteRequest(contentResolver, uris)
-            Toast.makeText(applicationContext, "Tap Allow in system dialog — SS will be deleted", Toast.LENGTH_LONG).show()
-            startIntentSenderForResult(pendingIntent.intentSender, 9001, null, 0, 0, 0)
-            result.success(1)
-        } catch (e: Exception) {
-            result.error("DELETE_FAILED", e.message, null)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val pendingIntent = MediaStore.createDeleteRequest(contentResolver, uris)
+                Toast.makeText(applicationContext, "Tap Allow in system dialog — SS will be deleted", Toast.LENGTH_LONG).show()
+                pendingDeleteResult = result
+                startIntentSenderForResult(pendingIntent.intentSender, 9001, null, 0, 0, 0)
+            } catch (e: Exception) {
+                pendingDeleteResult = null
+                result.error("DELETE_FAILED", e.message, null)
+            }
+            return
         }
+
+        // API < 30 fallback
+        var deletedAny = false
+        var recoverableHandled = false
+        for (u in uris) {
+            try {
+                if (contentResolver.delete(u, null, null) > 0) deletedAny = true
+            } catch (se: SecurityException) {
+                if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q && se is RecoverableSecurityException && !recoverableHandled) {
+                    recoverableHandled = true
+                    try {
+                        pendingDeleteResult = result
+                        startIntentSenderForResult(se.userAction.actionIntent.intentSender, 9001, null, 0, 0, 0)
+                        return
+                    } catch (ignored: Exception) {
+                        pendingDeleteResult = null
+                    }
+                }
+            } catch (e: Exception) {
+            }
+        }
+        result.success(if (deletedAny) 1 else 0)
     }
 
     private fun uriForPath(path: String): Uri? {
