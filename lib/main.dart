@@ -812,10 +812,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         _siteCount.forEach((b, c) {
           if (grownBox == null && b != box && c > (beforeAll[b] ?? 0)) grownBox = b;
         });
-        if (grownBox != null && _route[grownBox] != null && attempt == 0) {
+        final gb = grownBox;
+        if (gb != null && _route[gb] != null && attempt == 0) {
           final tmp = _route[box]!;
-          _route[box] = _route[grownBox]!;
-          _route[grownBox] = tmp;
+          _route[box] = _route[gb]!;
+          _route[gb] = tmp;
           idx = _route[box];
           continue;
         }
