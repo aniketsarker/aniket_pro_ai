@@ -4,7 +4,9 @@ import android.Manifest
 import android.accounts.AccountManager
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ContentObserver
 import android.content.ContentUris
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
@@ -16,6 +18,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.Settings
 import android.widget.Toast
@@ -26,6 +29,65 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 
+class ShotWatcher(
+    private val context: Context,
+    private val handler: Handler,
+    private val onShot: (Long, String) -> Unit
+) : ContentObserver(handler) {
+
+    private val seen = mutableMapOf<Long, Long>()
+
+    private fun emitIfValid(uri: Uri, id: Long, allowPending: Boolean) {
+        val projection = arrayOf(
+            MediaStore.Images.Media.DATA,
+            MediaStore.Images.Media.DATE_ADDED,
+            MediaStore.Images.Media.IS_PENDING
+        )
+        val cursor: Cursor? = try {
+            context.contentResolver.query(uri, projection, null, null, null)
+        } catch (e: Exception) {
+            null
+        }
+        var path: String? = null
+        var dateAdded: Long = 0
+        var pendingFlag = 0
+        if (cursor != null) {
+            if (cursor.moveToFirst()) {
+                val di = cursor.getColumnIndex(MediaStore.Images.Media.DATA)
+                val ti = cursor.getColumnIndex(MediaStore.Images.Media.DATE_ADDED)
+                val pi = cursor.getColumnIndex(MediaStore.Images.Media.IS_PENDING)
+                if (di >= 0) path = cursor.getString(di)
+                if (ti >= 0) dateAdded = cursor.getLong(ti)
+                if (pi >= 0) pendingFlag = cursor.getInt(pi)
+            }
+            cursor.close()
+        }
+        if (path == null) return
+        if (path.contains(".pending", true)) return
+        val low = path.lowercase()
+        if (!low.contains("screenshot")) return
+        val nowSec = System.currentTimeMillis() / 1000
+        if ((nowSec - dateAdded) !in 0..120) return
+        if (pendingFlag == 1 && !allowPending) {
+            handler.postDelayed({ emitIfValid(uri, id, true) }, 2500)
+            return
+        }
+        val now = SystemClock.uptimeMillis()
+        val last = seen[id] ?: 0L
+        if (now - last < 5000) return
+        seen[id] = now
+        if (seen.size > 60) seen.clear()
+        handler.post { onShot(id, path) }
+    }
+
+    override fun onChange(selfChange: Boolean, uri: Uri?) {
+        super.onChange(selfChange, uri)
+        if (uri == null) return
+        val id = uri.lastPathSegment?.toLongOrNull() ?: return
+        emitIfValid(uri, id, false)
+    }
+}
+
 class MainActivity : FlutterActivity() {
 
     private val GALLERY_CHANNEL = "aniket_pro_ai/gallery"
@@ -33,7 +95,7 @@ class MainActivity : FlutterActivity() {
     private val PICK_REQ = 9002
     private val ACCOUNT_REQ = 7001
     private var screenshotChannel: MethodChannel? = null
-    private var observer: ScreenshotObserver? = null
+    private var watcher: ShotWatcher? = null
     private var pendingPick: MethodChannel.Result? = null
     private var pendingAccount: MethodChannel.Result? = null
 
@@ -49,7 +111,7 @@ class MainActivity : FlutterActivity() {
             runOnUiThread { screenshotChannel?.invokeMethod(method, arg) }
         }
         setupGalleryChannel(flutterEngine)
-        startScreenshotObserver()
+        startWatcher()
     }
 
     private fun compressBytes(src: ByteArray, maxKB: Int): ByteArray {
@@ -316,19 +378,19 @@ class MainActivity : FlutterActivity() {
         return resultUri
     }
 
-    private fun startScreenshotObserver() {
-        observer = ScreenshotObserver(applicationContext, Handler(Looper.getMainLooper())) { id, path ->
+    private fun startWatcher() {
+        watcher = ShotWatcher(applicationContext, Handler(Looper.getMainLooper())) { id, path ->
             screenshotChannel?.invokeMethod("onScreenshot", hashMapOf<String, Any>("id" to id, "path" to path))
         }
         contentResolver.registerContentObserver(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             true,
-            observer!!
+            watcher!!
         )
     }
 
     override fun onDestroy() {
-        observer?.let { contentResolver.unregisterContentObserver(it) }
+        watcher?.let { contentResolver.unregisterContentObserver(it) }
         super.onDestroy()
     }
 }
