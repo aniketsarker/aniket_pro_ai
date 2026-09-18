@@ -426,6 +426,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   final List<String> _ledger = [];
   final List<String> _sentIds = [];
   final List<String> _seenIds = [];
+  final List<String> _round = [];
   DateTime _lastErrPop = DateTime(2000);
   Timer? _banTimer;
   VoidCallback? _sheetRefresh;
@@ -520,7 +521,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       _overlayShown = p.getBool('bubble') ?? false;
       _owner = p.getBool('owner') ?? false;
       _activeBox = (p.getString('abox') ?? 'none');
-      if (_activeBox.isEmpty) _activeBox = 'none';
+      if (_activeBox.isEmpty || _activeBox == 'corr') _activeBox = 'none';
       _queue.clear();
       _queue.addAll(p.getStringList('queue') ?? []);
       _ledger.clear();
@@ -529,6 +530,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       _sentIds.addAll(p.getStringList('sentIds') ?? []);
       _seenIds.clear();
       _seenIds.addAll(p.getStringList('seenIds') ?? []);
+      _round.clear();
+      _round.addAll(p.getStringList('round') ?? []);
     });
     _pushState();
   }
@@ -540,6 +543,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     await p.setStringList('ledger', _ledger);
     await p.setStringList('sentIds', _sentIds);
     await p.setStringList('seenIds', _seenIds);
+    await p.setStringList('round', _round);
   }
 
   String _boxOf(String e) => e.split('|')[1];
@@ -549,6 +553,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     final j = e.indexOf('|', i + 1);
     return e.substring(j + 1);
   }
+
+  String _roundPath(String e) => e.substring(e.indexOf('|') + 1);
 
   int _queueOf(String box) => _queue.where((q) => _boxOf(q) == box).length;
 
@@ -600,9 +606,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           if (_seenIds.contains(id)) return;
           _seenIds.add(id);
           if (_seenIds.length > 500) _seenIds.removeRange(0, _seenIds.length - 500);
+          _round.add('$id|$path');
           await _saveState();
-          if (_activeBox == 'none') {
-            _errPop('❌ SS disabled — select a box');
+          if (_activeBox == 'none' || _activeBox == 'corr') {
+            if (_activeBox == 'none') _errPop('❌ SS disabled — select a box');
             return;
           }
           if (_sentIds.contains(id) || _queue.any((q) => q.startsWith('$id|')) || _ledger.any((q) => q.startsWith('$id|'))) {
@@ -632,17 +639,17 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         _toast(_captureOn ? 'Capture ON — SS will be captured' : 'Capture OFF');
       } else if (call.method == 'onBubbleSelect') {
         final box = call.arguments as String;
-        setState(() => _activeBox = box);
+        setState(() => _activeBox = (box == 'corr') ? 'none' : box);
         await _saveState();
         _pushState();
-        if (box == 'none') {
+        if (_activeBox == 'none') {
           _toast('NO BOX — SS will not be saved');
         } else {
-          final m = _max[box] ?? 0;
-          if (_countOf(box) >= m) {
-            _toast('${box.toUpperCase()} FULL — select another box');
+          final m = _max[_activeBox] ?? 0;
+          if (_countOf(_activeBox) >= m) {
+            _toast('${_activeBox.toUpperCase()} FULL — select another box');
           } else {
-            _toast('${box.toUpperCase()} select — auto-upload ON');
+            _toast('${_activeBox.toUpperCase()} select — auto-upload ON');
           }
         }
       } else if (call.method == 'onBubbleOk') {
@@ -751,11 +758,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         var i;
         for (i=0;i<inputs.length;i++){
           var h=headOf(inputs[i]);
-          if (b==='corr' && (h.indexOf('CORRELATION')>=0 || h.indexOf('DXY')>=0)) return inputs[i];
           if (b==='entry' && h.indexOf('ENTRY')>=0) return inputs[i];
           if (b==='htf' && h.indexOf('HTF')>=0) return inputs[i];
         }
-        if (b==='corr'){ for (i=0;i<inputs.length;i++){ if(!inputs[i].multiple) return inputs[i]; } return null; }
         var muls=[];
         for (i=0;i<inputs.length;i++){ if (inputs[i].multiple) muls.push(inputs[i]); }
         if (b==='entry') return muls[0]||null;
@@ -795,6 +800,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     final id = entry.split('|')[0];
     final box = _boxOf(entry);
     final path = _pathOf(entry);
+    if (box == 'corr') {
+      setState(() => _queue.remove(entry));
+      await _saveState();
+      return true;
+    }
     if (_sentIds.contains(id)) {
       setState(() => _queue.remove(entry));
       await _saveState();
@@ -860,13 +870,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       await _seedCounts();
       await _flush(force: true);
       if (_queue.isNotEmpty) await _flush(force: true);
-      final uploaded = _ledger.where((e) => _sentIds.contains(e.split('|')[0])).toList();
-      final uploadedIds = uploaded.map((e) => e.split('|')[0]).toSet();
-      final ids = uploaded.map((e) => int.tryParse(e.split('|')[0]) ?? 0).where((e) => e > 0).toList();
-      final paths = uploaded.map((e) => _pathOf(e)).toList();
-      final boxes = uploaded.map((e) => _boxOf(e)).toSet();
+      final ids = _round.map((e) => int.tryParse(e.split('|')[0]) ?? 0).where((e) => e > 0).toList();
+      final paths = _round.map((e) => _roundPath(e)).toList();
       bool deleted = false;
-      if (uploaded.isEmpty) {
+      if (ids.isEmpty && paths.isEmpty) {
         _toast('No new deliveries');
       } else if (_autoDelete) {
         try {
@@ -875,18 +882,18 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         } catch (e) {}
       }
       if (deleted) {
-        for (final b in boxes) {
-          await _clickClear(b);
-        }
+        await _clickClear('htf');
+        await _clickClear('entry');
         setState(() {
-          for (final b in boxes) {
-            _siteCount[b] = 0;
-          }
-          _ledger.removeWhere((e) => uploadedIds.contains(e.split('|')[0]));
-          _queue.removeWhere((e) => uploadedIds.contains(e.split('|')[0]));
-          _sentIds.removeWhere((id) => uploadedIds.contains(id));
+          _siteCount['htf'] = 0;
+          _siteCount['entry'] = 0;
+          _round.clear();
+          _ledger.clear();
+          _queue.clear();
+          _sentIds.clear();
         });
         await _saveState();
+        _pushState();
         _toast('Delivered + deleted');
       }
       setState(() {
@@ -918,6 +925,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 
   Future<void> _pickAndInject(String box) async {
+    if (box == 'corr') return;
     try {
       final res = await _galleryChannel.invokeMethod<List<Object?>>('pickFiles');
       final list = (res ?? []).map((e) => e.toString()).toList();
@@ -1024,9 +1032,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           }
         }
         if (inp) {
+          var cb = classify(inp);
+          if (cb === 'corr') return;
           e.preventDefault();
           e.stopPropagation();
-          FlutterBridge.postMessage('PICK:' + classify(inp));
+          FlutterBridge.postMessage('PICK:' + cb);
           return;
         }
         var b = e.target.closest ? e.target.closest('button') : null;
@@ -1124,7 +1134,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
               children: [
                 const Text('App Settings', style: TextStyle(color: kGold, fontSize: 18, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
-                Text('Active: ${_activeBox == 'none' ? 'NO BOX' : _activeBox.toUpperCase()}  •  HTF ${_countOf('htf')}/6 • ENTRY ${_countOf('entry')}/4 • CORR ${_countOf('corr')}/1  •  Queue: ${_queue.length}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                Text('Active: ${_activeBox == 'none' ? 'NO BOX' : _activeBox.toUpperCase()}  •  HTF ${_countOf('htf')}/6 • ENTRY ${_countOf('entry')}/4  •  Queue: ${_queue.length}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
                 const SizedBox(height: 8),
                 SwitchListTile(
                   title: const Text('Floating Bubble', style: TextStyle(color: Colors.white)),
