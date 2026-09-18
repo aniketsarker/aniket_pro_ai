@@ -310,7 +310,7 @@ class BubbleService : Service() {
                     }
                     if (moved) {
                         params.x = initialX - dx
-                        params.y = initialY + dy
+                        params.y = initialY - dy
                         try {
                             wm?.updateViewLayout(view, params)
                         } catch (ex: Exception) {
