@@ -922,8 +922,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 
   Future<void> _pickAndInject(String box) async {
+    final maxPick = box == 'corr' ? 1 : 6;
     try {
-      final res = await _galleryChannel.invokeMethod<List<Object?>>('pickFiles');
+      final res = await _galleryChannel.invokeMethod<List<Object?>>('pickFiles', {'max': maxPick});
       final list = (res ?? []).map((e) => e.toString()).toList();
       if (list.isEmpty) {
         _toast('No SS selected');
