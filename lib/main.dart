@@ -608,8 +608,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           if (_seenIds.length > 500) _seenIds.removeRange(0, _seenIds.length - 500);
           _round.add('$id|$path');
           await _saveState();
-          if (_activeBox == 'none' || _activeBox == 'corr') {
-            if (_activeBox == 'none') _errPop('❌ SS disabled — select a box');
+          if (_activeBox == 'none') {
+            _errPop('❌ SS disabled — select a box');
             return;
           }
           if (_sentIds.contains(id) || _queue.any((q) => q.startsWith('$id|')) || _ledger.any((q) => q.startsWith('$id|'))) {
@@ -758,9 +758,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         var i;
         for (i=0;i<inputs.length;i++){
           var h=headOf(inputs[i]);
+          if (b==='corr' && (h.indexOf('CORRELATION')>=0 || h.indexOf('DXY')>=0)) return inputs[i];
           if (b==='entry' && h.indexOf('ENTRY')>=0) return inputs[i];
           if (b==='htf' && h.indexOf('HTF')>=0) return inputs[i];
         }
+        if (b==='corr'){ for (i=0;i<inputs.length;i++){ if(!inputs[i].multiple) return inputs[i]; } return null; }
         var muls=[];
         for (i=0;i<inputs.length;i++){ if (inputs[i].multiple) muls.push(inputs[i]); }
         if (b==='entry') return muls[0]||null;
@@ -800,11 +802,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     final id = entry.split('|')[0];
     final box = _boxOf(entry);
     final path = _pathOf(entry);
-    if (box == 'corr') {
-      setState(() => _queue.remove(entry));
-      await _saveState();
-      return true;
-    }
     if (_sentIds.contains(id)) {
       setState(() => _queue.remove(entry));
       await _saveState();
@@ -925,7 +922,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 
   Future<void> _pickAndInject(String box) async {
-    if (box == 'corr') return;
     try {
       final res = await _galleryChannel.invokeMethod<List<Object?>>('pickFiles');
       final list = (res ?? []).map((e) => e.toString()).toList();
@@ -1032,11 +1028,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           }
         }
         if (inp) {
-          var cb = classify(inp);
-          if (cb === 'corr') return;
           e.preventDefault();
           e.stopPropagation();
-          FlutterBridge.postMessage('PICK:' + cb);
+          FlutterBridge.postMessage('PICK:' + classify(inp));
           return;
         }
         var b = e.target.closest ? e.target.closest('button') : null;
