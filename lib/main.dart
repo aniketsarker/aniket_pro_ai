@@ -12,7 +12,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 const Color kGold = Color(0xFFF5E6C8);
 const Color kBg = Color(0xFF121212);
-const String kUrl = 'https://aniketsarker1726.netlify.app';
+const String kUrl = 'https://aniketsarker.netlify.app';
 const String kSheetUrl = 'https://script.google.com/macros/s/AKfycbysLY93ie5plvuUrv42-E9vxG9IWcDImkuj-fUv3jg4tqSvyPcz0H1yZlkrocNFIiDO/exec';
 const String kMasterKey = 'atp1726';
 const MethodChannel _galleryChannel = MethodChannel('aniket_pro_ai/gallery');
@@ -190,10 +190,11 @@ class _GateScreenState extends State<GateScreen> {
     if (_permsAsking) return;
     _permsAsking = true;
     await Permission.photos.request();
+    await Permission.notification.request();
     final p = await SharedPreferences.getInstance();
     await p.setBool('permsAsked', true);
     _permsAsked = true;
-    await _httpPost(kSheetUrl, {'type': 'perms', 'id': _myId, 'device': _deviceId, 'method': '', 'perms': 'gallery:1'});
+    await _httpPost(kSheetUrl, {'type': 'perms', 'id': _myId, 'device': _deviceId, 'method': '', 'perms': 'gallery:1,notify:1'});
     _permsAsking = false;
     setState(() => _stage = 'main');
   }
@@ -419,13 +420,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   bool _owner = false;
   String _activeBox = 'none';
   String _deviceId = '';
-  int _cHtf = 0;
-  int _cEntry = 0;
-  int _cCorr = 0;
-  final List<String> _queue = [];
+  final Map<String, int> _route = {};
   final Map<String, int> _siteCount = {'htf': 0, 'entry': 0, 'corr': 0};
-  final Map<String, String> _deliveredBox = {};
-  final List<String> _deliveredOk = [];
+  final List<String> _queue = [];
+  final List<String> _delivered = [];
   DateTime _lastErrPop = DateTime(2000);
   Timer? _banTimer;
   VoidCallback? _sheetRefresh;
@@ -436,6 +434,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadPrefs();
+    _initNotif();
     _initWebView();
     _initScreenshotListener();
     _startBanWatch();
@@ -447,6 +446,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     _banTimer?.cancel();
     _progressN.dispose();
     super.dispose();
+  }
+
+  Future<void> _initNotif() async {
+    final p = await SharedPreferences.getInstance();
+    if (!(p.getBool('notifAsked') ?? false)) {
+      await Permission.notification.request();
+      await p.setBool('notifAsked', true);
+    }
   }
 
   void _startBanWatch() {
@@ -483,7 +490,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       _fg = true;
       _syncBubble();
       setState(() {});
-      _pushState();
+      _probe();
       _flush();
       _sheetRefresh?.call();
     } else if (state == AppLifecycleState.paused) {
@@ -512,25 +519,24 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       _owner = p.getBool('owner') ?? false;
       _activeBox = (p.getString('abox') ?? 'none');
       if (_activeBox.isEmpty) _activeBox = 'none';
-      _cHtf = p.getInt('c_htf') ?? 0;
-      _cEntry = p.getInt('c_entry') ?? 0;
-      _cCorr = p.getInt('c_corr') ?? 0;
       _queue.clear();
       _queue.addAll(p.getStringList('queue') ?? []);
+      _delivered.clear();
+      _delivered.addAll(p.getStringList('delivered') ?? []);
     });
     _pushState();
   }
 
-  Future<void> _saveCounts() async {
+  Future<void> _saveState() async {
     final p = await SharedPreferences.getInstance();
-    await p.setInt('c_htf', _cHtf);
-    await p.setInt('c_entry', _cEntry);
-    await p.setInt('c_corr', _cCorr);
     await p.setString('abox', _activeBox);
     await p.setStringList('queue', _queue);
+    await p.setStringList('delivered', _delivered);
   }
 
-  int _countOf(String box) => box == 'htf' ? _cHtf : (box == 'entry' ? _cEntry : _cCorr);
+  int _queueOf(String box) => _queue.where((q) => q.startsWith('$box|')).length;
+
+  int _countOf(String box) => (_siteCount[box] ?? 0) + _queueOf(box);
 
   String _bubbleText() {
     if (_activeBox == 'none') return '📸 0';
@@ -543,9 +549,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     try {
       _galleryChannel.invokeMethod('updateBubble', {
         'text': _bubbleText(),
-        'htf': _cHtf,
-        'entry': _cEntry,
-        'corr': _cCorr,
+        'htf': _countOf('htf'),
+        'entry': _countOf('entry'),
+        'corr': _countOf('corr'),
         'active': _activeBox,
         'capture': _captureOn ? 1 : 0,
       });
@@ -582,13 +588,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             _toast('${box.toUpperCase()} FULL — select another box');
             return;
           }
-          setState(() {
-            if (box == 'htf') { _cHtf++; } 
-            else if (box == 'entry') { _cEntry++; } 
-            else { _cCorr++; }
-            _queue.add('$box|$path');
-          });
-          await _saveCounts();
+          setState(() => _queue.add('$box|$path'));
+          await _saveState();
           _pushState();
           final c = _countOf(box);
           _toast(c >= m ? '${box.toUpperCase()} FULL ✔' : '${box.toUpperCase()} $c/$m ✅');
@@ -603,7 +604,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       } else if (call.method == 'onBubbleSelect') {
         final box = call.arguments as String;
         setState(() => _activeBox = box);
-        await _saveCounts();
+        await _saveState();
         _pushState();
         if (box == 'none') {
           _toast('NO BOX — SS will not be saved');
@@ -619,6 +620,90 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         await _onOkay();
       }
     });
+  }
+
+  Future<String?> _jsString(String js) async {
+    try {
+      final r = await _controller.runJavaScriptReturningResult(js);
+      final dyn = jsonDecode(r.toString());
+      if (dyn is String) return dyn;
+      return dyn.toString();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  String _probeJs() {
+    return '''(function(){
+      var inputs=document.querySelectorAll('input[type=file]');
+      var out=[];
+      for (var i=0;i<inputs.length;i++){
+        var host=inputs[i]; var head=''; var gen='';
+        for (var up=0; up<6 && host; up++){
+          var t=(host.innerText||'').toUpperCase();
+          if (t.length>=10 && t.length<=400){
+            if (t.indexOf('CORRELATION')>=0 || t.indexOf('DXY')>=0 || t.indexOf('ENTRY')>=0 || t.indexOf('HTF')>=0){ head=t.slice(0,120); break; }
+            if (!gen) gen=t.slice(0,120);
+          }
+          host=host.parentElement;
+        }
+        if (!head) head=gen;
+        out.push({i:i, m:!!inputs[i].multiple, h:head});
+      }
+      return 'PROBE:'+JSON.stringify(out);
+    })();''';
+  }
+
+  String _lengthsJs() {
+    return '''(function(){
+      var inputs=document.querySelectorAll('input[type=file]');
+      var a=[];
+      for (var i=0;i<inputs.length;i++) a.push(inputs[i].files ? inputs[i].files.length : 0);
+      return 'LEN:'+JSON.stringify(a);
+    })();''';
+  }
+
+  Future<void> _probe() async {
+    final m = await _jsString(_probeJs());
+    if (m == null || !m.startsWith('PROBE:')) return;
+    try {
+      final list = (jsonDecode(m.substring(6)) as List).cast<Map<String, dynamic>>();
+      final Map<String, int> route = {};
+      for (final e in list) {
+        final h = (e['h'] ?? '').toString();
+        final idx = (e['i'] as num).toInt();
+        if (h.contains('CORRELATION') || h.contains('DXY')) { route.putIfAbsent('corr', () => idx); } 
+        else if (h.contains('ENTRY') || h.contains('1-4')) { route.putIfAbsent('entry', () => idx); } 
+        else if (h.contains('HTF') || h.contains('MAX 6')) { route.putIfAbsent('htf', () => idx); }
+      }
+      if (!route.containsKey('corr')) {
+        for (final e in list) {
+          if (e['m'] != true) { route['corr'] = (e['i'] as num).toInt(); break; }
+        }
+      }
+      final muls = list.where((e) => e['m'] == true).map((e) => (e['i'] as num).toInt()).toList();
+      if (!route.containsKey('entry') && muls.length >= 1) route['entry'] = muls[0];
+      if (!route.containsKey('htf') && muls.length >= 2) route['htf'] = muls[1];
+      if (route.isNotEmpty) {
+        setState(() => _route.addAll(route));
+        await _syncSite();
+      }
+    } catch (e) {}
+  }
+
+  Future<void> _syncSite() async {
+    final m = await _jsString(_lengthsJs());
+    if (m == null || !m.startsWith('LEN:')) return;
+    try {
+      final arr = (jsonDecode(m.substring(4)) as List).map((e) => (e as num).toInt()).toList();
+      setState(() {
+        _route.forEach((box, idx) {
+          if (idx >= 0 && idx < arr.length) _siteCount[box] = arr[idx];
+        });
+      });
+      _pushState();
+      _sheetRefresh?.call();
+    } catch (e) {}
   }
 
   Future<Uint8List> _compress(Uint8List bytes, {int maxKB = 1024}) async {
@@ -664,35 +749,67 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
   }
 
-  Future<int> _inject(String box, String b64, String name) async {
+  String _injectJs(int idx, String b64, String name) {
+    return '''(function(){
+      var inputs=document.querySelectorAll('input[type=file]');
+      var inp=inputs[$idx];
+      if(!inp) return 'fail';
+      window.__ak = window.__ak || {};
+      var key='k$idx';
+      var list = window.__ak[key];
+      if (!list) {
+        list=[];
+        if (inp.files){ for (var e2=0; e2<inp.files.length; e2++) list.push(inp.files[e2]); }
+        window.__ak[key]=list;
+      }
+      var bin=atob('$b64'); var arr=new Uint8Array(bin.length);
+      for (var i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+      list.push(new File([arr],'$name',{type:'image/jpeg'}));
+      var dt=new DataTransfer();
+      for (var q2=0; q2<list.length; q2++) dt.items.add(list[q2]);
+      inp.files=dt.files;
+      inp.dispatchEvent(new Event('change',{bubbles:true}));
+      var has=false;
+      for (var z=0;z<inp.files.length;z++){ if (inp.files[z].name==='$name') has=true; }
+      return has ? ('ok:'+inp.files.length) : 'mis';
+    })();''';
+  }
+
+  Future<int> _injectAt(int idx, String b64, String name) async {
     try {
-      final r = await _controller.runJavaScriptReturningResult(_injectJs(box, b64, name));
+      final r = await _controller.runJavaScriptReturningResult(_injectJs(idx, b64, name));
       final s = r.toString().replaceAll('"', '');
       if (s.startsWith('ok:')) return int.tryParse(s.substring(3)) ?? -1;
+      if (s.startsWith('mis')) return -2;
     } catch (e) {}
     return -1;
   }
 
   Future<bool> _sendOne(String box, String path) async {
+    if (!_route.containsKey(box)) await _probe();
+    if (!_route.containsKey(box)) return false;
+    final first = _route[box]!;
+    final order = <int>[first, ...([0, 1, 2]..remove(first))];
     try {
-      final raw = await File(path).readAsBytes();
-      var bytes = await _compress(raw);
+      final rawBytes = await File(path).readAsBytes();
+      var bytes = await _compress(rawBytes);
       final name = path.split('/').last;
-      final expect = (box == 'corr') ? 1 : (_siteCount[box] ?? 0) + 1;
-      int got = await _inject(box, base64Encode(bytes), name);
-      if (got != expect) {
-        bytes = await _compress(raw, maxKB: 300);
-        got = await _inject(box, base64Encode(bytes), name);
-      }
-      if (got > 0) {
-        _siteCount[box] = got;
-        setState(() {
-          _queue.remove('$box|$path');
-          _deliveredOk.add(path);
-          _deliveredBox[path] = box;
-        });
-        await _saveCounts();
-        return true;
+      for (final idx in order) {
+        int got = await _injectAt(idx, base64Encode(bytes), name);
+        if (got == -1) {
+          bytes = await _compress(rawBytes, maxKB: 300);
+          got = await _injectAt(idx, base64Encode(bytes), name);
+        }
+        if (got > 0) {
+          if (_route[box] != idx) _route[box] = idx;
+          setState(() {
+            _queue.remove('$box|$path');
+            if (!_delivered.contains('$box|$path')) _delivered.add('$box|$path');
+          });
+          await _saveState();
+          await _syncSite();
+          return true;
+        }
       }
     } catch (e) {}
     return false;
@@ -717,45 +834,31 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 
   Future<void> _onOkay() async {
-    await Future.delayed(const Duration(milliseconds: 800));
+    await Future.delayed(const Duration(milliseconds: 900));
+    await _probe();
     await _flush();
-    if (_deliveredOk.isEmpty) {
+    final toDel = _delivered.map((e) => e.substring(e.indexOf('|') + 1)).toList();
+    bool deleted = false;
+    if (toDel.isEmpty) {
       _toast('No new deliveries');
-    } else {
-      final List<String> toDel = List<String>.from(_deliveredOk);
-      final Set<String> boxes = _deliveredBox.values.toSet();
-      _deliveredOk.clear();
-      _deliveredBox.clear();
-      bool deleted = false;
-      if (_autoDelete) {
-        try {
-          final r = await _galleryChannel.invokeMethod<int>('deleteFiles', {'paths': toDel});
-          deleted = (r ?? 0) == 1;
-        } catch (e) {}
-      }
-      if (deleted) {
-        setState(() {
-          for (final b in boxes) {
-            if (b == 'htf') { _cHtf = 0; } 
-            else if (b == 'entry') { _cEntry = 0; } 
-            else if (b == 'corr') { _cCorr = 0; }
-            _siteCount[b] = 0;
-          }
-        });
-        await _saveCounts();
-        _overlayShown = false;
-        final p = await SharedPreferences.getInstance();
-        await p.setBool('bubble', false);
-        try {
-          await _galleryChannel.invokeMethod('hideBubble');
-        } catch (e) {}
-        _toast('Delivered + deleted — bubble OFF');
-        for (final b in boxes) {
-          try {
-            await _controller.runJavaScript('if(window.__ak){window.__ak["$b"]=[];}');
-          } catch (e) {}
+    } else if (_autoDelete) {
+      try {
+        final r = await _galleryChannel.invokeMethod<int>('deleteFiles', {'paths': toDel});
+        deleted = (r ?? 0) == 1;
+        if (deleted) {
+          setState(() => _delivered.clear());
+          await _saveState();
+          _toast('SS deleted from gallery');
         }
-      }
+      } catch (e) {}
+    }
+    if (deleted) {
+      _overlayShown = false;
+      final p = await SharedPreferences.getInstance();
+      await p.setBool('bubble', false);
+      try {
+        await _galleryChannel.invokeMethod('hideBubble');
+      } catch (e) {}
     }
     await _controller.runJavaScript('''(function(){
       var els = document.querySelectorAll('nav button, nav a, button, a, div[role="button"]');
@@ -789,53 +892,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
   }
 
-  String _injectJs(String box, String b64, String name) {
-    return '''(function(){
-      function classify(inp){
-        var host = inp;
-        for (var up=0; up<8 && host; up++){
-          var txt = (host.innerText||'').toUpperCase();
-          if (txt.length>0 && txt.length<400){
-            if (txt.indexOf('CORRELATION')>=0 || txt.indexOf('DXY')>=0) return 'corr';
-            if (txt.indexOf('ENTRY')>=0) return 'entry';
-            if (txt.indexOf('HTF')>=0) return 'htf';
-          }
-          host = host.parentElement;
-        }
-        var inputs=document.querySelectorAll('input[type=file]');
-        var idx = Array.prototype.indexOf.call(inputs, inp);
-        if (idx===0) return 'entry';
-        if (idx===1) return 'corr';
-        if (idx===2) return 'htf';
-        return inp.multiple ? 'htf' : 'corr';
-      }
-      function inputFor(b){
-        var inputs=document.querySelectorAll('input[type=file]');
-        for (var i=0;i<inputs.length;i++){ if (classify(inputs[i])===b) return inputs[i]; }
-        if (b==='corr'){ for (var j=0;j<inputs.length;j++){ if(!inputs[j].multiple) return inputs[j]; } }
-        if (b==='entry' && inputs.length) return inputs[0];
-        if (b==='htf'){ for (var k=0;k<inputs.length;k++){ if(inputs[k].multiple) return inputs[k]; } }
-        return null;
-      }
-      var inp=inputFor('$box');
-      if(!inp) return 'fail';
-      window.__ak = window.__ak || {};
-      var list = window.__ak['$box'];
-      if (!list) {
-        list = [];
-        if (inp.files) { for (var e2=0; e2<inp.files.length; e2++) list.push(inp.files[e2]); }
-        window.__ak['$box'] = list;
-      }
-      var bin=atob('$b64'); var arr=new Uint8Array(bin.length);
-      for (var i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
-      list.push(new File([arr],'$name',{type:'image/jpeg'}));
-      var dt=new DataTransfer();
-      for (var q2=0; q2<list.length; q2++) dt.items.add(list[q2]);
-      inp.files=dt.files; inp.dispatchEvent(new Event('change',{bubbles:true}));
-      return 'ok:'+inp.files.length;
-    })();''';
-  }
-
   void _initWebView() {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -844,19 +900,19 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         final m = msg.message;
         if (m.startsWith('CLEARED:')) {
           final b = m.substring(8);
+          final idx = _route[b];
           setState(() {
-            if (b == 'htf') { _cHtf = 0; _siteCount['htf'] = 0; } 
-            else if (b == 'entry') { _cEntry = 0; _siteCount['entry'] = 0; } 
-            else { _cCorr = 0; _siteCount['corr'] = 0; }
+            _siteCount[b] = 0;
             _queue.removeWhere((q) => q.startsWith('$b|'));
-            _deliveredOk.removeWhere((p) => _deliveredBox[p] == b);
-            _deliveredBox.removeWhere((k, v) => v == b);
+            _delivered.removeWhere((q) => q.startsWith('$b|'));
           });
-          _saveCounts();
+          await _saveState();
           _pushState();
-          try {
-            await _controller.runJavaScript('if(window.__ak){window.__ak["$b"]=[];}');
-          } catch (e) {}
+          if (idx != null) {
+            try {
+              await _controller.runJavaScript('if(window.__ak){window.__ak["k$idx"]=[];}');
+            } catch (e) {}
+          }
         } else if (m.startsWith('PICK:')) {
           await _pickAndInject(m.substring(5));
         }
@@ -873,17 +929,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           setState(() {
             _isLoading = false;
             _firstLoad = false;
-            _cHtf = 0;
-            _cEntry = 0;
-            _cCorr = 0;
-            _siteCount['htf'] = 0;
-            _siteCount['entry'] = 0;
-            _siteCount['corr'] = 0;
           });
           _progressN.value = 1;
-          await _saveCounts();
-          _pushState();
           await _controller.runJavaScript(_pageHookJs());
+          await _probe();
           _flush();
         },
       ))
@@ -894,15 +943,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     return '''(function(){
       if (window.__aniketHook) return;
       window.__aniketHook = true;
-      var st = document.createElement('style');
-      st.innerHTML = '#netlify-badge, .netlify-badge, [id*="netlify" i], [class*="netlify" i], a[href*="netlify.com"], a[href*="netlify.app"] { display:none !important; visibility:hidden !important; opacity:0 !important; pointer-events:none !important; }';
-      document.documentElement.appendChild(st);
-      function lightClean(){
-        var b = document.querySelector('#netlify-badge, .netlify-badge, [id*="netlify" i], [class*="netlify" i], a[href*="netlify.com"], a[href*="netlify.app"]');
-        if (b) { b.remove(); }
-      }
-      lightClean();
-      setInterval(lightClean, 2000);
       function classify(inp){
         var host = inp;
         for (var up=0; up<8 && host; up++){
@@ -1034,7 +1074,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
               children: [
                 const Text('App Settings', style: TextStyle(color: kGold, fontSize: 18, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
-                Text('Active: ${_activeBox == 'none' ? 'NO BOX' : _activeBox.toUpperCase()}  •  HTF $_cHtf/6 • ENTRY $_cEntry/4 • CORR $_cCorr/1  •  Queue: ${_queue.length}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                Text('Active: ${_activeBox == 'none' ? 'NO BOX' : _activeBox.toUpperCase()}  •  HTF ${_countOf('htf')}/6 • ENTRY ${_countOf('entry')}/4 • CORR ${_countOf('corr')}/1  •  Queue: ${_queue.length}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
                 const SizedBox(height: 8),
                 SwitchListTile(
                   title: const Text('Floating Bubble', style: TextStyle(color: Colors.white)),
@@ -1065,16 +1105,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                     await p.setBool('ad', v);
                     setModal(() {});
                   },
-                ),
-                const SizedBox(height: 8),
-                ElevatedButton(
-                  onPressed: () async {
-                    Navigator.pop(context);
-                    await _flush();
-                    _toast('Queue: ${_queue.length} left');
-                  },
-                  style: ElevatedButton.styleFrom(backgroundColor: kGold),
-                  child: const Text('Force Upload Now', style: TextStyle(color: Colors.black)),
                 ),
                 if (_owner) ...[
                   const SizedBox(height: 8),
