@@ -7,9 +7,11 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -74,6 +76,25 @@ class BubbleService : Service() {
         return START_STICKY
     }
 
+    // CHANGED: Android 14 (API 34) requires every foreground service to
+    // declare a foregroundServiceType, both here in code and in
+    // AndroidManifest.xml, or startForeground() throws at runtime.
+    // This bubble overlay doesn't fit camera/location/media categories,
+    // so it uses the generic "specialUse" type added in API 34.
+    //
+    // IMPORTANT: this also needs a matching entry in AndroidManifest.xml:
+    //
+    // <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    // <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    //
+    // <service
+    //     android:name=".BubbleService"
+    //     android:exported="false"
+    //     android:foregroundServiceType="specialUse">
+    //     <property
+    //         android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+    //         android:value="floating_capture_bubble" />
+    // </service>
     private fun startFore() {
         try {
             val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
@@ -84,7 +105,11 @@ class BubbleService : Service() {
                 .setContentText("Bubble active")
                 .setSmallIcon(android.R.drawable.ic_menu_camera)
                 .build()
-            startForeground(9001, n)
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(9001, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(9001, n)
+            }
         } catch (e: Exception) {
         }
     }
