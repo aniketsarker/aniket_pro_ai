@@ -415,17 +415,17 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   bool _fg = true;
   bool _flushing = false;
   bool _okayBusy = false;
-  bool _captureOn = true;
+  bool _captureOn = false;
   bool _autoDelete = false;
   bool _overlayShown = false;
   bool _owner = false;
   String _activeBox = 'none';
   String _deviceId = '';
-  final Map<String, int> _route = {};
   final Map<String, int> _siteCount = {'htf': 0, 'entry': 0, 'corr': 0};
   final List<String> _queue = [];
   final List<String> _ledger = [];
   final List<String> _sentIds = [];
+  final List<String> _seenIds = [];
   DateTime _lastErrPop = DateTime(2000);
   Timer? _banTimer;
   VoidCallback? _sheetRefresh;
@@ -493,7 +493,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       _syncBubble();
       setState(() {});
       _seedCounts();
-      _probe();
       _flush();
       _sheetRefresh?.call();
     } else if (state == AppLifecycleState.paused) {
@@ -516,7 +515,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   Future<void> _loadPrefs() async {
     final p = await SharedPreferences.getInstance();
     setState(() {
-      _captureOn = p.getBool('cap') ?? true;
+      _captureOn = p.getBool('cap') ?? false;
       _autoDelete = p.getBool('ad') ?? false;
       _overlayShown = p.getBool('bubble') ?? false;
       _owner = p.getBool('owner') ?? false;
@@ -528,6 +527,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       _ledger.addAll(p.getStringList('ledger') ?? []);
       _sentIds.clear();
       _sentIds.addAll(p.getStringList('sentIds') ?? []);
+      _seenIds.clear();
+      _seenIds.addAll(p.getStringList('seenIds') ?? []);
     });
     _pushState();
   }
@@ -538,6 +539,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     await p.setStringList('queue', _queue);
     await p.setStringList('ledger', _ledger);
     await p.setStringList('sentIds', _sentIds);
+    await p.setStringList('seenIds', _seenIds);
   }
 
   String _boxOf(String e) => e.split('|')[1];
@@ -595,6 +597,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           final id = (args['id'] as num?)?.toInt().toString() ?? '';
           final path = (args['path'] as String?) ?? '';
           if (id.isEmpty || path.isEmpty) return;
+          if (_seenIds.contains(id)) return;
+          _seenIds.add(id);
+          if (_seenIds.length > 500) _seenIds.removeRange(0, _seenIds.length - 500);
+          await _saveState();
           if (_activeBox == 'none') {
             _errPop('❌ SS disabled — select a box');
             return;
@@ -656,27 +662,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
   }
 
-  String _probeJs() {
-    return '''(function(){
-      var inputs=document.querySelectorAll('input[type=file]');
-      var out=[];
-      for (var i=0;i<inputs.length;i++){
-        var host=inputs[i]; var head=''; var gen='';
-        for (var up=0; up<6 && host; up++){
-          var t=(host.innerText||'').toUpperCase();
-          if (t.length>=10 && t.length<=400){
-            if (t.indexOf('CORRELATION')>=0 || t.indexOf('DXY')>=0 || t.indexOf('ENTRY')>=0 || t.indexOf('HTF')>=0){ head=t.slice(0,120); break; }
-            if (!gen) gen=t.slice(0,120);
-          }
-          host=host.parentElement;
-        }
-        if (!head) head=gen;
-        out.push({i:i, m:!!inputs[i].multiple, h:head});
-      }
-      return 'PROBE:'+JSON.stringify(out);
-    })();''';
-  }
-
   String _countsJs() {
     return '''(function(){
       var t=(document.body.innerText||'').toUpperCase();
@@ -688,31 +673,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       if (t.indexOf('DXY SS LOADED')>=0) corr=1;
       return 'CNT:'+JSON.stringify({htf:htf,entry:entry,corr:corr});
     })();''';
-  }
-
-  Future<void> _probe() async {
-    final m = await _jsString(_probeJs());
-    if (m == null || !m.startsWith('PROBE:')) return;
-    try {
-      final list = (jsonDecode(m.substring(6)) as List).cast<Map<String, dynamic>>();
-      final Map<String, int> route = {};
-      for (final e in list) {
-        final h = (e['h'] ?? '').toString();
-        final idx = (e['i'] as num).toInt();
-        if (h.contains('CORRELATION') || h.contains('DXY')) { route.putIfAbsent('corr', () => idx); } 
-        else if (h.contains('ENTRY') || h.contains('1-4')) { route.putIfAbsent('entry', () => idx); } 
-        else if (h.contains('HTF') || h.contains('MAX 6')) { route.putIfAbsent('htf', () => idx); }
-      }
-      if (!route.containsKey('corr')) {
-        for (final e in list) {
-          if (e['m'] != true) { route['corr'] = (e['i'] as num).toInt(); break; }
-        }
-      }
-      final muls = list.where((e) => e['m'] == true).map((e) => (e['i'] as num).toInt()).toList();
-      if (!route.containsKey('entry') && muls.length >= 1) route['entry'] = muls[0];
-      if (!route.containsKey('htf') && muls.length >= 2) route['htf'] = muls[1];
-      if (route.isNotEmpty) setState(() => _route.addAll(route));
-    } catch (e) {}
   }
 
   Future<void> _seedCounts() async {
@@ -773,19 +733,42 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
   }
 
-  String _injectJs(int idx, String b64, String name) {
+  String _injectJs(String box, String b64, String name) {
     return '''(function(){
-      var inputs=document.querySelectorAll('input[type=file]');
-      var inp=inputs[$idx];
+      function headOf(inp){
+        var host=inp;
+        for (var up=0; up<6 && host; up++){
+          var t=(host.innerText||'').toUpperCase();
+          if (t.length>=10 && t.length<=400){
+            if (t.indexOf('CORRELATION')>=0 || t.indexOf('DXY')>=0 || t.indexOf('ENTRY')>=0 || t.indexOf('HTF')>=0) return t;
+          }
+          host=host.parentElement;
+        }
+        return '';
+      }
+      function pickInput(b){
+        var inputs=document.querySelectorAll('input[type=file]');
+        var i;
+        for (i=0;i<inputs.length;i++){
+          var h=headOf(inputs[i]);
+          if (b==='corr' && (h.indexOf('CORRELATION')>=0 || h.indexOf('DXY')>=0)) return inputs[i];
+          if (b==='entry' && h.indexOf('ENTRY')>=0) return inputs[i];
+          if (b==='htf' && h.indexOf('HTF')>=0) return inputs[i];
+        }
+        if (b==='corr'){ for (i=0;i<inputs.length;i++){ if(!inputs[i].multiple) return inputs[i]; } return null; }
+        var muls=[];
+        for (i=0;i<inputs.length;i++){ if (inputs[i].multiple) muls.push(inputs[i]); }
+        if (b==='entry') return muls[0]||null;
+        if (b==='htf') return muls[muls.length-1]||muls[0]||null;
+        return null;
+      }
+      var inp=pickInput('$box');
       if(!inp) return 'fail';
       window.__ak = window.__ak || {};
-      var key='k$idx';
+      var key='$box';
       var list = window.__ak[key];
-      if (!list) {
-        list=[];
-        if (inp.files){ for (var e2=0; e2<inp.files.length; e2++) list.push(inp.files[e2]); }
-        window.__ak[key]=list;
-      }
+      if (!list) { list=[]; window.__ak[key]=list; }
+      if (list.length===0 && inp.files){ for (var e2=0; e2<inp.files.length; e2++) list.push(inp.files[e2]); }
       for (var r2=list.length-1; r2>=0; r2--){ if (list[r2].name==='$name') list.splice(r2,1); }
       var bin=atob('$b64'); var arr=new Uint8Array(bin.length);
       for (var i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
@@ -798,9 +781,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     })();''';
   }
 
-  Future<bool> _injectAt(int idx, String b64, String name) async {
+  Future<bool> _injectAt(String box, String b64, String name) async {
     try {
-      final r = await _controller.runJavaScriptReturningResult(_injectJs(idx, b64, name));
+      final r = await _controller.runJavaScriptReturningResult(_injectJs(box, b64, name));
       final s = r.toString().replaceAll('"', '');
       return s.startsWith('ok:');
     } catch (e) {
@@ -817,17 +800,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       await _saveState();
       return true;
     }
-    if (!_route.containsKey(box)) await _probe();
-    final idx = _route[box];
-    if (idx == null) return false;
     try {
       final rawBytes = await File(path).readAsBytes();
       var bytes = await _compress(rawBytes);
       final name = path.split('/').last;
-      bool sent = await _injectAt(idx, base64Encode(bytes), name);
+      bool sent = await _injectAt(box, base64Encode(bytes), name);
       if (!sent) {
         bytes = await _compress(rawBytes, maxKB: 300);
-        sent = await _injectAt(idx, base64Encode(bytes), name);
+        sent = await _injectAt(box, base64Encode(bytes), name);
       }
       if (!sent) return false;
       setState(() {
@@ -843,8 +823,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
   }
 
-  Future<void> _flush() async {
-    if (_flushing || !_fg || _queue.isEmpty) return;
+  Future<void> _flush({bool force = false}) async {
+    if (_flushing || _queue.isEmpty) return;
+    if (!force && !_fg) return;
     _flushing = true;
     final snapshot = List<String>.from(_queue);
     int failed = 0;
@@ -852,7 +833,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       if (!await _sendOne(it)) failed++;
     }
     _flushing = false;
-    if (failed > 0) _toast('$failed upload pending — retry on open/OKAY');
+    if (failed > 0 && !force) _toast('$failed upload pending — retry on open/OKAY');
   }
 
   Future<void> _clickClear(String box) async {
@@ -875,13 +856,17 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     _okayBusy = true;
     try {
       await Future.delayed(const Duration(milliseconds: 900));
-      await _probe();
-      await _flush();
-      final ids = _ledger.map((e) => int.tryParse(e.split('|')[0]) ?? 0).where((e) => e > 0).toList();
-      final paths = _ledger.map((e) => _pathOf(e)).toList();
-      final boxes = _ledger.map((e) => _boxOf(e)).toSet();
+      _fg = true;
+      await _seedCounts();
+      await _flush(force: true);
+      if (_queue.isNotEmpty) await _flush(force: true);
+      final uploaded = _ledger.where((e) => _sentIds.contains(e.split('|')[0])).toList();
+      final uploadedIds = uploaded.map((e) => e.split('|')[0]).toSet();
+      final ids = uploaded.map((e) => int.tryParse(e.split('|')[0]) ?? 0).where((e) => e > 0).toList();
+      final paths = uploaded.map((e) => _pathOf(e)).toList();
+      final boxes = uploaded.map((e) => _boxOf(e)).toSet();
       bool deleted = false;
-      if (ids.isEmpty && paths.isEmpty) {
+      if (uploaded.isEmpty) {
         _toast('No new deliveries');
       } else if (_autoDelete) {
         try {
@@ -897,20 +882,28 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           for (final b in boxes) {
             _siteCount[b] = 0;
           }
-          _ledger.clear();
-          _queue.clear();
-          _sentIds.clear();
+          _ledger.removeWhere((e) => uploadedIds.contains(e.split('|')[0]));
+          _queue.removeWhere((e) => uploadedIds.contains(e.split('|')[0]));
+          _sentIds.removeWhere((id) => uploadedIds.contains(id));
         });
         await _saveState();
-        _pushState();
-        _overlayShown = false;
-        final p = await SharedPreferences.getInstance();
-        await p.setBool('bubble', false);
-        try {
-          await _galleryChannel.invokeMethod('hideBubble');
-        } catch (e) {}
-        _toast('Delivered + deleted — bubble OFF');
+        _toast('Delivered + deleted');
       }
+      setState(() {
+        _captureOn = false;
+        _autoDelete = false;
+        _overlayShown = false;
+      });
+      final p = await SharedPreferences.getInstance();
+      await p.setBool('cap', false);
+      await p.setBool('ad', false);
+      await p.setBool('bubble', false);
+      try {
+        await _galleryChannel.invokeMethod('hideBubble');
+      } catch (e) {}
+      _pushState();
+      _toast('Round done — switches OFF');
+      if (_queue.isNotEmpty) _toast('${_queue.length} SS pending — will upload on next open');
       await _controller.runJavaScript('''(function(){
         var els = document.querySelectorAll('nav button, nav a, button, a, div[role="button"]');
         for (var i=0;i<els.length;i++){
@@ -955,7 +948,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         final m = msg.message;
         if (m.startsWith('CLEARED:')) {
           final b = m.substring(8);
-          final idx = _route[b];
           setState(() {
             _siteCount[b] = 0;
             _queue.removeWhere((q) => _boxOf(q) == b);
@@ -964,11 +956,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           });
           await _saveState();
           _pushState();
-          if (idx != null) {
-            try {
-              await _controller.runJavaScript('if(window.__ak){window.__ak["k$idx"]=[];}');
-            } catch (e) {}
-          }
+          try {
+            await _controller.runJavaScript('if(window.__ak){window.__ak["$b"]=[];}');
+          } catch (e) {}
         } else if (m.startsWith('PICK:')) {
           await _pickAndInject(m.substring(5));
         }
@@ -989,7 +979,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           _progressN.value = 1;
           await _controller.runJavaScript(_pageHookJs());
           await _seedCounts();
-          await _probe();
           _flush();
         },
       ))
@@ -1000,23 +989,27 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     return '''(function(){
       if (window.__aniketHook) return;
       window.__aniketHook = true;
-      function classify(inp){
-        var host = inp;
-        for (var up=0; up<8 && host; up++){
-          var txt = (host.innerText||'').toUpperCase();
-          if (txt.length>0 && txt.length<400){
-            if (txt.indexOf('CORRELATION')>=0 || txt.indexOf('DXY')>=0) return 'corr';
-            if (txt.indexOf('ENTRY')>=0) return 'entry';
-            if (txt.indexOf('HTF')>=0) return 'htf';
+      function headOf(inp){
+        var host=inp;
+        for (var up=0; up<6 && host; up++){
+          var t=(host.innerText||'').toUpperCase();
+          if (t.length>=10 && t.length<=400){
+            if (t.indexOf('CORRELATION')>=0 || t.indexOf('DXY')>=0 || t.indexOf('ENTRY')>=0 || t.indexOf('HTF')>=0) return t;
           }
-          host = host.parentElement;
+          host=host.parentElement;
         }
+        return '';
+      }
+      function classify(inp){
+        var h=headOf(inp);
+        if (h.indexOf('CORRELATION')>=0 || h.indexOf('DXY')>=0) return 'corr';
+        if (h.indexOf('ENTRY')>=0) return 'entry';
+        if (h.indexOf('HTF')>=0) return 'htf';
+        if (!inp.multiple) return 'corr';
         var inputs=document.querySelectorAll('input[type=file]');
         var idx = Array.prototype.indexOf.call(inputs, inp);
         if (idx===0) return 'entry';
-        if (idx===1) return 'corr';
-        if (idx===2) return 'htf';
-        return inp.multiple ? 'htf' : 'corr';
+        return 'htf';
       }
       document.addEventListener('click', function(e){
         var t = e.target;
