@@ -5,11 +5,9 @@ import android.accounts.AccountManager
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ContentUris
-import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
-import android.database.ContentObserver
 import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -18,7 +16,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.Settings
 import android.widget.Toast
@@ -332,57 +329,5 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         observer?.let { contentResolver.unregisterContentObserver(it) }
         super.onDestroy()
-    }
-
-    class ScreenshotObserver(
-        private val context: Context,
-        private val handler: Handler,
-        private val onScreenshot: (Long, String) -> Unit
-    ) : ContentObserver(handler) {
-
-        private var lastId = -1L
-        private var lastTime = 0L
-
-        override fun onChange(selfChange: Boolean, uri: Uri?) {
-            super.onChange(selfChange, uri)
-            if (uri == null) return
-            val id = uri.lastPathSegment?.toLongOrNull() ?: return
-            val projection = arrayOf(
-                MediaStore.Images.Media.DATA,
-                MediaStore.Images.Media.DATE_ADDED,
-                MediaStore.Images.Media.IS_PENDING
-            )
-            val cursor: Cursor? = try {
-                context.contentResolver.query(uri, projection, null, null, null)
-            } catch (e: Exception) {
-                null
-            }
-            var path: String? = null
-            var dateAdded: Long = 0
-            var pendingFlag = 0
-            if (cursor != null) {
-                if (cursor.moveToFirst()) {
-                    val di = cursor.getColumnIndex(MediaStore.Images.Media.DATA)
-                    val ti = cursor.getColumnIndex(MediaStore.Images.Media.DATE_ADDED)
-                    val pi = cursor.getColumnIndex(MediaStore.Images.Media.IS_PENDING)
-                    if (di >= 0) path = cursor.getString(di)
-                    if (ti >= 0) dateAdded = cursor.getLong(ti)
-                    if (pi >= 0) pendingFlag = cursor.getInt(pi)
-                }
-                cursor.close()
-            }
-            if (path == null) return
-            if (pendingFlag == 1) return
-            if (path.contains(".pending", true)) return
-            val now = SystemClock.uptimeMillis()
-            if (id == lastId && (now - lastTime) < 5000) return
-            val nowSec = System.currentTimeMillis() / 1000
-            val fresh = (nowSec - dateAdded) in 0..60
-            if (fresh && path.contains("Screenshots", true)) {
-                lastId = id
-                lastTime = now
-                handler.post { onScreenshot(id, path) }
-            }
-        }
     }
 }
