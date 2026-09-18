@@ -225,7 +225,6 @@ class BubbleService : Service() {
         val labels = arrayOf(
             "HTF  (" + (if (bHtf >= 6) "FULL" else "$bHtf/6") + ")" + (if (act == "htf") "  ✔" else ""),
             "ENTRY  (" + (if (bEntry >= 4) "FULL" else "$bEntry/4") + ")" + (if (act == "entry") "  ✔" else ""),
-            "CORRELATION  (" + (if (bCorr >= 1) "FULL" else "$bCorr/1") + ")" + (if (act == "corr") "  ✔" else ""),
             "NO BOX (OFF)" + (if (act == "none") "  ✔" else ""),
             "OKAY ✔",
             "Close"
@@ -235,9 +234,9 @@ class BubbleService : Service() {
             tv.text = labels[i]
             tv.setTextColor(
                 when (i) {
-                    3 -> Color.parseColor("#8D8D8D")
-                    4 -> Color.parseColor("#7CFC9B")
-                    5 -> Color.parseColor("#8D8D8D")
+                    2 -> Color.parseColor("#8D8D8D")
+                    3 -> Color.parseColor("#7CFC9B")
+                    4 -> Color.parseColor("#8D8D8D")
                     else -> Color.parseColor("#F5E6C8")
                 }
             )
@@ -248,9 +247,8 @@ class BubbleService : Service() {
                 when (i) {
                     0 -> onAction?.invoke("onBubbleSelect", "htf")
                     1 -> onAction?.invoke("onBubbleSelect", "entry")
-                    2 -> onAction?.invoke("onBubbleSelect", "corr")
-                    3 -> onAction?.invoke("onBubbleSelect", "none")
-                    4 -> {
+                    2 -> onAction?.invoke("onBubbleSelect", "none")
+                    3 -> {
                         try {
                             val li = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
                             li?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
