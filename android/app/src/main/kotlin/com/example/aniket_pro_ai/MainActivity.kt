@@ -4,7 +4,7 @@ import android.Manifest
 import android.accounts.AccountManager
 import android.app.Activity
 import android.app.AlertDialog
-import android.content.ContentObserver
+import android.database.ContentObserver
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
