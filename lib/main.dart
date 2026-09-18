@@ -769,47 +769,57 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       for (var q2=0; q2<list.length; q2++) dt.items.add(list[q2]);
       inp.files=dt.files;
       inp.dispatchEvent(new Event('change',{bubbles:true}));
-      var has=false;
-      for (var z=0;z<inp.files.length;z++){ if (inp.files[z].name==='$name') has=true; }
-      return has ? ('ok:'+inp.files.length) : 'mis';
+      return 'ok:'+inp.files.length;
     })();''';
   }
 
-  Future<int> _injectAt(int idx, String b64, String name) async {
+  Future<bool> _injectAt(int idx, String b64, String name) async {
     try {
       final r = await _controller.runJavaScriptReturningResult(_injectJs(idx, b64, name));
       final s = r.toString().replaceAll('"', '');
-      if (s.startsWith('ok:')) return int.tryParse(s.substring(3)) ?? -1;
-      if (s.startsWith('mis')) return -2;
-    } catch (e) {}
-    return -1;
+      return !s.startsWith('fail');
+    } catch (e) {
+      return false;
+    }
   }
 
   Future<bool> _sendOne(String box, String path) async {
     if (!_route.containsKey(box)) await _probe();
-    if (!_route.containsKey(box)) return false;
-    final first = _route[box]!;
-    final order = <int>[first, ...([0, 1, 2]..remove(first))];
+    var idx = _route[box];
+    if (idx == null) return false;
     try {
       final rawBytes = await File(path).readAsBytes();
       var bytes = await _compress(rawBytes);
       final name = path.split('/').last;
-      for (final idx in order) {
-        int got = await _injectAt(idx, base64Encode(bytes), name);
-        if (got == -1) {
+      for (var attempt = 0; attempt < 2; attempt++) {
+        final beforeAll = Map<String, int>.from(_siteCount);
+        bool sent = await _injectAt(idx!, base64Encode(bytes), name);
+        if (!sent) {
           bytes = await _compress(rawBytes, maxKB: 300);
-          got = await _injectAt(idx, base64Encode(bytes), name);
+          sent = await _injectAt(idx!, base64Encode(bytes), name);
         }
-        if (got > 0) {
-          if (_route[box] != idx) _route[box] = idx;
+        if (!sent) return false;
+        await _syncSite();
+        if ((_siteCount[box] ?? 0) > (beforeAll[box] ?? 0)) {
           setState(() {
             _queue.remove('$box|$path');
             if (!_delivered.contains('$box|$path')) _delivered.add('$box|$path');
           });
           await _saveState();
-          await _syncSite();
           return true;
         }
+        String? grownBox;
+        _siteCount.forEach((b, c) {
+          if (grownBox == null && b != box && c > (beforeAll[b] ?? 0)) grownBox = b;
+        });
+        if (grownBox != null && _route[grownBox] != null && attempt == 0) {
+          final tmp = _route[box]!;
+          _route[box] = _route[grownBox]!;
+          _route[grownBox] = tmp;
+          idx = _route[box];
+          continue;
+        }
+        return false;
       }
     } catch (e) {}
     return false;
@@ -819,18 +829,16 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     if (_flushing || !_fg || _queue.isEmpty) return;
     _flushing = true;
     final snapshot = List<String>.from(_queue);
+    int failed = 0;
     for (final it in snapshot) {
       final sep = it.indexOf('|');
       if (sep < 0) continue;
       final box = it.substring(0, sep);
       final path = it.substring(sep + 1);
-      final ok = await _sendOne(box, path);
-      if (!ok) {
-        _toast('Upload pending — will retry');
-        break;
-      }
+      if (!await _sendOne(box, path)) failed++;
     }
     _flushing = false;
+    if (failed > 0) _toast('$failed upload pending — retry on open/OKAY');
   }
 
   Future<void> _onOkay() async {
