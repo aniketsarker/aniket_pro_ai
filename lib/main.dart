@@ -669,32 +669,36 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
   }
 
-  String _countsJs() {
-    return '''(function(){
-      var t=(document.body.innerText||'').toUpperCase();
-      var htf=0, entry=0, corr=0;
-      var m1=t.match(/HTF LOADED:\\s*(\\d+)/);
-      if (m1) htf=parseInt(m1[1],10);
-      var m2=t.match(/ENTRY SS:\\s*(\\d+)/);
-      if (m2) entry=parseInt(m2[1],10);
-      if (t.indexOf('DXY SS LOADED')>=0) corr=1;
-      return 'CNT:'+JSON.stringify({htf:htf,entry:entry,corr:corr});
-    })();''';
+  Future<int> _siteArrLen(String box) async {
+    if (box == 'corr') {
+      final s = await _jsString('JSON.stringify(window.dxyImage ? 1 : 0)');
+      return int.tryParse(s ?? '0') ?? 0;
+    }
+    final v = box == 'htf' ? 'htfImages' : 'entryImages';
+    final s = await _jsString('JSON.stringify(window.$v ? window.$v.length : 0)');
+    return int.tryParse(s ?? '0') ?? 0;
+  }
+
+  Future<bool> _waitSiteLen(String box, int expected, {int timeoutMs = 8000}) async {
+    final sw = Stopwatch()..start();
+    while (sw.elapsedMilliseconds < timeoutMs) {
+      if (await _siteArrLen(box) >= expected) return true;
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+    return false;
   }
 
   Future<void> _seedCounts() async {
-    final m = await _jsString(_countsJs());
-    if (m == null || !m.startsWith('CNT:')) return;
-    try {
-      final o = jsonDecode(m.substring(4)) as Map<String, dynamic>;
-      setState(() {
-        _siteCount['htf'] = (o['htf'] as num?)?.toInt() ?? 0;
-        _siteCount['entry'] = (o['entry'] as num?)?.toInt() ?? 0;
-        _siteCount['corr'] = (o['corr'] as num?)?.toInt() ?? 0;
-      });
-      _pushState();
-      _sheetRefresh?.call();
-    } catch (e) {}
+    final htf = await _siteArrLen('htf');
+    final entry = await _siteArrLen('entry');
+    final corr = await _siteArrLen('corr');
+    setState(() {
+      _siteCount['htf'] = htf;
+      _siteCount['entry'] = entry;
+      _siteCount['corr'] = corr;
+    });
+    _pushState();
+    _sheetRefresh?.call();
   }
 
   Future<Uint8List> _compress(Uint8List bytes, {int maxKB = 1024}) async {
@@ -788,13 +792,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     })();''';
   }
 
-  Future<bool> _injectAt(String box, String b64, String name) async {
+  Future<int?> _injectAt(String box, String b64, String name) async {
     try {
       final r = await _controller.runJavaScriptReturningResult(_injectJs(box, b64, name));
       final s = r.toString().replaceAll('"', '');
-      return s.startsWith('ok:');
+      if (!s.startsWith('ok:')) return null;
+      return int.tryParse(s.substring(3));
     } catch (e) {
-      return false;
+      return null;
     }
   }
 
@@ -811,12 +816,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       final rawBytes = await File(path).readAsBytes();
       var bytes = await _compress(rawBytes);
       final name = path.split('/').last;
-      bool sent = await _injectAt(box, base64Encode(bytes), name);
-      if (!sent) {
+      int? count = await _injectAt(box, base64Encode(bytes), name);
+      if (count == null) {
         bytes = await _compress(rawBytes, maxKB: 300);
-        sent = await _injectAt(box, base64Encode(bytes), name);
+        count = await _injectAt(box, base64Encode(bytes), name);
       }
-      if (!sent) return false;
+      if (count == null) return false;
+      if (box == 'htf' || box == 'entry') {
+        await _waitSiteLen(box, count);
+      }
       setState(() {
         _queue.remove(entry);
         if (!_sentIds.contains(id)) _sentIds.add(id);
