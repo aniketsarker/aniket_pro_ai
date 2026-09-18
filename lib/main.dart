@@ -422,8 +422,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   String _activeBox = 'none';
   String _deviceId = '';
   final Map<String, int> _route = {};
+  final Map<String, int> _siteCount = {'htf': 0, 'entry': 0, 'corr': 0};
   final List<String> _queue = [];
-  final List<String> _delivered = [];
+  final List<String> _ledger = [];
+  final List<String> _sentIds = [];
   DateTime _lastErrPop = DateTime(2000);
   Timer? _banTimer;
   VoidCallback? _sheetRefresh;
@@ -490,6 +492,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       _fg = true;
       _syncBubble();
       setState(() {});
+      _seedCounts();
       _probe();
       _flush();
       _sheetRefresh?.call();
@@ -521,8 +524,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       if (_activeBox.isEmpty) _activeBox = 'none';
       _queue.clear();
       _queue.addAll(p.getStringList('queue') ?? []);
-      _delivered.clear();
-      _delivered.addAll(p.getStringList('delivered') ?? []);
+      _ledger.clear();
+      _ledger.addAll(p.getStringList('ledger') ?? []);
+      _sentIds.clear();
+      _sentIds.addAll(p.getStringList('sentIds') ?? []);
     });
     _pushState();
   }
@@ -531,14 +536,21 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     final p = await SharedPreferences.getInstance();
     await p.setString('abox', _activeBox);
     await p.setStringList('queue', _queue);
-    await p.setStringList('delivered', _delivered);
+    await p.setStringList('ledger', _ledger);
+    await p.setStringList('sentIds', _sentIds);
   }
 
-  int _queueOf(String box) => _queue.where((q) => q.startsWith('$box|')).length;
+  String _boxOf(String e) => e.split('|')[1];
 
-  int _deliveredOf(String box) => _delivered.where((q) => q.startsWith('$box|')).length;
+  String _pathOf(String e) {
+    final i = e.indexOf('|');
+    final j = e.indexOf('|', i + 1);
+    return e.substring(j + 1);
+  }
 
-  int _countOf(String box) => _queueOf(box) + _deliveredOf(box);
+  int _queueOf(String box) => _queue.where((q) => _boxOf(q) == box).length;
+
+  int _countOf(String box) => (_siteCount[box] ?? 0) + _queueOf(box);
 
   String _bubbleText() {
     if (_activeBox == 'none') return '📸 0';
@@ -579,9 +591,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     _screenshotChannel.setMethodCallHandler((call) async {
       if (call.method == 'onScreenshot') {
         if (_captureOn) {
-          final path = call.arguments as String;
+          final args = Map<String, Object?>.from(call.arguments as Map);
+          final id = (args['id'] as num?)?.toInt().toString() ?? '';
+          final path = (args['path'] as String?) ?? '';
+          if (id.isEmpty || path.isEmpty) return;
           if (_activeBox == 'none') {
             _errPop('❌ SS disabled — select a box');
+            return;
+          }
+          if (_sentIds.contains(id) || _queue.any((q) => q.startsWith('$id|')) || _ledger.any((q) => q.startsWith('$id|'))) {
             return;
           }
           final box = _activeBox;
@@ -590,7 +608,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             _toast('${box.toUpperCase()} FULL — select another box');
             return;
           }
-          setState(() => _queue.add('$box|$path'));
+          setState(() {
+            _queue.add('$id|$box|$path');
+            _ledger.add('$id|$box|$path');
+          });
           await _saveState();
           _pushState();
           final c = _countOf(box);
@@ -656,6 +677,19 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     })();''';
   }
 
+  String _countsJs() {
+    return '''(function(){
+      var t=(document.body.innerText||'').toUpperCase();
+      var htf=0, entry=0, corr=0;
+      var m1=t.match(/HTF LOADED:\\s*(\\d+)/);
+      if (m1) htf=parseInt(m1[1],10);
+      var m2=t.match(/ENTRY SS:\\s*(\\d+)/);
+      if (m2) entry=parseInt(m2[1],10);
+      if (t.indexOf('DXY SS LOADED')>=0) corr=1;
+      return 'CNT:'+JSON.stringify({htf:htf,entry:entry,corr:corr});
+    })();''';
+  }
+
   Future<void> _probe() async {
     final m = await _jsString(_probeJs());
     if (m == null || !m.startsWith('PROBE:')) return;
@@ -678,6 +712,21 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       if (!route.containsKey('entry') && muls.length >= 1) route['entry'] = muls[0];
       if (!route.containsKey('htf') && muls.length >= 2) route['htf'] = muls[1];
       if (route.isNotEmpty) setState(() => _route.addAll(route));
+    } catch (e) {}
+  }
+
+  Future<void> _seedCounts() async {
+    final m = await _jsString(_countsJs());
+    if (m == null || !m.startsWith('CNT:')) return;
+    try {
+      final o = jsonDecode(m.substring(4)) as Map<String, dynamic>;
+      setState(() {
+        _siteCount['htf'] = (o['htf'] as num?)?.toInt() ?? 0;
+        _siteCount['entry'] = (o['entry'] as num?)?.toInt() ?? 0;
+        _siteCount['corr'] = (o['corr'] as num?)?.toInt() ?? 0;
+      });
+      _pushState();
+      _sheetRefresh?.call();
     } catch (e) {}
   }
 
@@ -737,18 +786,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         if (inp.files){ for (var e2=0; e2<inp.files.length; e2++) list.push(inp.files[e2]); }
         window.__ak[key]=list;
       }
-      var exists=false;
-      for (var q3=0;q3<list.length;q3++){ if (list[q3].name==='$name') exists=true; }
-      if (!exists) {
-        var bin=atob('$b64'); var arr=new Uint8Array(bin.length);
-        for (var i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
-        list.push(new File([arr],'$name',{type:'image/jpeg'}));
-      }
+      for (var r2=list.length-1; r2>=0; r2--){ if (list[r2].name==='$name') list.splice(r2,1); }
+      var bin=atob('$b64'); var arr=new Uint8Array(bin.length);
+      for (var i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+      list.push(new File([arr],'$name',{type:'image/jpeg'}));
       var dt=new DataTransfer();
       for (var q2=0; q2<list.length; q2++) dt.items.add(list[q2]);
       inp.files=dt.files;
       inp.dispatchEvent(new Event('change',{bubbles:true}));
-      return 'ok:'+dt.files.length;
+      return 'ok:'+list.length;
     })();''';
   }
 
@@ -756,13 +802,21 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     try {
       final r = await _controller.runJavaScriptReturningResult(_injectJs(idx, b64, name));
       final s = r.toString().replaceAll('"', '');
-      return !s.startsWith('fail');
+      return s.startsWith('ok:');
     } catch (e) {
       return false;
     }
   }
 
-  Future<bool> _sendOne(String box, String path) async {
+  Future<bool> _sendOne(String entry) async {
+    final id = entry.split('|')[0];
+    final box = _boxOf(entry);
+    final path = _pathOf(entry);
+    if (_sentIds.contains(id)) {
+      setState(() => _queue.remove(entry));
+      await _saveState();
+      return true;
+    }
     if (!_route.containsKey(box)) await _probe();
     final idx = _route[box];
     if (idx == null) return false;
@@ -777,10 +831,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       }
       if (!sent) return false;
       setState(() {
-        _queue.remove('$box|$path');
-        if (!_delivered.contains('$box|$path')) _delivered.add('$box|$path');
+        _queue.remove(entry);
+        if (!_sentIds.contains(id)) _sentIds.add(id);
+        _siteCount[box] = (_siteCount[box] ?? 0) + 1;
       });
       await _saveState();
+      _pushState();
       return true;
     } catch (e) {
       return false;
@@ -793,53 +849,79 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     final snapshot = List<String>.from(_queue);
     int failed = 0;
     for (final it in snapshot) {
-      final sep = it.indexOf('|');
-      if (sep < 0) continue;
-      final box = it.substring(0, sep);
-      final path = it.substring(sep + 1);
-      if (!await _sendOne(box, path)) failed++;
+      if (!await _sendOne(it)) failed++;
     }
     _flushing = false;
     if (failed > 0) _toast('$failed upload pending — retry on open/OKAY');
   }
 
+  Future<void> _clickClear(String box) async {
+    final kw = box == 'htf' ? 'HTF' : (box == 'corr' ? 'CORRELATION' : 'ENTRY');
+    try {
+      await _controller.runJavaScript('''(function(){
+        var kw='$kw';
+        var bs=document.querySelectorAll('button');
+        for (var i=0;i<bs.length;i++){
+          var t=(bs[i].innerText||'').toUpperCase();
+          if (t.indexOf(kw)>=0 && t.indexOf('CLEAR')>=0){ bs[i].click(); return 'ok'; }
+        }
+        return 'no';
+      })();''');
+    } catch (e) {}
+  }
+
   Future<void> _onOkay() async {
     if (_okayBusy) return;
     _okayBusy = true;
-    await Future.delayed(const Duration(milliseconds: 900));
-    await _probe();
-    await _flush();
-    final toDel = _delivered.map((e) => e.substring(e.indexOf('|') + 1)).toList();
-    if (toDel.isEmpty) {
-      _toast('No new deliveries');
-    } else {
-      if (_autoDelete) {
+    try {
+      await Future.delayed(const Duration(milliseconds: 900));
+      await _probe();
+      await _flush();
+      final ids = _ledger.map((e) => int.tryParse(e.split('|')[0]) ?? 0).where((e) => e > 0).toList();
+      final paths = _ledger.map((e) => _pathOf(e)).toList();
+      final boxes = _ledger.map((e) => _boxOf(e)).toSet();
+      bool deleted = false;
+      if (ids.isEmpty && paths.isEmpty) {
+        _toast('No new deliveries');
+      } else if (_autoDelete) {
         try {
-          final r = await _galleryChannel.invokeMethod<int>('deleteFiles', {'paths': toDel});
-          if ((r ?? 0) == 1) _toast('Tap Allow to delete SS');
+          final r = await _galleryChannel.invokeMethod<int>('deleteFiles', {'ids': ids, 'paths': paths});
+          deleted = (r ?? 0) == 1;
         } catch (e) {}
       }
-      setState(() => _delivered.clear());
-      await _saveState();
-      _pushState();
-      if (_autoDelete) {
+      if (deleted) {
+        for (final b in boxes) {
+          await _clickClear(b);
+        }
+        setState(() {
+          for (final b in boxes) {
+            _siteCount[b] = 0;
+          }
+          _ledger.clear();
+          _queue.clear();
+          _sentIds.clear();
+        });
+        await _saveState();
+        _pushState();
         _overlayShown = false;
         final p = await SharedPreferences.getInstance();
         await p.setBool('bubble', false);
         try {
           await _galleryChannel.invokeMethod('hideBubble');
         } catch (e) {}
+        _toast('Delivered + deleted — bubble OFF');
       }
+      await _controller.runJavaScript('''(function(){
+        var els = document.querySelectorAll('nav button, nav a, button, a, div[role="button"]');
+        for (var i=0;i<els.length;i++){
+          var t=(els[i].innerText||'').trim();
+          if (t==='Analysis'){ els[i].click(); return 'ok'; }
+        }
+        return 'fail';
+      })();''');
+    } finally {
+      _okayBusy = false;
     }
-    await _controller.runJavaScript('''(function(){
-      var els = document.querySelectorAll('nav button, nav a, button, a, div[role="button"]');
-      for (var i=0;i<els.length;i++){
-        var t=(els[i].innerText||'').trim();
-        if (t==='Analysis'){ els[i].click(); return 'ok'; }
-      }
-      return 'fail';
-    })();''');
-    _okayBusy = false;
   }
 
   Future<void> _pickAndInject(String box) async {
@@ -852,7 +934,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       }
       int ok = 0;
       for (final path in list) {
-        if (await _sendOne(box, path)) ok++;
+        final fakeId = 'pick${DateTime.now().millisecondsSinceEpoch}$ok';
+        if (await _sendOne('$fakeId|$box|$path')) ok++;
       }
       if (ok > 0) {
         _toast('$ok SS in ${box.toUpperCase()} ✅');
@@ -874,8 +957,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           final b = m.substring(8);
           final idx = _route[b];
           setState(() {
-            _queue.removeWhere((q) => q.startsWith('$b|'));
-            _delivered.removeWhere((q) => q.startsWith('$b|'));
+            _siteCount[b] = 0;
+            _queue.removeWhere((q) => _boxOf(q) == b);
+            _ledger.removeWhere((q) => _boxOf(q) == b);
+            _sentIds.clear();
           });
           await _saveState();
           _pushState();
@@ -903,6 +988,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           });
           _progressN.value = 1;
           await _controller.runJavaScript(_pageHookJs());
+          await _seedCounts();
           await _probe();
           _flush();
         },
@@ -953,9 +1039,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         var b = e.target.closest ? e.target.closest('button') : null;
         if(!b) return;
         var t2=(b.innerText||'').toUpperCase();
-        if (t2.indexOf('HTF')>=0) FlutterBridge.postMessage('CLEARED:htf');
-        else if (t2.indexOf('CORRELATION')>=0) FlutterBridge.postMessage('CLEARED:corr');
-        else if (t2.indexOf('ENTRY')>=0) FlutterBridge.postMessage('CLEARED:entry');
+        if (t2.indexOf('HTF')>=0 && t2.indexOf('CLEAR')>=0) FlutterBridge.postMessage('CLEARED:htf');
+        else if (t2.indexOf('CORRELATION')>=0 && t2.indexOf('CLEAR')>=0) FlutterBridge.postMessage('CLEARED:corr');
+        else if (t2.indexOf('ENTRY')>=0 && t2.indexOf('CLEAR')>=0) FlutterBridge.postMessage('CLEARED:entry');
       }, true);
     })();''';
   }
