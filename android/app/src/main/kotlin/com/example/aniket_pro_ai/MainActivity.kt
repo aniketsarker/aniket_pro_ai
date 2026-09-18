@@ -106,8 +106,9 @@ class MainActivity : FlutterActivity() {
                         result.success(compressBytes(bytes, maxKB))
                     }
                     "deleteFiles" -> {
+                        val ids = (call.argument<List<Any>>("ids") ?: emptyList()).mapNotNull { (it as? Number)?.toLong() }
                         val paths = call.argument<List<String>>("paths") ?: emptyList()
-                        handleDelete(paths, result)
+                        handleDelete(ids, paths, result)
                     }
                     "pickFiles" -> {
                         pendingPick = result
@@ -265,8 +266,22 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun handleDelete(paths: List<String>, result: MethodChannel.Result) {
-        val uris = paths.mapNotNull { uriForPath(it) }
+    private fun handleDelete(ids: List<Long>, paths: List<String>, result: MethodChannel.Result) {
+        val uris = mutableListOf<Uri>()
+        for (id in ids) {
+            val u = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+            try {
+                contentResolver.query(u, arrayOf(MediaStore.Images.Media._ID), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) uris.add(u)
+                }
+            } catch (e: Exception) {
+            }
+        }
+        if (uris.isEmpty()) {
+            for (p in paths) {
+                uriForPath(p)?.let { uris.add(it) }
+            }
+        }
         if (uris.isEmpty()) {
             result.success(0)
             return
@@ -304,8 +319,8 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun startScreenshotObserver() {
-        observer = ScreenshotObserver(applicationContext, Handler(Looper.getMainLooper())) { path ->
-            screenshotChannel?.invokeMethod("onScreenshot", path)
+        observer = ScreenshotObserver(applicationContext, Handler(Looper.getMainLooper())) { id, path ->
+            screenshotChannel?.invokeMethod("onScreenshot", hashMapOf<String, Any>("id" to id, "path" to path))
         }
         contentResolver.registerContentObserver(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
@@ -322,7 +337,7 @@ class MainActivity : FlutterActivity() {
     class ScreenshotObserver(
         private val context: Context,
         private val handler: Handler,
-        private val onScreenshot: (String) -> Unit
+        private val onScreenshot: (Long, String) -> Unit
     ) : ContentObserver(handler) {
 
         private var lastId = -1L
@@ -366,7 +381,7 @@ class MainActivity : FlutterActivity() {
             if (fresh && path.contains("Screenshots", true)) {
                 lastId = id
                 lastTime = now
-                handler.post { onScreenshot(path) }
+                handler.post { onScreenshot(id, path) }
             }
         }
     }
