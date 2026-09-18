@@ -109,7 +109,8 @@ class MainActivity : FlutterActivity() {
                     }
                     "pickFiles" -> {
                         pendingPick = result
-                        launchPicker()
+                        val max = call.argument<Int>("max") ?: 6
+                        launchPicker(max)
                     }
                     "pickGoogleAccount" -> {
                         pickGoogleAccount(result)
@@ -197,17 +198,17 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun launchPicker() {
+    private fun launchPicker(max: Int = 6) {
         val intent = if (Build.VERSION.SDK_INT >= 33) {
             Intent(MediaStore.ACTION_PICK_IMAGES).apply {
                 type = "image/*"
-                putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 6)
+                putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, max)
             }
         } else {
             Intent(Intent.ACTION_GET_CONTENT).apply {
                 type = "image/*"
                 addCategory(Intent.CATEGORY_OPENABLE)
-                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, max > 1)
             }
         }
         try {
