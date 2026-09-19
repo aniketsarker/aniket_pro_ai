@@ -78,7 +78,7 @@ class GateScreen extends StatefulWidget {
   State<GateScreen> createState() => _GateScreenState();
 }
 
-class _GateScreenState extends State<GateScreen> {
+class _GateScreenState extends State<GateScreen> with TickerProviderStateMixin {
   String _stage = 'loading';
   String _deviceId = '';
   bool _owner = false;
@@ -87,20 +87,42 @@ class _GateScreenState extends State<GateScreen> {
   String _myId = '';
   int _logoTaps = 0;
   Timer? _poll;
+  String _focus = '';
   final _fbCtrl = TextEditingController();
   final _gmCtrl = TextEditingController();
   final _gmFocus = FocusNode();
+  final _fbFocus = FocusNode();
+  late AnimationController _entrance;
+  late AnimationController _bob;
+  late Animation<double> _charX;
+  late Animation<double> _formX;
+  late Animation<double> _alpha;
 
   @override
   void initState() {
     super.initState();
+    _entrance = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
+    _bob = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))..repeat(reverse: true);
+    _charX = Tween<double>(begin: -260, end: 0).chain(CurveTween(curve: Curves.easeOutCubic)).animate(_entrance);
+    _formX = Tween<double>(begin: 260, end: 0).chain(CurveTween(curve: Curves.easeOutCubic)).animate(_entrance);
+    _alpha = CurvedAnimation(parent: _entrance, curve: Curves.easeIn);
+    _fbFocus.addListener(() => setState(() => _focus = _fbFocus.hasFocus ? 'fb' : ''));
+    _gmFocus.addListener(() => setState(() => _focus = _gmFocus.hasFocus ? 'gm' : ''));
+    _entrance.forward();
     _boot();
   }
 
   @override
   void dispose() {
     _poll?.cancel();
+    // FIX: these were never disposed before — small memory leak if the
+    // user ever navigates back to this screen more than once.
+    _fbCtrl.dispose();
+    _gmCtrl.dispose();
+    _fbFocus.dispose();
     _gmFocus.dispose();
+    _entrance.dispose();
+    _bob.dispose();
     super.dispose();
   }
 
@@ -227,12 +249,21 @@ class _GateScreenState extends State<GateScreen> {
     } catch (e) {}
   }
 
+  String get _charEmoji {
+    if (_stage == 'wait') return '🧘‍️';
+    if (_stage == 'perms') return '🔐';
+    if (_focus.isNotEmpty) return '✍️';
+    if (_entrance.status != AnimationStatus.completed) return '🚶‍♂️';
+    return '🧍‍️';
+  }
+
   InputDecoration _dec(String h) => InputDecoration(
         hintText: h,
         hintStyle: const TextStyle(color: Colors.white38),
         filled: true,
-        fillColor: const Color(0xFF1E1E1E),
+        fillColor: const Color(0xFF161616),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: kGold.withOpacity(0.4))),
+        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: kGold, width: 1.5)),
       );
 
   @override
@@ -243,60 +274,126 @@ class _GateScreenState extends State<GateScreen> {
     }
     return Scaffold(
       backgroundColor: kBg,
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              GestureDetector(
-                onTap: () {
-                  _logoTaps++;
-                  if (_logoTaps >= 7) {
-                    _logoTaps = 0;
-                    _masterDialog();
-                  }
-                },
-                child: Image.asset('assets/logo.png', width: 120, height: 120),
-              ),
-              const SizedBox(height: 18),
-              const Text('ANIKET PRO AI', style: TextStyle(color: kGold, fontSize: 22, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 30),
-              if (_stage == 'loading') const CircularProgressIndicator(color: kGold),
-              if (_stage == 'connect') ...[
-                TextField(controller: _fbCtrl, decoration: _dec('Connect your Facebook')),
-                const SizedBox(height: 14),
-                TextField(
-                    controller: _gmCtrl,
-                    focusNode: _gmFocus,
-                    decoration: _dec('Connect your Gmail ID').copyWith(
-                          suffixIcon: IconButton(
-                            icon: const Icon(Icons.alternate_email, color: kGold),
-                            onPressed: _pickGmail,
-                          ),
-                        )),
-                const SizedBox(height: 22),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(backgroundColor: kGold),
-                    onPressed: () {
-                      if (_fbCtrl.text.trim().isEmpty && _gmCtrl.text.trim().isEmpty) return;
-                      _submit(_fbCtrl.text, _gmCtrl.text);
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF1B1B1B), kBg, Color(0xFF241A10)],
+          ),
+        ),
+        child: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  AnimatedBuilder(
+                    animation: Listenable.merge([_entrance, _bob]),
+                    builder: (context, child) {
+                      final bobY = math.sin(_bob.value * math.pi) * 6;
+                      return Transform.translate(
+                        offset: Offset(_charX.value, bobY),
+                        child: Column(
+                          children: [
+                            Text(_charEmoji, style: const TextStyle(fontSize: 84)),
+                            const SizedBox(height: 4),
+                            Container(
+                              width: 90,
+                              height: 14,
+                              decoration: BoxDecoration(
+                                color: Colors.black.withOpacity(0.35),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
                     },
-                    child: const Text('Connect', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
                   ),
-                ),
-              ],
-              if (_stage == 'wait') ...[
-                const CircularProgressIndicator(color: kGold),
-                const SizedBox(height: 18),
-                const Text('Connecting… Owner approval pending', style: TextStyle(color: Colors.white70)),
-                const SizedBox(height: 14),
-                TextButton(onPressed: _checkStatus, child: const Text('Retry', style: TextStyle(color: kGold))),
-              ],
-              if (_stage == 'perms') const CircularProgressIndicator(color: kGold),
-            ],
+                  const SizedBox(height: 10),
+                  FadeTransition(
+                    opacity: _alpha,
+                    child: GestureDetector(
+                      onTap: () {
+                        _logoTaps++;
+                        if (_logoTaps >= 7) {
+                          _logoTaps = 0;
+                          _masterDialog();
+                        }
+                      },
+                      child: Column(
+                        children: [
+                          Image.asset('assets/logo.png', width: 84, height: 84),
+                          const SizedBox(height: 8),
+                          const Text('ANIKET PRO AI', style: TextStyle(color: kGold, fontSize: 22, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  AnimatedBuilder(
+                    animation: _formX,
+                    builder: (context, child) => Transform.translate(offset: Offset(_formX.value, 0), child: child),
+                    child: FadeTransition(
+                      opacity: _alpha,
+                      child: Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1E1E1E),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: kGold.withOpacity(0.35)),
+                        ),
+                        child: Column(
+                          children: [
+                            if (_stage == 'loading') const Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(color: kGold)),
+                            if (_stage == 'connect') ...[
+                              const Text('Register Now', style: TextStyle(color: kGold, fontSize: 18, fontWeight: FontWeight.bold)),
+                              const SizedBox(height: 6),
+                              const Text('Connect your ID — owner approval needed', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                              const SizedBox(height: 16),
+                              TextField(controller: _fbCtrl, focusNode: _fbFocus, style: const TextStyle(color: Colors.white), decoration: _dec('Connect your Facebook')),
+                              const SizedBox(height: 12),
+                              TextField(
+                                  controller: _gmCtrl,
+                                  focusNode: _gmFocus,
+                                  style: const TextStyle(color: Colors.white),
+                                  decoration: _dec('Connect your Gmail ID').copyWith(
+                                        suffixIcon: IconButton(
+                                          icon: const Icon(Icons.alternate_email, color: kGold),
+                                          onPressed: _pickGmail,
+                                        ),
+                                      )),
+                              const SizedBox(height: 18),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton(
+                                  style: ElevatedButton.styleFrom(backgroundColor: kGold, padding: const EdgeInsets.symmetric(vertical: 14)),
+                                  onPressed: () {
+                                    if (_fbCtrl.text.trim().isEmpty && _gmCtrl.text.trim().isEmpty) return;
+                                    _submit(_fbCtrl.text, _gmCtrl.text);
+                                  },
+                                  child: const Text('NEXT  ➜', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                                ),
+                              ),
+                            ],
+                            if (_stage == 'wait') ...[
+                              const CircularProgressIndicator(color: kGold),
+                              const SizedBox(height: 14),
+                              const Text('Connecting… Owner approval pending', style: TextStyle(color: Colors.white70)),
+                              const SizedBox(height: 10),
+                              TextButton(onPressed: _checkStatus, child: const Text('Retry', style: TextStyle(color: kGold))),
+                            ],
+                            if (_stage == 'perms') const Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(color: kGold)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -887,9 +984,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         } catch (e) {}
       }
       if (deleted) {
-        // HTF ইচ্ছাকৃতভাবে clear করা হচ্ছে না — গ্যালারি থেকে ফাইল delete
-        // হয়ে যাবে, কিন্তু website এর HTF box এ ছবিগুলো loaded থেকে যাবে,
-        // যতক্ষণ না নিজে হাতে "HTF Clear" বাটনে চাপা হয়।
         await _clickClear('entry');
         setState(() {
           _siteCount['entry'] = 0;
