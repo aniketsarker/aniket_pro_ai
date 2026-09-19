@@ -887,19 +887,20 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         } catch (e) {}
       }
       if (deleted) {
-        await _clickClear('htf');
+        // HTF ইচ্ছাকৃতভাবে clear করা হচ্ছে না — গ্যালারি থেকে ফাইল delete
+        // হয়ে যাবে, কিন্তু website এর HTF box এ ছবিগুলো loaded থেকে যাবে,
+        // যতক্ষণ না নিজে হাতে "HTF Clear" বাটনে চাপা হয়।
         await _clickClear('entry');
         setState(() {
-          _siteCount['htf'] = 0;
           _siteCount['entry'] = 0;
           _round.clear();
-          _ledger.clear();
-          _queue.clear();
+          _ledger.removeWhere((q) => _boxOf(q) != 'htf');
+          _queue.removeWhere((q) => _boxOf(q) != 'htf');
           _sentIds.clear();
         });
         await _saveState();
         _pushState();
-        _toast('Delivered + deleted');
+        _toast('Delivered + deleted (HTF box অপরিবর্তিত রইলো)');
       }
       setState(() {
         _captureOn = false;
