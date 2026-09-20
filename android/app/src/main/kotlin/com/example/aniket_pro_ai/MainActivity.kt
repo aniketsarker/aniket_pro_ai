@@ -42,7 +42,6 @@ class ShotWatcher(
     private val cacheDir = context.cacheDir
 
     private fun emitIfValid(uri: Uri, id: Long, allowPending: Boolean) {
-        // Android 11+ এর জন্য alternative columns ব্যবহার করছি
         val projection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             arrayOf(
                 MediaStore.Images.Media.DISPLAY_NAME,
@@ -81,7 +80,6 @@ class ShotWatcher(
                     val dataIdx = cursor.getColumnIndex(MediaStore.Images.Media.DATA)
                     if (dataIdx >= 0) legacyPath = cursor.getString(dataIdx)
                 }
-
                 val ti = cursor.getColumnIndex(MediaStore.Images.Media.DATE_ADDED)
                 val pi = cursor.getColumnIndex(MediaStore.Images.Media.IS_PENDING)
                 if (ti >= 0) dateAdded = cursor.getLong(ti)
@@ -90,11 +88,9 @@ class ShotWatcher(
             cursor.close()
         }
 
-        // Screenshot check - display name বা path এ "screenshot" আছে কিনা
         val nameCheck = displayName?.lowercase()?.contains("screenshot") == true ||
-                       relativePath?.lowercase()?.contains("screenshot") == true ||
-                       legacyPath?.lowercase()?.contains("screenshot") == true
-
+                relativePath?.lowercase()?.contains("screenshot") == true ||
+                legacyPath?.lowercase()?.contains("screenshot") == true
         if (!nameCheck) return
 
         val nowSec = System.currentTimeMillis() / 1000
@@ -111,7 +107,6 @@ class ShotWatcher(
         seen[id] = now
         if (seen.size > 60) seen.clear()
 
-        // Android 11+ এ ফাইল cache এ কপি করি
         val filePath = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             copyUriToCache(uri, id)
         } else {
@@ -123,16 +118,11 @@ class ShotWatcher(
         }
     }
 
-    // Android 11+ এর জন্য URI থেকে cache এ কপি
     private fun copyUriToCache(uri: Uri, id: Long): String? {
         return try {
-            val fileName = "screenshot_$id.png"
-            val cacheFile = File(cacheDir, fileName)
-            
+            val cacheFile = File(cacheDir, "screenshot_$id.png")
             context.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(cacheFile).use { output ->
-                    input.copyTo(output)
-                }
+                FileOutputStream(cacheFile).use { output -> input.copyTo(output) }
             }
             cacheFile.absolutePath
         } catch (e: Exception) {
@@ -238,6 +228,39 @@ class MainActivity : FlutterActivity() {
                     "pickGoogleAccount" -> {
                         pickGoogleAccount(result)
                     }
+                    "listImages" -> {
+                        val limit = call.argument<Int>("limit") ?: 2000
+                        val list = mutableListOf<HashMap<String, Any>>()
+                        val projection = arrayOf(
+                            MediaStore.Images.Media._ID,
+                            MediaStore.Images.Media.DATA,
+                            MediaStore.Images.Media.DISPLAY_NAME,
+                            MediaStore.Images.Media.DATE_ADDED
+                        )
+                        val sortOrder = MediaStore.Images.Media.DATE_ADDED + " DESC"
+                        try {
+                            contentResolver.query(
+                                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                                projection, null, null, sortOrder
+                            )?.use { c ->
+                                val idIdx = c.getColumnIndex(MediaStore.Images.Media._ID)
+                                val dataIdx = c.getColumnIndex(MediaStore.Images.Media.DATA)
+                                val nameIdx = c.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
+                                val dateIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_ADDED)
+                                while (c.moveToNext() && list.size < limit) {
+                                    val path = if (dataIdx >= 0) c.getString(dataIdx) else null
+                                    if (path.isNullOrEmpty()) continue
+                                    val m = HashMap<String, Any>()
+                                    m["id"] = c.getLong(idIdx)
+                                    m["path"] = path
+                                    m["name"] = if (nameIdx >= 0) (c.getString(nameIdx) ?: "") else ""
+                                    m["date"] = if (dateIdx >= 0) c.getLong(dateIdx) else 0L
+                                    list.add(m)
+                                }
+                            }
+                        } catch (e: Exception) { }
+                        result.success(list)
+                    }
                     "toast" -> {
                         val m = call.arguments as? String ?: ""
                         Toast.makeText(applicationContext, m, Toast.LENGTH_SHORT).show()
@@ -322,20 +345,12 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun launchPicker(max: Int = 6) {
-        val intent = if (Build.VERSION.SDK_INT >= 34) {
-            // Android 14+ এর জন্য Photo Picker
-            Intent(MediaStore.ACTION_PICK_IMAGES).apply {
-                type = "image/*"
-                putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, max)
-            }
-        } else if (Build.VERSION.SDK_INT >= 33) {
-            // Android 13
+        val intent = if (Build.VERSION.SDK_INT >= 33) {
             Intent(MediaStore.ACTION_PICK_IMAGES).apply {
                 type = "image/*"
                 putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, max)
             }
         } else {
-            // Android 12 and below
             Intent(Intent.ACTION_GET_CONTENT).apply {
                 type = "image/*"
                 addCategory(Intent.CATEGORY_OPENABLE)
@@ -381,14 +396,10 @@ class MainActivity : FlutterActivity() {
         super.onActivityResult(requestCode, resultCode, data)
     }
 
-    // Android 11+ এর জন্য ফিক্স করা uriToPath
     private fun uriToPath(uri: Uri): String? {
-        // Android 11+ এ সরাসরি DATA কলাম কাজ করে না
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             return copyUriToCacheForPick(uri)
         }
-
-        // Android 10 and below - পুরানো পদ্ধতি
         val proj = arrayOf(MediaStore.Images.Media.DATA)
         contentResolver.query(uri, proj, null, null, null)?.use { c ->
             if (c.moveToFirst()) {
@@ -399,22 +410,14 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
-        
-        // Fallback - cache এ কপি
         return copyUriToCacheForPick(uri)
     }
 
-    // URI থেকে cache এ কপি করে path রিটার্ন করে
     private fun copyUriToCacheForPick(uri: Uri): String? {
         return try {
-            val timestamp = System.currentTimeMillis()
-            val fileName = "pick_$timestamp.png"
-            val cacheFile = File(cacheDir, fileName)
-            
+            val cacheFile = File(cacheDir, "pick_${System.currentTimeMillis()}.png")
             contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(cacheFile).use { output ->
-                    input.copyTo(output)
-                }
+                FileOutputStream(cacheFile).use { output -> input.copyTo(output) }
             }
             cacheFile.absolutePath
         } catch (e: Exception) {
