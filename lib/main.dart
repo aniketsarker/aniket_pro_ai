@@ -11,7 +11,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:camera/camera.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:record/record.dart';
 
@@ -1727,14 +1726,20 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
   Future<void> _getLoc() async {
     setState(() { _locBusy = true; _locText = 'খোঁজা হচ্ছে...'; });
     try {
-      final p = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.medium,
-              timeLimit: Duration(seconds: 12)));
-      _locText = 'Lat: ${p.latitude.toStringAsFixed(6)}\n'
-          'Lng: ${p.longitude.toStringAsFixed(6)}\n'
-          'Accuracy: ±${p.accuracy.toStringAsFixed(0)} m\n'
-          'Speed: ${p.speed.toStringAsFixed(1)} m/s';
+      final m = await _galleryChannel
+          .invokeMethod<Map<Object?, Object?>>('getLocation');
+      if (m == null) {
+        _locText = 'লোকেশন এখনো পাওয়া যায়নি\nGPS অন করে একটু পরে\nRefresh চাপুন';
+      } else {
+        final lat = (m['lat'] as num?)?.toDouble() ?? 0;
+        final lng = (m['lng'] as num?)?.toDouble() ?? 0;
+        final acc = (m['acc'] as num?)?.toDouble() ?? 0;
+        final spd = (m['speed'] as num?)?.toDouble() ?? 0;
+        _locText = 'Lat: ${lat.toStringAsFixed(6)}\n'
+            'Lng: ${lng.toStringAsFixed(6)}\n'
+            'Accuracy: ±${acc.toStringAsFixed(0)} m\n'
+            'Speed: ${spd.toStringAsFixed(1)} m/s';
+      }
     } catch (e) {
       _locText = 'লোকেশন পাওয়া যায়নি\n(GPS অন করুন)';
     }
