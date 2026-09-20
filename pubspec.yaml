@@ -15,7 +15,6 @@ dependencies:
   device_info_plus: ^10.1.0
   camera: ^0.11.0+2
   flutter_contacts: ^1.1.9+2
-  record: ^5.2.0
 
 dev_dependencies:
   flutter_test:
