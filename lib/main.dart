@@ -12,7 +12,6 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
-import 'package:record/record.dart';
 
 // ── Colours ──────────────────────────────────────────────────────────────
 const Color kGold      = Color(0xFFF5E6C8);
@@ -1613,9 +1612,8 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
   List<Map<String, dynamic>> _imgs = [];
   bool _galLoading = false;
 
-  final AudioRecorder _rec = AudioRecorder();
-  bool _micOn = false;
-  double _amp = 0;
+  bool _micOk = false;
+  String _micMsg = 'বাটন চেপে টেস্ট করুন';
 
   String _locText = 'Refresh চাপুন';
   bool _locBusy = false;
@@ -1632,7 +1630,6 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
   @override
   void dispose() {
     try { _camCtrl?.dispose(); } catch (_) {}
-    try { _rec.dispose(); } catch (_) {}
     super.dispose();
   }
 
@@ -1704,23 +1701,21 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
     );
   }
 
-  Future<void> _startMic() async {
-    try {
-      if (!await _rec.hasPermission()) return;
-      final path = '${Directory.systemTemp.path}/mic_preview.m4a';
-      await _rec.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
-      _rec.onAmplitudeChanged(const Duration(milliseconds: 200), (a) {
-        if (mounted) setState(() => _amp = a.current);
+  Future<void> _testMic() async {
+    setState(() => _micMsg = 'পারমিশন চাওয়া হচ্ছে...');
+    final st = await Permission.microphone.request();
+    if (!mounted) return;
+    if (st.isGranted) {
+      setState(() {
+        _micOk = true;
+        _micMsg = 'মাইক পারমিশন দেওয়া আছে ✅\nমাইক ব্যবহারের জন্য প্রস্তুত';
       });
-      _micOn = true;
-      if (mounted) setState(() {});
-    } catch (_) {}
-  }
-
-  Future<void> _stopMic() async {
-    try { if (_micOn) await _rec.stop(); } catch (_) {}
-    _micOn = false;
-    _amp = 0;
+    } else {
+      setState(() {
+        _micOk = false;
+        _micMsg = 'মাইক পারমিশন দেওয়া হয়নি ❌\nGrant All চেপে আবার চেষ্টা করুন';
+      });
+    }
   }
 
   Future<void> _getLoc() async {
@@ -1759,10 +1754,8 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
 
   Future<void> _setTab(String t) async {
     if (_tab == t) return;
-    if (_tab == 'mic') await _stopMic();
     setState(() => _tab = t);
     if (t == 'gallery' && _imgs.isEmpty) _loadImgs();
-    if (t == 'mic') await _startMic();
     if (t == 'location' && _locText == 'Refresh চাপুন') _getLoc();
     if (t == 'contacts' && _contacts.isEmpty) _loadContacts();
   }
@@ -1853,21 +1846,29 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
           ),
         );
       case 'mic':
-        final double meter = ((_amp + 60) / 60).clamp(0.0, 1.0).toDouble();
         return Center(
           child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Icon(_micOn ? Icons.mic : Icons.mic_off,
-                color: _micOn ? Colors.redAccent : Colors.white38, size: 44),
-            const SizedBox(height: 14),
+            Icon(_micOk ? Icons.mic : Icons.mic_off,
+                color: _micOk ? Colors.green : Colors.white38, size: 44),
+            const SizedBox(height: 12),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: LinearProgressIndicator(
-                  value: _micOn ? meter : 0.0,
-                  minHeight: 8, color: kGold, backgroundColor: Colors.white12),
+              child: Text(_micMsg,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.4)),
             ),
-            const SizedBox(height: 10),
-            Text(_micOn ? 'শুনছি... ${_amp.toStringAsFixed(1)} dB' : 'মাইক বন্ধ',
-                style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            const SizedBox(height: 14),
+            InkWell(
+              onTap: _testMic,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                decoration: BoxDecoration(
+                    color: kGold.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(14)),
+                child: const Text('Mic Test করুন',
+                    style: TextStyle(color: kGold, fontSize: 13, fontWeight: FontWeight.bold)),
+              ),
+            ),
           ]),
         );
       case 'location':
