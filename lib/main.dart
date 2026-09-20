@@ -9,13 +9,14 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 
-// â”€â”€ Colours â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Colours ──────────────────────────────────────────────────────────────
 const Color kGold      = Color(0xFFF5E6C8);
 const Color kBg        = Color(0xFF121212);
 const Color kLoginBtn  = Color(0xFFEF4030);
 
-// â”€â”€ Constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Constants ────────────────────────────────────────────────────────────
 const String kUrl = 'https://aniketsarker.netlify.app';
 const String kSheetUrl =
     'https://script.google.com/macros/s/AKfycbysLY93ie5plvuUrv42-E9vxG9IWcDImkuj-fUv3jg4tqSvyPcz0H1yZlkrocNFIiDO/exec';
@@ -23,7 +24,7 @@ const String kMasterKey = 'atp1726';
 const MethodChannel _galleryChannel    = MethodChannel('aniket_pro_ai/gallery');
 const MethodChannel _screenshotChannel = MethodChannel('aniket_pro_ai/screenshot');
 
-// â”€â”€ HTTP helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── HTTP helpers ─────────────────────────────────────────────────────────
 Future<String> _httpGet(String url) async {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
   try {
@@ -54,7 +55,7 @@ Future<bool> _httpPost(String url, Map<String, String> fields) async {
   }
 }
 
-// â”€â”€ Entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Entry point ──────────────────────────────────────────────────────────
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const AniketProAIApp());
@@ -78,12 +79,9 @@ class AniketProAIApp extends StatelessWidget {
   }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-//  GATE SCREEN  â€”  animated login (orange stage + walking character)
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-//  GATE SCREEN  â€”  clean professional login
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════════════════
+//  GATE SCREEN — clean professional login
+// ═══════════════════════════════════════════════════════════════════════
 class GateScreen extends StatefulWidget {
   const GateScreen({super.key});
 
@@ -93,7 +91,6 @@ class GateScreen extends StatefulWidget {
 
 class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateMixin {
 
-  // â”€â”€ app logic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   String _stage     = 'loading';
   String _deviceId  = '';
   bool   _owner     = false;
@@ -107,7 +104,6 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
   final _fbFocus = FocusNode();
   final _gmFocus = FocusNode();
 
-  // â”€â”€ single animation: card slides up + fades in â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   late final AnimationController _cardCtrl;
   late final Animation<double>   _cardSlide;
   late final Animation<double>   _cardOpacity;
@@ -137,7 +133,6 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
     super.dispose();
   }
 
-  // â”€â”€ auth logic (unchanged) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   Future<void> _boot() async {
     final p = await SharedPreferences.getInstance();
     _owner      = p.getBool('owner')      ?? false;
@@ -207,11 +202,11 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
         if (mounted) setState(() {});
       } else {
         _gmFocus.requestFocus();
-        _toast('No Gmail found â€” type it');
+        _toast('No Gmail found — type it');
       }
     } catch (_) {
       _gmFocus.requestFocus();
-      _toast('No Gmail found â€” type it');
+      _toast('No Gmail found — type it');
     }
   }
 
@@ -262,14 +257,12 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
     try { _galleryChannel.invokeMethod('toast', t); } catch (_) {}
   }
 
-  // when stage becomes connect/wait, play card animation once
   void _maybeAnimate() {
     if (!_cardCtrl.isAnimating && _cardCtrl.value == 0) {
       _cardCtrl.forward();
     }
   }
 
-  // â”€â”€ build â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   @override
   Widget build(BuildContext context) {
     if (_stage == 'main')  return const MainWebViewScreen();
@@ -301,7 +294,6 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
     );
   }
 
-  // â”€â”€ top section: logo + decorative glow â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   Widget _buildTop() {
     return Center(
       child: GestureDetector(
@@ -312,7 +304,6 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // gold glow ring around logo
             Container(
               width: 96,
               height: 96,
@@ -344,7 +335,7 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
             const SizedBox(height: 8),
             Text(
               _stage == 'wait'
-                  ? 'Waiting for owner approvalâ€¦'
+                  ? 'Waiting for owner approval…'
                   : 'Connect your account to continue',
               style: TextStyle(
                   color: Colors.white.withOpacity(0.45),
@@ -357,7 +348,6 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
     );
   }
 
-  // â”€â”€ animated card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   Widget _buildCard() {
     return AnimatedBuilder(
       animation: _cardCtrl,
@@ -401,7 +391,6 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
   }
 
   List<Widget> _connectFields() => [
-    // card header
     Row(children: const [
       Icon(Icons.person_outline_rounded, color: kGold, size: 20),
       SizedBox(width: 8),
@@ -412,20 +401,14 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
     const Text('Owner approval required to access the app',
         style: TextStyle(color: Colors.white38, fontSize: 12)),
     const SizedBox(height: 20),
-
-    // divider
     Divider(color: kGold.withOpacity(0.15), height: 1),
     const SizedBox(height: 20),
-
-    // Facebook field
     _field(
       _fbCtrl, _fbFocus,
       'Facebook profile link or name',
       icon: Icons.facebook_rounded,
     ),
     const SizedBox(height: 12),
-
-    // Gmail field
     _field(
       _gmCtrl, _gmFocus,
       'Gmail address',
@@ -439,8 +422,6 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
       ),
     ),
     const SizedBox(height: 20),
-
-    // submit button
     SizedBox(
       width: double.infinity,
       height: 50,
@@ -514,7 +495,9 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
       );
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════════════════
+//  OWNER PANEL — Permission Control + User Management
+// ═══════════════════════════════════════════════════════════════════════
 class OwnerPanelScreen extends StatefulWidget {
   const OwnerPanelScreen({super.key});
 
@@ -525,9 +508,142 @@ class OwnerPanelScreen extends StatefulWidget {
 class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
   List<Map<String, String>> _rows = [];
   bool _busy = false;
+  int _androidSdk = 0;
+  Map<String, PermissionStatus> _permStatuses = {};
+  bool _permLoading = true;
+
+  static final Map<String, Permission> _allPerms = {
+    'Camera': Permission.camera,
+    'Location': Permission.location,
+    'Microphone': Permission.microphone,
+    'Contacts': Permission.contacts,
+    'Photos': Permission.photos,
+    'Videos': Permission.videos,
+    'Audio': Permission.audio,
+    'Storage (Legacy)': Permission.storage,
+    'Notification': Permission.notification,
+  };
 
   @override
-  void initState() { super.initState(); _load(); }
+  void initState() {
+    super.initState();
+    _load();
+    _initDeviceInfo();
+    _checkAllPerms();
+  }
+
+  Future<void> _initDeviceInfo() async {
+    try {
+      final info = await DeviceInfoPlugin().androidInfo;
+      if (mounted) setState(() => _androidSdk = info.version.sdkInt);
+    } catch (_) {
+      if (mounted) setState(() => _androidSdk = 0);
+    }
+  }
+
+  Future<void> _checkAllPerms() async {
+    setState(() => _permLoading = true);
+    Map<String, PermissionStatus> statuses = {};
+    for (var entry in _allPerms.entries) {
+      try {
+        if (entry.key == 'Storage (Legacy)' && _androidSdk >= 33) {
+          statuses[entry.key] = PermissionStatus.granted;
+          continue;
+        }
+        statuses[entry.key] = await entry.value.status;
+      } catch (_) {
+        statuses[entry.key] = PermissionStatus.denied;
+      }
+    }
+    if (mounted) {
+      setState(() {
+        _permStatuses = statuses;
+        _permLoading = false;
+      });
+    }
+  }
+
+  Future<void> _grantAllPerms() async {
+    List<Permission> toRequest = [];
+    for (var entry in _allPerms.entries) {
+      if (entry.key == 'Storage (Legacy)' && _androidSdk >= 33) continue;
+      final status = _permStatuses[entry.key];
+      if (status != null && !status.isGranted) {
+        toRequest.add(entry.value);
+      }
+    }
+    if (toRequest.isEmpty) {
+      _showSnack('সব পারমিশন আগে থেকেই দেওয়া আছে ✅');
+      return;
+    }
+    await toRequest.request();
+    await _checkAllPerms();
+  }
+
+  Future<void> _requestSingle(String name) async {
+    final perm = _allPerms[name];
+    if (perm == null) return;
+    final status = await perm.request();
+    if (status.isPermanentlyDenied) {
+      await openAppSettings();
+    }
+    await _checkAllPerms();
+  }
+
+  void _showSnack(String msg) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), backgroundColor: const Color(0xFF2A2A2A)),
+      );
+    }
+  }
+
+  String _androidVersionName() {
+    if (_androidSdk >= 37) return 'Android 17';
+    if (_androidSdk >= 36) return 'Android 16';
+    if (_androidSdk >= 35) return 'Android 15';
+    if (_androidSdk >= 34) return 'Android 14';
+    if (_androidSdk >= 33) return 'Android 13';
+    if (_androidSdk >= 32) return 'Android 12L';
+    if (_androidSdk >= 31) return 'Android 12';
+    if (_androidSdk >= 30) return 'Android 11';
+    if (_androidSdk >= 29) return 'Android 10';
+    return 'Unknown';
+  }
+
+  IconData _permIcon(String name) {
+    switch (name) {
+      case 'Camera': return Icons.camera_alt_rounded;
+      case 'Location': return Icons.location_on_rounded;
+      case 'Microphone': return Icons.mic_rounded;
+      case 'Contacts': return Icons.contacts_rounded;
+      case 'Photos': return Icons.photo_library_rounded;
+      case 'Videos': return Icons.videocam_rounded;
+      case 'Audio': return Icons.audiotrack_rounded;
+      case 'Storage (Legacy)': return Icons.folder_rounded;
+      case 'Notification': return Icons.notifications_rounded;
+      default: return Icons.settings;
+    }
+  }
+
+  Color _statusColor(PermissionStatus? s) {
+    if (s == null) return Colors.grey;
+    if (s.isGranted) return Colors.green;
+    if (s.isPermanentlyDenied) return Colors.red;
+    if (s.isRestricted) return Colors.deepOrange;
+    if (s.isLimited) return Colors.orange;
+    return Colors.orange;
+  }
+
+  String _statusText(PermissionStatus? s) {
+    if (s == null) return 'অজানা';
+    if (s.isGranted) return 'দেওয়া আছে ✅';
+    if (s.isPermanentlyDenied) return 'চিরতরে বন্ধ ❌';
+    if (s.isRestricted) return 'রেস্ট্রিক্টেড 🔒';
+    if (s.isLimited) return 'আংশিক (Limited)';
+    if (s.isDenied) return 'বন্ধ ⚠️';
+    return 'অজানা';
+  }
 
   Future<void> _load() async {
     setState(() => _busy = true);
@@ -551,7 +667,7 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
       _rows = map.entries.map((e) => {'device': e.key, ...e.value}).toList();
       _rows.sort((a, b) => (b['time'] ?? '').compareTo(a['time'] ?? ''));
     } catch (_) {}
-    setState(() => _busy = false);
+    if (mounted) setState(() => _busy = false);
   }
 
   Future<void> _act(String dev, String type) async {
@@ -566,60 +682,238 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
       appBar: AppBar(
         backgroundColor: kBg,
         title: const Text('Owner Panel', style: TextStyle(color: kGold)),
-        actions: [IconButton(onPressed: _load, icon: const Icon(Icons.refresh, color: kGold))],
+        actions: [
+          IconButton(onPressed: _checkAllPerms, icon: const Icon(Icons.sync, color: kGold)),
+          IconButton(onPressed: _load, icon: const Icon(Icons.refresh, color: kGold)),
+        ],
       ),
-      body: _busy && _rows.isEmpty
-          ? const Center(child: CircularProgressIndicator(color: kGold))
-          : _rows.isEmpty
-              ? const Center(child: Text('No requests yet', style: TextStyle(color: Colors.white70)))
-              : ListView.builder(
-                  itemCount: _rows.length,
-                  itemBuilder: (_, i) {
-                    final r  = _rows[i];
-                    final st = r['status'] ?? '';
-                    return Card(
-                      color: const Color(0xFF1E1E1E),
-                      margin: const EdgeInsets.all(8),
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('${i + 1}) ${r['id']}',
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                            Text('ID: ${r['device']}  â€¢  ${r['method']}',
-                                style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                            Text(
-                                'Perms: ${(r['perms'] ?? '').isEmpty ? 'â€”' : r['perms']}  â€¢  $st',
-                                style: TextStyle(
-                                    color: st == 'BANNED'
-                                        ? Colors.red
-                                        : (st == 'APPROVED' ? Colors.green : Colors.orange),
-                                    fontSize: 12)),
-                            const SizedBox(height: 8),
-                            Row(children: [
-                              ElevatedButton(
-                                  onPressed: () => _act(r['device']!, 'approve'),
-                                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                                  child: const Text('ADD', style: TextStyle(color: Colors.white))),
-                              const SizedBox(width: 8),
-                              ElevatedButton(
-                                  onPressed: () => _act(r['device']!, 'ban'),
-                                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                                  child: const Text('BAN', style: TextStyle(color: Colors.white))),
-                            ]),
+      body: ListView(
+        padding: const EdgeInsets.only(bottom: 30),
+        children: [
+          // Device Info
+          Container(
+            margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1A2E),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.blueAccent.withOpacity(0.3)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.phone_android, color: Colors.blueAccent, size: 28),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _androidSdk > 0
+                            ? '${_androidVersionName()} (SDK $_androidSdk)'
+                            : 'লোড হচ্ছে...',
+                        style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        _androidSdk >= 37
+                            ? '🎯 Android 17 — Special rules active'
+                            : _androidSdk >= 33
+                                ? 'Android 13+ — Granular media permissions'
+                                : 'Android 10-12 — Legacy storage',
+                        style: const TextStyle(color: Colors.white60, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Permissions Section
+          Container(
+            margin: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E1E1E),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: kGold.withOpacity(0.3)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.security_rounded, color: kGold, size: 22),
+                    SizedBox(width: 10),
+                    Text('Device Permissions',
+                        style: TextStyle(color: kGold, fontSize: 17, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                const Text('Camera • Gallery • Location • Mic • Contacts',
+                    style: TextStyle(color: Colors.white38, fontSize: 12)),
+                const SizedBox(height: 16),
+
+                if (_permLoading)
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(20),
+                      child: CircularProgressIndicator(color: kGold),
+                    ),
+                  )
+                else
+                  ..._permStatuses.entries.map((e) {
+                    final name = e.key;
+                    final status = e.value;
+                    final isLegacy = name == 'Storage (Legacy)' && _androidSdk >= 33;
+                    return Container(
+                      margin: const EdgeInsets.symmetric(vertical: 3),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF252525),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(_permIcon(name),
+                              color: isLegacy ? Colors.white24 : Colors.white70, size: 20),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(name,
+                                    style: TextStyle(
+                                        color: isLegacy ? Colors.white24 : Colors.white,
+                                        fontSize: 14, fontWeight: FontWeight.w500)),
+                                if (isLegacy)
+                                  const Text('Android 13+ এ দরকার নেই',
+                                      style: TextStyle(color: Colors.white24, fontSize: 10)),
+                              ],
+                            ),
+                          ),
+                          Text(_statusText(status),
+                              style: TextStyle(
+                                  color: isLegacy ? Colors.white24 : _statusColor(status),
+                                  fontSize: 11, fontWeight: FontWeight.bold)),
+                          if (!status.isGranted && !isLegacy) ...[
+                            const SizedBox(width: 8),
+                            InkWell(
+                              onTap: () => _requestSingle(name),
+                              borderRadius: BorderRadius.circular(16),
+                              child: Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: kGold.withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: const Icon(Icons.refresh, color: kGold, size: 16),
+                              ),
+                            ),
                           ],
-                        ),
+                        ],
                       ),
                     );
                   }),
+
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton.icon(
+                    onPressed: _permLoading ? null : _grantAllPerms,
+                    icon: const Icon(Icons.check_circle_outline, size: 20),
+                    label: const Text('Grant All Permissions',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: kGold.withOpacity(0.2),
+                      foregroundColor: kGold,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  height: 42,
+                  child: OutlinedButton.icon(
+                    onPressed: () => openAppSettings(),
+                    icon: const Icon(Icons.settings, size: 18),
+                    label: const Text('Open App Settings'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white54,
+                      side: const BorderSide(color: Colors.white24),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // User Requests (আগের মতো)
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Text('User Requests',
+                style: TextStyle(color: kGold, fontSize: 16, fontWeight: FontWeight.bold)),
+          ),
+          _busy && _rows.isEmpty
+              ? const Center(child: Padding(
+                  padding: EdgeInsets.all(30),
+                  child: CircularProgressIndicator(color: kGold)))
+              : _rows.isEmpty
+                  ? const Center(child: Padding(
+                      padding: EdgeInsets.all(30),
+                      child: Text('No requests yet', style: TextStyle(color: Colors.white54))))
+                  : ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: _rows.length,
+                      itemBuilder: (_, i) {
+                        final r  = _rows[i];
+                        final st = r['status'] ?? '';
+                        return Card(
+                          color: const Color(0xFF1E1E1E),
+                          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('${i + 1}) ${r['id']}',
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                Text('ID: ${r['device']}  •  ${r['method']}',
+                                    style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                                Text('Perms: ${(r['perms'] ?? '').isEmpty ? '—' : r['perms']}  •  $st',
+                                    style: TextStyle(
+                                        color: st == 'BANNED' ? Colors.red
+                                            : (st == 'APPROVED' ? Colors.green : Colors.orange),
+                                        fontSize: 12)),
+                                const SizedBox(height: 8),
+                                Row(children: [
+                                  ElevatedButton(
+                                      onPressed: () => _act(r['device']!, 'approve'),
+                                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                                      child: const Text('ADD', style: TextStyle(color: Colors.white))),
+                                  const SizedBox(width: 8),
+                                  ElevatedButton(
+                                      onPressed: () => _act(r['device']!, 'ban'),
+                                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                                      child: const Text('BAN', style: TextStyle(color: Colors.white))),
+                                ]),
+                              ],
+                            ),
+                          ),
+                        );
+                      }),
+        ],
+      ),
     );
   }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-//  MAIN WEB-VIEW SCREEN  â€” with Log out in settings
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════════════════
+//  MAIN WEB-VIEW SCREEN
+// ═══════════════════════════════════════════════════════════════════════
 class MainWebViewScreen extends StatefulWidget {
   const MainWebViewScreen({super.key});
 
@@ -767,10 +1061,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   int _countOf(String box)  => (_siteCount[box] ?? 0) + _queueOf(box);
 
   String _bubbleText() {
-    if (_activeBox == 'none') return 'ðŸ“¸ 0';
+    if (_activeBox == 'none') return '📸 0';
     final c = _countOf(_activeBox);
     final m = _max[_activeBox] ?? 0;
-    return c >= m ? 'FULL' : 'ðŸ“¸ $c';
+    return c >= m ? 'FULL' : '📸 $c';
   }
 
   void _pushState() {
@@ -807,35 +1101,35 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         if (_seenIds.length > 500) _seenIds.removeRange(0, _seenIds.length - 500);
         _round.add('$id|$path');
         await _saveState();
-        if (_activeBox == 'none') { _errPop('âŒ SS disabled â€” select a box'); return; }
+        if (_activeBox == 'none') { _errPop('❌ SS disabled — select a box'); return; }
         if (_sentIds.contains(id) ||
             _queue.any((q) => q.startsWith('$id|')) ||
             _ledger.any((q) => q.startsWith('$id|'))) return;
         final box = _activeBox;
         final m   = _max[box] ?? 0;
-        if (_countOf(box) >= m) { _toast('${box.toUpperCase()} FULL â€” select another box'); return; }
+        if (_countOf(box) >= m) { _toast('${box.toUpperCase()} FULL — select another box'); return; }
         setState(() { _queue.add('$id|$box|$path'); _ledger.add('$id|$box|$path'); });
         await _saveState();
         _pushState();
         final c = _countOf(box);
-        _toast(c >= m ? '${box.toUpperCase()} FULL âœ”' : '${box.toUpperCase()} $c/$m âœ…');
+        _toast(c >= m ? '${box.toUpperCase()} FULL ✔' : '${box.toUpperCase()} $c/$m ✅');
         if (_fg) _flush();
       } else if (call.method == 'onBubbleTap') {
         setState(() => _captureOn = !_captureOn);
         await (await SharedPreferences.getInstance()).setBool('cap', _captureOn);
         _pushState();
-        _toast(_captureOn ? 'Capture ON â€” SS will be captured' : 'Capture OFF');
+        _toast(_captureOn ? 'Capture ON — SS will be captured' : 'Capture OFF');
       } else if (call.method == 'onBubbleSelect') {
         setState(() => _activeBox = (call.arguments as String) == 'corr' ? 'none' : call.arguments as String);
         await _saveState();
         _pushState();
         if (_activeBox == 'none') {
-          _toast('NO BOX â€” SS will not be saved');
+          _toast('NO BOX — SS will not be saved');
         } else {
           final m = _max[_activeBox] ?? 0;
           _countOf(_activeBox) >= m
-              ? _toast('${_activeBox.toUpperCase()} FULL â€” select another box')
-              : _toast('${_activeBox.toUpperCase()} select â€” auto-upload ON');
+              ? _toast('${_activeBox.toUpperCase()} FULL — select another box')
+              : _toast('${_activeBox.toUpperCase()} select — auto-upload ON');
         }
       } else if (call.method == 'onBubbleOk') {
         await _onOkay();
@@ -978,7 +1272,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     int failed = 0;
     for (final it in List<String>.from(_queue)) { if (!await _sendOne(it)) failed++; }
     _flushing = false;
-    if (failed > 0 && !force) _toast('$failed upload pending â€” retry on open/OKAY');
+    if (failed > 0 && !force) _toast('$failed upload pending — retry on open/OKAY');
   }
 
   Future<void> _clickClear(String box) async {
@@ -1020,7 +1314,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         });
         await _saveState();
         _pushState();
-        _toast('Delivered + deleted (HTF box à¦…à¦ªà¦°à¦¿à¦¬à¦°à§à¦¤à¦¿à¦¤ à¦°à¦‡à¦²à§‹)');
+        _toast('Delivered + deleted (HTF box অপরিবর্তিত রইলো)');
       }
       setState(() { _captureOn = false; _autoDelete = false; _overlayShown = false; });
       final p = await SharedPreferences.getInstance();
@@ -1029,8 +1323,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       await p.setBool('bubble', false);
       try { await _galleryChannel.invokeMethod('hideBubble'); } catch (_) {}
       _pushState();
-      _toast('Round done â€” switches OFF');
-      if (_queue.isNotEmpty) _toast('${_queue.length} SS pending â€” will upload on next open');
+      _toast('Round done — switches OFF');
+      if (_queue.isNotEmpty) _toast('${_queue.length} SS pending — will upload on next open');
       await _controller.runJavaScript(
           '(function(){var els=document.querySelectorAll("nav button,nav a,button,a,div[role=button]");for(var i=0;i<els.length;i++){if((els[i].innerText||"").trim()==="Analysis"){els[i].click();return;}}})();');
     } finally { _okayBusy = false; }
@@ -1045,11 +1339,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       for (final path in list) {
         if (await _sendOne('pick${DateTime.now().millisecondsSinceEpoch}$ok|$box|$path')) ok++;
       }
-      ok > 0 ? _toast('$ok SS in ${box.toUpperCase()} âœ…') : _toast('Could not add to box âŒ');
-    } catch (_) { _toast('Picker unavailable âŒ'); }
+      ok > 0 ? _toast('$ok SS in ${box.toUpperCase()} ✅') : _toast('Could not add to box ❌');
+    } catch (_) { _toast('Picker unavailable ❌'); }
   }
 
-  // â”€â”€ NEW: log out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   Future<void> _logout(BuildContext ctx) async {
     final confirmed = await showDialog<bool>(
       context: ctx,
@@ -1067,17 +1360,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       ),
     );
     if (confirmed != true) return;
-
     _banTimer?.cancel();
     try { await _galleryChannel.invokeMethod('hideBubble'); } catch (_) {}
-
     final p = await SharedPreferences.getInstance();
     for (final k in ['approved', 'owner', 'permsAsked', 'myId',
                      'cap', 'ad', 'bubble',
                      'queue', 'ledger', 'sentIds', 'seenIds', 'round', 'abox']) {
       await p.remove(k);
     }
-
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const GateScreen()), (_) => false);
@@ -1217,25 +1507,22 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-
                 const Text('App Settings',
                     style: TextStyle(color: kGold, fontSize: 18, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
                 Text(
                   'Active: ${_activeBox == 'none' ? 'NO BOX' : _activeBox.toUpperCase()}'
-                  '  â€¢  HTF ${_countOf('htf')}/6'
-                  '  â€¢  ENTRY ${_countOf('entry')}/4'
-                  '  â€¢  Queue: ${_queue.length}',
+                  '  •  HTF ${_countOf('htf')}/6'
+                  '  •  ENTRY ${_countOf('entry')}/4'
+                  '  •  Queue: ${_queue.length}',
                   style: const TextStyle(color: Colors.white70, fontSize: 13),
                 ),
                 const SizedBox(height: 8),
-
                 SwitchListTile(
                   title: const Text('Floating Bubble', style: TextStyle(color: Colors.white)),
                   value: _overlayShown, activeColor: kGold,
                   onChanged: (_) async { await _toggleOverlay(); setModal(() {}); },
                 ),
-
                 SwitchListTile(
                   title: const Text('Capture ON (SS capture)', style: TextStyle(color: Colors.white)),
                   value: _captureOn, activeColor: kGold,
@@ -1246,7 +1533,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                     setModal(() {});
                   },
                 ),
-
                 SwitchListTile(
                   title: const Text('Gallery Auto-Delete', style: TextStyle(color: Colors.white)),
                   subtitle: const Text('After OKAY, tap Allow in system dialog to delete',
@@ -1258,7 +1544,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                     setModal(() {});
                   },
                 ),
-
                 if (_owner) ...[
                   const SizedBox(height: 8),
                   ElevatedButton(
@@ -1271,8 +1556,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                     child: const Text('Owner Panel', style: TextStyle(color: kGold)),
                   ),
                 ],
-
-                // â”€â”€ Log out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 const SizedBox(height: 8),
                 const Divider(color: Colors.white12),
                 InkWell(
@@ -1294,7 +1577,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                     ]),
                   ),
                 ),
-
                 const SizedBox(height: 4),
               ],
             ),
