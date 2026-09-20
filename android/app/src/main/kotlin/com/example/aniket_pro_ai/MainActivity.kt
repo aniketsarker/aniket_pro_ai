@@ -29,6 +29,8 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
 
 class ShotWatcher(
     private val context: Context,
@@ -37,48 +39,105 @@ class ShotWatcher(
 ) : ContentObserver(handler) {
 
     private val seen = mutableMapOf<Long, Long>()
+    private val cacheDir = context.cacheDir
 
     private fun emitIfValid(uri: Uri, id: Long, allowPending: Boolean) {
-        val projection = arrayOf(
-            MediaStore.Images.Media.DATA,
-            MediaStore.Images.Media.DATE_ADDED,
-            MediaStore.Images.Media.IS_PENDING
-        )
+        // Android 11+ এর জন্য alternative columns ব্যবহার করছি
+        val projection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            arrayOf(
+                MediaStore.Images.Media.DISPLAY_NAME,
+                MediaStore.Images.Media.DATE_ADDED,
+                MediaStore.Images.Media.IS_PENDING,
+                MediaStore.Images.Media.RELATIVE_PATH
+            )
+        } else {
+            arrayOf(
+                MediaStore.Images.Media.DATA,
+                MediaStore.Images.Media.DATE_ADDED,
+                MediaStore.Images.Media.IS_PENDING
+            )
+        }
+
         val cursor: Cursor? = try {
             context.contentResolver.query(uri, projection, null, null, null)
         } catch (e: Exception) {
             null
         }
-        var path: String? = null
+
+        var displayName: String? = null
+        var relativePath: String? = null
+        var legacyPath: String? = null
         var dateAdded: Long = 0
         var pendingFlag = 0
+
         if (cursor != null) {
             if (cursor.moveToFirst()) {
-                val di = cursor.getColumnIndex(MediaStore.Images.Media.DATA)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val nameIdx = cursor.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
+                    val pathIdx = cursor.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH)
+                    if (nameIdx >= 0) displayName = cursor.getString(nameIdx)
+                    if (pathIdx >= 0) relativePath = cursor.getString(pathIdx)
+                } else {
+                    val dataIdx = cursor.getColumnIndex(MediaStore.Images.Media.DATA)
+                    if (dataIdx >= 0) legacyPath = cursor.getString(dataIdx)
+                }
+
                 val ti = cursor.getColumnIndex(MediaStore.Images.Media.DATE_ADDED)
                 val pi = cursor.getColumnIndex(MediaStore.Images.Media.IS_PENDING)
-                if (di >= 0) path = cursor.getString(di)
                 if (ti >= 0) dateAdded = cursor.getLong(ti)
                 if (pi >= 0) pendingFlag = cursor.getInt(pi)
             }
             cursor.close()
         }
-        if (path == null) return
-        if (path.contains(".pending", true)) return
-        val low = path.lowercase()
-        if (!low.contains("screenshot")) return
+
+        // Screenshot check - display name বা path এ "screenshot" আছে কিনা
+        val nameCheck = displayName?.lowercase()?.contains("screenshot") == true ||
+                       relativePath?.lowercase()?.contains("screenshot") == true ||
+                       legacyPath?.lowercase()?.contains("screenshot") == true
+
+        if (!nameCheck) return
+
         val nowSec = System.currentTimeMillis() / 1000
         if ((nowSec - dateAdded) !in 0..120) return
+
         if (pendingFlag == 1 && !allowPending) {
             handler.postDelayed({ emitIfValid(uri, id, true) }, 2500)
             return
         }
+
         val now = SystemClock.uptimeMillis()
         val last = seen[id] ?: 0L
         if (now - last < 5000) return
         seen[id] = now
         if (seen.size > 60) seen.clear()
-        handler.post { onShot(id, path) }
+
+        // Android 11+ এ ফাইল cache এ কপি করি
+        val filePath = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            copyUriToCache(uri, id)
+        } else {
+            legacyPath
+        }
+
+        if (filePath != null) {
+            handler.post { onShot(id, filePath) }
+        }
+    }
+
+    // Android 11+ এর জন্য URI থেকে cache এ কপি
+    private fun copyUriToCache(uri: Uri, id: Long): String? {
+        return try {
+            val fileName = "screenshot_$id.png"
+            val cacheFile = File(cacheDir, fileName)
+            
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(cacheFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            cacheFile.absolutePath
+        } catch (e: Exception) {
+            null
+        }
     }
 
     override fun onChange(selfChange: Boolean, uri: Uri?) {
@@ -99,9 +158,6 @@ class MainActivity : FlutterActivity() {
     private var watcher: ShotWatcher? = null
     private var pendingPick: MethodChannel.Result? = null
     private var pendingAccount: MethodChannel.Result? = null
-    // NEW: remembers which delete result callback is waiting on the
-    // system confirmation dialog, for both the modern (API 30+) and the
-    // legacy (API 29 RecoverableSecurityException) delete flows.
     private var pendingDeleteResult: MethodChannel.Result? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -266,12 +322,20 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun launchPicker(max: Int = 6) {
-        val intent = if (Build.VERSION.SDK_INT >= 33) {
+        val intent = if (Build.VERSION.SDK_INT >= 34) {
+            // Android 14+ এর জন্য Photo Picker
+            Intent(MediaStore.ACTION_PICK_IMAGES).apply {
+                type = "image/*"
+                putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, max)
+            }
+        } else if (Build.VERSION.SDK_INT >= 33) {
+            // Android 13
             Intent(MediaStore.ACTION_PICK_IMAGES).apply {
                 type = "image/*"
                 putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, max)
             }
         } else {
+            // Android 12 and below
             Intent(Intent.ACTION_GET_CONTENT).apply {
                 type = "image/*"
                 addCategory(Intent.CATEGORY_OPENABLE)
@@ -306,9 +370,6 @@ class MainActivity : FlutterActivity() {
             }
             return
         }
-        // NEW: handle the result of the delete-confirmation system dialog,
-        // for both MediaStore.createDeleteRequest (API 30+) and the legacy
-        // RecoverableSecurityException flow (API 29).
         if (requestCode == 9001) {
             val res = pendingDeleteResult
             pendingDeleteResult = null
@@ -320,7 +381,14 @@ class MainActivity : FlutterActivity() {
         super.onActivityResult(requestCode, resultCode, data)
     }
 
+    // Android 11+ এর জন্য ফিক্স করা uriToPath
     private fun uriToPath(uri: Uri): String? {
+        // Android 11+ এ সরাসরি DATA কলাম কাজ করে না
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return copyUriToCacheForPick(uri)
+        }
+
+        // Android 10 and below - পুরানো পদ্ধতি
         val proj = arrayOf(MediaStore.Images.Media.DATA)
         contentResolver.query(uri, proj, null, null, null)?.use { c ->
             if (c.moveToFirst()) {
@@ -331,22 +399,29 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+        
+        // Fallback - cache এ কপি
+        return copyUriToCacheForPick(uri)
+    }
+
+    // URI থেকে cache এ কপি করে path রিটার্ন করে
+    private fun copyUriToCacheForPick(uri: Uri): String? {
         return try {
-            val file = java.io.File(cacheDir, "pick_${System.currentTimeMillis()}.png")
+            val timestamp = System.currentTimeMillis()
+            val fileName = "pick_$timestamp.png"
+            val cacheFile = File(cacheDir, fileName)
+            
             contentResolver.openInputStream(uri)?.use { input ->
-                file.outputStream().use { output -> input.copyTo(output) }
+                FileOutputStream(cacheFile).use { output ->
+                    input.copyTo(output)
+                }
             }
-            file.absolutePath
+            cacheFile.absolutePath
         } catch (e: Exception) {
             null
         }
     }
 
-    // CHANGED: MediaStore.createDeleteRequest only exists on API 30+ (Android 11).
-    // On older devices this used to throw at runtime and silently fail the
-    // whole delete flow. Now it falls back to a direct contentResolver.delete,
-    // handling the API 29 RecoverableSecurityException case (which needs its
-    // own confirmation dialog) and plain deletes on API < 29.
     private fun handleDelete(ids: List<Long>, paths: List<String>, result: MethodChannel.Result) {
         val uris = mutableListOf<Uri>()
         for (id in ids) {
@@ -381,7 +456,6 @@ class MainActivity : FlutterActivity() {
             return
         }
 
-        // API < 30 fallback
         var deletedAny = false
         var recoverableHandled = false
         for (u in uris) {
