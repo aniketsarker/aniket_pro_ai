@@ -1,0 +1,18 @@
+android {
+    namespace "com.example.aniket_pro_ai"
+    compileSdkVersion 37
+
+    defaultConfig {
+        applicationId "com.example.aniket_pro_ai"
+        minSdkVersion 29
+        targetSdkVersion 37
+        versionCode flutterVersionCode.toInteger()
+        versionName flutterVersionName
+    }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.debug
+        }
+    }
+}
