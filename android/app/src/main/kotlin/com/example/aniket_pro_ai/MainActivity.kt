@@ -261,6 +261,40 @@ class MainActivity : FlutterActivity() {
                         } catch (e: Exception) { }
                         result.success(list)
                     }
+                    "getLocation" -> {
+                        val ok = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                                ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                        if (!ok) {
+                            result.success(null)
+                        } else {
+                            try {
+                                val lm = getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+                                var best: android.location.Location? = null
+                                val providers = listOf(
+                                    android.location.LocationManager.GPS_PROVIDER,
+                                    android.location.LocationManager.NETWORK_PROVIDER
+                                )
+                                for (prov in providers) {
+                                    try {
+                                        val l = lm.getLastKnownLocation(prov)
+                                        if (l != null && (best == null || l.time > best.time)) best = l
+                                    } catch (e: Exception) { }
+                                }
+                                if (best == null) {
+                                    result.success(null)
+                                } else {
+                                    val m = HashMap<String, Any>()
+                                    m["lat"] = best.latitude
+                                    m["lng"] = best.longitude
+                                    m["acc"] = best.accuracy
+                                    m["speed"] = best.speed
+                                    result.success(m)
+                                }
+                            } catch (e: Exception) {
+                                result.success(null)
+                            }
+                        }
+                    }
                     "toast" -> {
                         val m = call.arguments as? String ?: ""
                         Toast.makeText(applicationContext, m, Toast.LENGTH_SHORT).show()
