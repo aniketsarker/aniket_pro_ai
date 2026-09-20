@@ -13,11 +13,6 @@ import 'package:webview_flutter/webview_flutter.dart';
 // â”€â”€ Colours â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const Color kGold      = Color(0xFFF5E6C8);
 const Color kBg        = Color(0xFF121212);
-const Color kStageTop  = Color(0xFFFBAB72); // orange stage top
-const Color kStageBot  = Color(0xFFF4935A); // orange stage bottom
-const Color kFormCard  = Color(0xFF1E1A16);
-const Color kField     = Color(0xFFFDF0DC);
-const Color kFieldText = Color(0xFF3B2A1E);
 const Color kLoginBtn  = Color(0xFFEF4030);
 
 // â”€â”€ Constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -86,6 +81,9 @@ class AniketProAIApp extends StatelessWidget {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  GATE SCREEN  â€”  animated login (orange stage + walking character)
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+//  GATE SCREEN  â€”  clean professional login
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 class GateScreen extends StatefulWidget {
   const GateScreen({super.key});
 
@@ -93,79 +91,38 @@ class GateScreen extends StatefulWidget {
   State<GateScreen> createState() => _GateScreenState();
 }
 
-class _GateScreenState extends State<GateScreen> with TickerProviderStateMixin {
+class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateMixin {
 
-  // â”€â”€ app-logic state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  String _stage    = 'loading'; // loading | connect | wait | perms | main
-  String _deviceId = '';
-  bool   _owner      = false;
-  bool   _permsAsked = false;
+  // â”€â”€ app logic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  String _stage     = 'loading';
+  String _deviceId  = '';
+  bool   _owner     = false;
+  bool   _permsAsked  = false;
   bool   _permsAsking = false;
-  String _myId    = '';
-  int    _logoTaps = 0;
+  String _myId      = '';
+  int    _logoTaps  = 0;
   Timer? _poll;
   final _fbCtrl  = TextEditingController();
   final _gmCtrl  = TextEditingController();
   final _fbFocus = FocusNode();
   final _gmFocus = FocusNode();
 
-  // â”€â”€ animation controllers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  late final AnimationController _walkCtrl; // character slides in
-  late final AnimationController _legCtrl;  // leg swing while walking
-  late final AnimationController _dropCtrl; // briefcase drop lean
-  late final AnimationController _formCtrl; // form slide-in
-  late final AnimationController _waveCtrl; // greeting arm wave (loops)
+  // â”€â”€ single animation: card slides up + fades in â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  late final AnimationController _cardCtrl;
+  late final Animation<double>   _cardSlide;
+  late final Animation<double>   _cardOpacity;
 
-  late final Animation<double> _charSlide;
-  late final Animation<double> _legSwing;
-  late final Animation<double> _dropLean;
-  late final Animation<double> _formSlide;
-  late final Animation<double> _formOpacity;
-  late final Animation<double> _waveAngle;
-
-  bool _walking     = false;
-  bool _dropped     = false;
-  bool _caseOnFloor = false;
-
-  // â”€â”€ lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   @override
   void initState() {
     super.initState();
-
-    _walkCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 2800));
-    _charSlide = Tween<double>(begin: -1.4, end: 0.0)
-        .chain(CurveTween(curve: Curves.linear))
-        .animate(_walkCtrl);
-
-    // _legCtrl started only when walking begins (not here)
-    _legCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
-    _legSwing = Tween<double>(begin: -0.45, end: 0.45)
-        .chain(CurveTween(curve: Curves.easeInOut))
-        .animate(_legCtrl);
-
-    _dropCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
-    _dropLean = Tween<double>(begin: 0, end: 0.38)
-        .chain(CurveTween(curve: const _BumpCurve()))
-        .animate(_dropCtrl);
-
-    _formCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
-    _formSlide = Tween<double>(begin: 60, end: 0)
+    _cardCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 700));
+    _cardSlide = Tween<double>(begin: 60, end: 0)
         .chain(CurveTween(curve: Curves.easeOutCubic))
-        .animate(_formCtrl);
-    _formOpacity = Tween<double>(begin: 0, end: 1)
+        .animate(_cardCtrl);
+    _cardOpacity = Tween<double>(begin: 0, end: 1)
         .chain(CurveTween(curve: Curves.easeIn))
-        .animate(_formCtrl);
-
-    // wave loops continuously; only affects render when isGreeting=true
-    _waveCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 600))
-      ..repeat(reverse: true);
-    _waveAngle = Tween<double>(begin: -1.52, end: -1.28)
-        .chain(CurveTween(curve: Curves.easeInOut))
-        .animate(_waveCtrl);
-
-    _fbFocus.addListener(() => setState(() {}));
-    _gmFocus.addListener(() => setState(() {}));
-
+        .animate(_cardCtrl);
     _boot();
   }
 
@@ -176,11 +133,7 @@ class _GateScreenState extends State<GateScreen> with TickerProviderStateMixin {
     _gmCtrl.dispose();
     _fbFocus.dispose();
     _gmFocus.dispose();
-    _walkCtrl.dispose();
-    _legCtrl.dispose();
-    _dropCtrl.dispose();
-    _formCtrl.dispose();
-    _waveCtrl.dispose();
+    _cardCtrl.dispose();
     super.dispose();
   }
 
@@ -220,16 +173,16 @@ class _GateScreenState extends State<GateScreen> with TickerProviderStateMixin {
       if (status == 'approve') {
         _poll?.cancel();
         await (await SharedPreferences.getInstance()).setBool('approved', true);
-        setState(() => _stage = _permsAsked ? 'main' : 'perms');
+        if (mounted) setState(() => _stage = _permsAsked ? 'main' : 'perms');
       } else if (status == 'ban') {
         _poll?.cancel();
         await (await SharedPreferences.getInstance()).setBool('approved', false);
-        setState(() => _stage = 'connect');
+        if (mounted) setState(() => _stage = 'connect');
       } else {
-        setState(() => _stage = _myId.isEmpty ? 'connect' : 'wait');
+        if (mounted) setState(() => _stage = _myId.isEmpty ? 'connect' : 'wait');
       }
     } catch (_) {
-      setState(() => _stage = _myId.isEmpty ? 'connect' : 'wait');
+      if (mounted) setState(() => _stage = _myId.isEmpty ? 'connect' : 'wait');
     }
   }
 
@@ -241,7 +194,7 @@ class _GateScreenState extends State<GateScreen> with TickerProviderStateMixin {
     _myId = id;
     await _httpPost(kSheetUrl,
         {'type': 'request', 'id': id, 'device': _deviceId, 'method': method, 'perms': ''});
-    setState(() => _stage = 'wait');
+    if (mounted) setState(() => _stage = 'wait');
     _poll?.cancel();
     _poll = Timer.periodic(const Duration(seconds: 20), (_) => _checkStatus());
   }
@@ -251,7 +204,7 @@ class _GateScreenState extends State<GateScreen> with TickerProviderStateMixin {
       final acc = await _galleryChannel.invokeMethod<String>('pickGoogleAccount');
       if (acc != null && acc.isNotEmpty) {
         _gmCtrl.text = acc;
-        setState(() {});
+        if (mounted) setState(() {});
       } else {
         _gmFocus.requestFocus();
         _toast('No Gmail found â€” type it');
@@ -283,11 +236,16 @@ class _GateScreenState extends State<GateScreen> with TickerProviderStateMixin {
       builder: (_) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E1E),
         title: const Text('Master Key', style: TextStyle(color: kGold)),
-        content: TextField(controller: c, obscureText: true, style: const TextStyle(color: Colors.white)),
+        content: TextField(
+            controller: c,
+            obscureText: true,
+            style: const TextStyle(color: Colors.white)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
               child: const Text('X', style: TextStyle(color: Colors.white54))),
-          TextButton(onPressed: () => Navigator.pop(context, true),
+          TextButton(
+              onPressed: () => Navigator.pop(context, true),
               child: const Text('OK', style: TextStyle(color: kGold))),
         ],
       ),
@@ -304,27 +262,11 @@ class _GateScreenState extends State<GateScreen> with TickerProviderStateMixin {
     try { _galleryChannel.invokeMethod('toast', t); } catch (_) {}
   }
 
-  // â”€â”€ entrance animation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  void _playEntrance() {
-    _walking     = true;
-    _dropped     = false;
-    _caseOnFloor = false;
-    _walkCtrl.reset();
-    _dropCtrl.reset();
-    _formCtrl.reset();
-    _legCtrl.repeat(reverse: true); // start legs only when walking
-
-    _walkCtrl.forward().then((_) async {
-      if (!mounted) return;
-      setState(() => _walking = false);
-      _legCtrl.stop();
-      await _dropCtrl.forward();
-      if (!mounted) return;
-      setState(() { _dropped = true; _caseOnFloor = true; });
-      await Future.delayed(const Duration(milliseconds: 200));
-      if (!mounted) return;
-      await _formCtrl.forward();
-    });
+  // when stage becomes connect/wait, play card animation once
+  void _maybeAnimate() {
+    if (!_cardCtrl.isAnimating && _cardCtrl.value == 0) {
+      _cardCtrl.forward();
+    }
   }
 
   // â”€â”€ build â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -332,440 +274,246 @@ class _GateScreenState extends State<GateScreen> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     if (_stage == 'main')  return const MainWebViewScreen();
     if (_stage == 'perms') Future.microtask(_askPerms);
-
-    final size = MediaQuery.of(context).size;
-
-    // kick entrance once when connect/wait stage first appears
-    if ((_stage == 'connect' || _stage == 'wait') &&
-        !_walkCtrl.isAnimating &&
-        _walkCtrl.value == 0 &&
-        !_dropped) {
-      Future.microtask(_playEntrance);
-    }
+    if (_stage == 'connect' || _stage == 'wait') Future.microtask(_maybeAnimate);
 
     return Scaffold(
       backgroundColor: kBg,
-      body: Stack(children: [
-
-        // dark bg
-        Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFF1B1B1B), kBg, Color(0xFF241A10)],
-            ),
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF1C1A14), Color(0xFF121212), Color(0xFF1A1208)],
           ),
         ),
-
-        SafeArea(
-          child: Column(children: [
-
-            const SizedBox(height: 16),
-
-            // logo + title (tap 7Ã— for master key)
-            GestureDetector(
-              onTap: () {
-                _logoTaps++;
-                if (_logoTaps >= 7) { _logoTaps = 0; _masterDialog(); }
-              },
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Image.asset('assets/logo.png', width: 36, height: 36),
-                  const SizedBox(width: 10),
-                  RichText(
-                    text: const TextSpan(
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, letterSpacing: 0.5),
-                      children: [
-                        TextSpan(text: 'ANIKET ', style: TextStyle(color: Colors.white)),
-                        TextSpan(text: 'PRO AI',  style: TextStyle(color: kGold)),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            // orange stage
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(20),
-                  child: Container(
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [kStageTop, kStageBot],
-                      ),
-                    ),
-                    child: Stack(clipBehavior: Clip.none, children: [
-
-                      // floor shadow
-                      Positioned(
-                        bottom: 0, left: 0, right: 0,
-                        child: Container(
-                          height: 60,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [Colors.transparent, Colors.brown.withOpacity(0.18)],
-                            ),
-                          ),
-                        ),
-                      ),
-
-                      // character (rebuilds on every animation tick)
-                      AnimatedBuilder(
-                        animation: Listenable.merge([_charSlide, _legSwing, _dropLean, _waveAngle]),
-                        builder: (_, __) {
-                          return Positioned(
-                            bottom: 28,
-                            left: size.width * 0.22 + (_charSlide.value * size.width),
-                            child: _CharacterWidget(
-                              legAngle:    _walking ? _legSwing.value : 0,
-                              leanAngle:   _dropped ? 0 : _dropLean.value,
-                              caseOnFloor: _caseOnFloor,
-                              isGreeting:  _dropped,
-                              waveAngle:   _waveAngle.value,
-                            ),
-                          );
-                        },
-                      ),
-
-                      // form card (only visible after formCtrl animates in)
-                      AnimatedBuilder(
-                        animation: _formCtrl,
-                        builder: (_, child) => Positioned(
-                          right: 14, top: 0, bottom: 0,
-                          width: math.min(size.width * 0.52, 230),
-                          child: Center(
-                            child: Transform.translate(
-                              offset: Offset(_formSlide.value, 0),
-                              child: Opacity(opacity: _formOpacity.value, child: child),
-                            ),
-                          ),
-                        ),
-                        child: _buildFormCard(),
-                      ),
-
-                    ]),
-                  ),
+        child: SafeArea(
+          child: _stage == 'loading'
+              ? const Center(child: CircularProgressIndicator(color: kGold))
+              : Column(
+                  children: [
+                    Expanded(child: _buildTop()),
+                    _buildCard(),
+                    const SizedBox(height: 32),
+                  ],
                 ),
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-          ]),
         ),
-
-        // initial loading overlay
-        if (_stage == 'loading')
-          Container(
-            color: kBg,
-            child: const Center(child: CircularProgressIndicator(color: kGold)),
-          ),
-
-      ]),
+      ),
     );
   }
 
-  // â”€â”€ form card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  Widget _buildFormCard() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 18),
-      decoration: BoxDecoration(
-        color: kFormCard,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: kGold.withOpacity(0.25)),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.45), blurRadius: 24, offset: const Offset(0, 8))
-        ],
+  // â”€â”€ top section: logo + decorative glow â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  Widget _buildTop() {
+    return Center(
+      child: GestureDetector(
+        onTap: () {
+          _logoTaps++;
+          if (_logoTaps >= 7) { _logoTaps = 0; _masterDialog(); }
+        },
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // gold glow ring around logo
+            Container(
+              width: 96,
+              height: 96,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(
+                  colors: [kGold.withOpacity(0.22), Colors.transparent],
+                ),
+                border: Border.all(color: kGold.withOpacity(0.35), width: 1.5),
+              ),
+              child: Center(
+                child: Image.asset('assets/logo.png', width: 56, height: 56),
+              ),
+            ),
+            const SizedBox(height: 16),
+            RichText(
+              text: const TextSpan(
+                style: TextStyle(
+                    fontFamily: 'Poppins',
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.2),
+                children: [
+                  TextSpan(text: 'ANIKET ', style: TextStyle(color: Colors.white)),
+                  TextSpan(text: 'PRO AI',  style: TextStyle(color: kGold)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _stage == 'wait'
+                  ? 'Waiting for owner approvalâ€¦'
+                  : 'Connect your account to continue',
+              style: TextStyle(
+                  color: Colors.white.withOpacity(0.45),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w400),
+            ),
+          ],
+        ),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (_stage == 'connect') ..._connectFields(),
-          if (_stage == 'wait')    ..._waitContent(),
-          if (_stage == 'perms')
-            const Padding(padding: EdgeInsets.all(14), child: CircularProgressIndicator(color: kGold)),
-        ],
+    );
+  }
+
+  // â”€â”€ animated card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  Widget _buildCard() {
+    return AnimatedBuilder(
+      animation: _cardCtrl,
+      builder: (_, child) => Transform.translate(
+        offset: Offset(0, _cardSlide.value),
+        child: Opacity(opacity: _cardOpacity.value, child: child),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF1C1916),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: kGold.withOpacity(0.28), width: 1),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.5),
+                  blurRadius: 32,
+                  offset: const Offset(0, 12)),
+              BoxShadow(
+                  color: kGold.withOpacity(0.06),
+                  blurRadius: 40,
+                  spreadRadius: 4),
+            ],
+          ),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_stage == 'connect') ..._connectFields(),
+              if (_stage == 'wait')    ..._waitContent(),
+              if (_stage == 'perms')
+                const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 20),
+                    child: CircularProgressIndicator(color: kGold)),
+            ],
+          ),
+        ),
       ),
     );
   }
 
   List<Widget> _connectFields() => [
-    const Text('Register Now',
-        style: TextStyle(color: kGold, fontSize: 15, fontWeight: FontWeight.bold)),
+    // card header
+    Row(children: const [
+      Icon(Icons.person_outline_rounded, color: kGold, size: 20),
+      SizedBox(width: 8),
+      Text('Register Now',
+          style: TextStyle(color: kGold, fontSize: 17, fontWeight: FontWeight.bold)),
+    ]),
     const SizedBox(height: 4),
-    const Text('Owner approval needed',
-        style: TextStyle(color: Colors.white54, fontSize: 10)),
-    const SizedBox(height: 14),
-    _field(_fbCtrl, _fbFocus, 'Facebook ID'),
-    const SizedBox(height: 10),
-    _field(_gmCtrl, _gmFocus, 'Gmail ID',
-        suffix: IconButton(
-          icon: const Icon(Icons.alternate_email, color: kGold, size: 16),
-          onPressed: _pickGmail,
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(),
-        )),
-    const SizedBox(height: 14),
+    const Text('Owner approval required to access the app',
+        style: TextStyle(color: Colors.white38, fontSize: 12)),
+    const SizedBox(height: 20),
+
+    // divider
+    Divider(color: kGold.withOpacity(0.15), height: 1),
+    const SizedBox(height: 20),
+
+    // Facebook field
+    _field(
+      _fbCtrl, _fbFocus,
+      'Facebook profile link or name',
+      icon: Icons.facebook_rounded,
+    ),
+    const SizedBox(height: 12),
+
+    // Gmail field
+    _field(
+      _gmCtrl, _gmFocus,
+      'Gmail address',
+      icon: Icons.mail_outline_rounded,
+      suffix: IconButton(
+        icon: const Icon(Icons.person_search_rounded, color: kGold, size: 20),
+        tooltip: 'Auto-fill Gmail',
+        onPressed: _pickGmail,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(),
+      ),
+    ),
+    const SizedBox(height: 20),
+
+    // submit button
     SizedBox(
       width: double.infinity,
+      height: 50,
       child: ElevatedButton(
         style: ElevatedButton.styleFrom(
           backgroundColor: kLoginBtn,
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          foregroundColor: Colors.white,
+          elevation: 0,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
         onPressed: () {
           if (_fbCtrl.text.trim().isEmpty && _gmCtrl.text.trim().isEmpty) return;
           _submit(_fbCtrl.text, _gmCtrl.text);
         },
-        child: const Text('NEXT  âžœ',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+        child: const Text('NEXT',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, letterSpacing: 1)),
       ),
     ),
   ];
 
   List<Widget> _waitContent() => [
-    const CircularProgressIndicator(color: kGold),
-    const SizedBox(height: 12),
-    const Text('Waiting for approvalâ€¦',
-        style: TextStyle(color: Colors.white70, fontSize: 12), textAlign: TextAlign.center),
     const SizedBox(height: 8),
-    TextButton(
-        onPressed: _checkStatus,
-        child: const Text('Retry', style: TextStyle(color: kGold, fontSize: 12))),
+    const CircularProgressIndicator(color: kGold),
+    const SizedBox(height: 20),
+    const Text('Your request has been sent.',
+        style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+        textAlign: TextAlign.center),
+    const SizedBox(height: 6),
+    const Text('Waiting for owner to approve your account.',
+        style: TextStyle(color: Colors.white54, fontSize: 13),
+        textAlign: TextAlign.center),
+    const SizedBox(height: 20),
+    TextButton.icon(
+      onPressed: _checkStatus,
+      icon: const Icon(Icons.refresh_rounded, color: kGold, size: 18),
+      label: const Text('Check again', style: TextStyle(color: kGold)),
+    ),
+    const SizedBox(height: 8),
   ];
 
-  Widget _field(TextEditingController ctrl, FocusNode focus, String hint, {Widget? suffix}) =>
+  Widget _field(
+    TextEditingController ctrl,
+    FocusNode focus,
+    String hint, {
+    required IconData icon,
+    Widget? suffix,
+  }) =>
       TextField(
         controller: ctrl,
         focusNode: focus,
-        style: const TextStyle(color: kFieldText, fontSize: 12),
+        style: const TextStyle(color: Colors.white, fontSize: 14),
         decoration: InputDecoration(
           hintText: hint,
-          hintStyle: const TextStyle(color: Color(0xFF9B8672), fontSize: 12),
-          filled: true,
-          fillColor: kField,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-          focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(color: kGold, width: 1.5)),
+          hintStyle: const TextStyle(color: Colors.white30, fontSize: 13),
+          prefixIcon: Icon(icon, color: kGold.withOpacity(0.7), size: 20),
           suffixIcon: suffix,
-          suffixIconConstraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          suffixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+          filled: true,
+          fillColor: const Color(0xFF252218),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: kGold.withOpacity(0.2))),
+          enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: kGold.withOpacity(0.2))),
+          focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: kGold, width: 1.5)),
         ),
       );
 }
 
-// â”€â”€ Bezier bump curve (0â†’1â†’0 for briefcase drop lean) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-class _BumpCurve extends Curve {
-  const _BumpCurve();
-  @override
-  double transformInternal(double t) {
-    if (t < 0.4) return t / 0.4;
-    if (t < 0.6) return 1.0;
-    return 1.0 - (t - 0.6) / 0.4;
-  }
-}
-
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-//  CHARACTER WIDGET â€” CustomPainter
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-class _CharacterWidget extends StatelessWidget {
-  final double legAngle;
-  final double leanAngle;
-  final bool   caseOnFloor;
-  final bool   isGreeting;
-  final double waveAngle;
-
-  const _CharacterWidget({
-    required this.legAngle,
-    required this.leanAngle,
-    required this.caseOnFloor,
-    required this.isGreeting,
-    required this.waveAngle,
-  });
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-    width: 90,
-    height: 190,
-    child: CustomPaint(
-      painter: _CharPainter(
-        legAngle:    legAngle,
-        leanAngle:   leanAngle,
-        caseOnFloor: caseOnFloor,
-        isGreeting:  isGreeting,
-        waveAngle:   waveAngle,
-      ),
-    ),
-  );
-}
-
-class _CharPainter extends CustomPainter {
-  final double legAngle;
-  final double leanAngle;
-  final bool   caseOnFloor;
-  final bool   isGreeting;
-  final double waveAngle;
-
-  const _CharPainter({
-    required this.legAngle,
-    required this.leanAngle,
-    required this.caseOnFloor,
-    required this.isGreeting,
-    required this.waveAngle,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final cx = size.width / 2;
-
-    final pSkin   = Paint()..color = const Color(0xFFF4C64F);
-    final pHair   = Paint()..color = const Color(0xFFE5A72B);
-    final pShirt  = Paint()..color = const Color(0xFFBDB8B4);
-    final pLegB   = Paint()..color = const Color(0xFF15181D);
-    final pLegF   = Paint()..color = const Color(0xFF232830);
-    final pShoe   = Paint()..color = const Color(0xFF0A0B0D);
-    final pCaseB  = Paint()..color = const Color(0xFF7B4A2B);
-    final pCaseD  = Paint()..color = const Color(0xFF5D3620);
-    final pClasp  = Paint()..color = const Color(0xFFE0B25A);
-    final pShadow = Paint()..color = Colors.brown.withOpacity(0.28);
-
-    // ground shadow
-    canvas.drawOval(
-        Rect.fromCenter(center: Offset(cx, size.height - 4), width: 56, height: 10),
-        pShadow);
-
-    // whole-body lean pivot
-    canvas.save();
-    canvas.translate(cx, size.height - 40);
-    canvas.rotate(leanAngle);
-    canvas.translate(-cx, -(size.height - 40));
-
-    // back leg
-    _pivot(canvas, cx - 6, size.height - 75, -legAngle, () {
-      _rr(canvas, cx - 14, size.height - 75, 13, 72, 6.5, pLegB);
-      canvas.drawOval(
-          Rect.fromCenter(center: Offset(cx - 10, size.height - 7), width: 30, height: 11),
-          pShoe);
-    });
-
-    // front leg
-    _pivot(canvas, cx + 4, size.height - 75, legAngle, () {
-      _rr(canvas, cx - 4, size.height - 75, 13, 72, 6.5, pLegF);
-      canvas.drawOval(
-          Rect.fromCenter(center: Offset(cx + 2, size.height - 7), width: 30, height: 11),
-          pShoe);
-    });
-
-    // back arm (holds briefcase when not dropped)
-    final backArmAngle = isGreeting ? -0.3 : legAngle * 0.6;
-    _pivot(canvas, cx, size.height - 108, backArmAngle, () {
-      _rr(canvas, cx - 10, size.height - 108, 11, 50, 5.5,
-          Paint()..color = const Color(0xFF9F9A96));
-      if (!caseOnFloor) _briefcase(canvas, cx - 18, size.height - 62, pCaseB, pCaseD, pClasp);
-    });
-
-    // torso
-    canvas.drawRRect(
-        RRect.fromRectAndRadius(
-            Rect.fromLTWH(cx - 22, size.height - 138, 44, 66),
-            const Radius.circular(14)),
-        pShirt);
-    canvas.drawPath(
-        Path()
-          ..moveTo(cx - 6, size.height - 136)
-          ..lineTo(cx + 1, size.height - 108)
-          ..lineTo(cx + 8, size.height - 136)
-          ..close(),
-        Paint()..color = const Color(0xFFEFEAE4));
-
-    // head
-    canvas.drawCircle(Offset(cx + 2, size.height - 160), 22, pSkin);
-    canvas.drawPath(
-        Path()
-          ..moveTo(cx - 20, size.height - 163)
-          ..quadraticBezierTo(cx - 18, size.height - 183, cx + 4, size.height - 182)
-          ..quadraticBezierTo(cx + 22, size.height - 180, cx + 24, size.height - 163)
-          ..quadraticBezierTo(cx + 10, size.height - 172, cx - 4, size.height - 170)
-          ..close(),
-        pHair);
-    canvas.drawCircle(Offset(cx + 12, size.height - 157), 2.5,
-        Paint()..color = const Color(0xFF3A2A10));
-    canvas.drawArc(
-        Rect.fromCenter(center: Offset(cx + 16, size.height - 150), width: 14, height: 7),
-        0, math.pi, false,
-        Paint()
-          ..color = const Color(0xFFA5701C)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.8
-          ..strokeCap = StrokeCap.round);
-
-    // front arm â€” points & waves at form when greeting
-    final frontArmAngle = isGreeting ? waveAngle : -legAngle * 0.6;
-    _pivot(canvas, cx, size.height - 108, frontArmAngle, () {
-      _rr(canvas, cx - 2, size.height - 108, 11, 50, 5.5,
-          Paint()..color = const Color(0xFFD3CEC9));
-    });
-
-    canvas.restore(); // end lean
-
-    // briefcase on the floor after drop
-    if (caseOnFloor) _briefcase(canvas, cx + 30, size.height - 38, pCaseB, pCaseD, pClasp);
-  }
-
-  void _pivot(Canvas c, double px, double py, double angle, VoidCallback draw) {
-    c.save();
-    c.translate(px, py);
-    c.rotate(angle);
-    c.translate(-px, -py);
-    draw();
-    c.restore();
-  }
-
-  void _rr(Canvas c, double x, double y, double w, double h, double r, Paint p) =>
-      c.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(x, y, w, h), Radius.circular(r)), p);
-
-  void _briefcase(Canvas c, double x, double y, Paint body, Paint stripe, Paint clasp) {
-    c.drawPath(
-        Path()
-          ..moveTo(x + 5,  y - 8)
-          ..lineTo(x + 5,  y - 14)
-          ..lineTo(x + 23, y - 14)
-          ..lineTo(x + 23, y - 8),
-        Paint()
-          ..color = const Color(0xFF4D2C17)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.5
-          ..strokeJoin = StrokeJoin.round);
-    _rr(c, x, y - 8, 28, 22, 4, body);
-    c.drawRect(Rect.fromLTWH(x, y + 2, 28, 3), stripe);
-    _rr(c, x + 11, y, 6, 5, 1, clasp);
-  }
-
-  @override
-  bool shouldRepaint(_CharPainter o) =>
-      o.legAngle    != legAngle    ||
-      o.leanAngle   != leanAngle   ||
-      o.caseOnFloor != caseOnFloor ||
-      o.isGreeting  != isGreeting  ||
-      o.waveAngle   != waveAngle;
-}
-
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-//  OWNER PANEL
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 class OwnerPanelScreen extends StatefulWidget {
   const OwnerPanelScreen({super.key});
