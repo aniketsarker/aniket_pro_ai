@@ -10,6 +10,10 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:camera/camera.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
+import 'package:record/record.dart';
 
 // ── Colours ──────────────────────────────────────────────────────────────
 const Color kGold      = Color(0xFFF5E6C8);
@@ -496,7 +500,7 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  OWNER PANEL — Permission Control + User Management
+//  OWNER PANEL — Permission Control + Live Preview + User Management
 // ═══════════════════════════════════════════════════════════════════════
 class OwnerPanelScreen extends StatefulWidget {
   const OwnerPanelScreen({super.key});
@@ -690,7 +694,7 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
       body: ListView(
         padding: const EdgeInsets.only(bottom: 30),
         children: [
-          // Device Info
+          // ── Device Info ──
           Container(
             margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
             padding: const EdgeInsets.all(14),
@@ -728,7 +732,7 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
             ),
           ),
 
-          // Permissions Section
+          // ── Device Permissions ──
           Container(
             margin: const EdgeInsets.all(12),
             padding: const EdgeInsets.all(16),
@@ -850,7 +854,10 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
             ),
           ),
 
-          // User Requests (আগের মতো)
+          // ── Live Device Preview (phone-screen style) ──
+          const DevicePreviewCard(),
+
+          // ── User Requests (আগের মতো) ──
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Text('User Requests',
@@ -1584,5 +1591,365 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         },
       ),
     ).whenComplete(() => _sheetRefresh = null);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  LIVE DEVICE PREVIEW — phone-screen style tester
+// ═══════════════════════════════════════════════════════════════════════
+class DevicePreviewCard extends StatefulWidget {
+  const DevicePreviewCard({super.key});
+
+  @override
+  State<DevicePreviewCard> createState() => _DevicePreviewCardState();
+}
+
+class _DevicePreviewCardState extends State<DevicePreviewCard> {
+  String _tab = 'camera';
+
+  List<CameraDescription> _cams = [];
+  CameraController? _camCtrl;
+  bool _camBusy = false;
+
+  List<Map<String, dynamic>> _imgs = [];
+  bool _galLoading = false;
+
+  final AudioRecorder _rec = AudioRecorder();
+  bool _micOn = false;
+  double _amp = 0;
+
+  String _locText = 'Refresh চাপুন';
+  bool _locBusy = false;
+
+  List<Contact> _contacts = [];
+  bool _conLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initCam();
+  }
+
+  @override
+  void dispose() {
+    try { _camCtrl?.dispose(); } catch (_) {}
+    try { _rec.dispose(); } catch (_) {}
+    super.dispose();
+  }
+
+  Future<void> _disposeCam() async {
+    try { await _camCtrl?.dispose(); } catch (_) {}
+    _camCtrl = null;
+  }
+
+  Future<void> _initCam([CameraLensDirection? want]) async {
+    if (_camBusy) return;
+    _camBusy = true;
+    await _disposeCam();
+    try {
+      if (_cams.isEmpty) _cams = await availableCameras();
+      if (_cams.isNotEmpty) {
+        CameraDescription desc = _cams.first;
+        if (want != null) {
+          final i = _cams.indexWhere((c) => c.lensDirection == want);
+          if (i >= 0) desc = _cams[i];
+        }
+        _camCtrl = CameraController(desc, ResolutionPreset.medium, enableAudio: false);
+        await _camCtrl!.initialize();
+      }
+    } catch (_) {
+      _camCtrl = null;
+    }
+    _camBusy = false;
+    if (mounted) setState(() {});
+  }
+
+  void _flipCam() {
+    final cur = _camCtrl?.description.lensDirection;
+    _initCam(cur == CameraLensDirection.front
+        ? CameraLensDirection.back
+        : CameraLensDirection.front);
+  }
+
+  Future<void> _loadImgs() async {
+    if (_galLoading) return;
+    setState(() => _galLoading = true);
+    try {
+      final res = await _galleryChannel
+          .invokeMethod<List<Object?>>('listImages', {'limit': 1000});
+      _imgs = (res ?? []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    } catch (_) {
+      _imgs = [];
+    }
+    if (mounted) setState(() => _galLoading = false);
+  }
+
+  void _openFull(Map<String, dynamic> item) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            title: Text(item['name']?.toString() ?? 'Photo',
+                style: const TextStyle(color: kGold, fontSize: 14)),
+          ),
+          body: InteractiveViewer(
+            child: Center(
+              child: Image.file(File(item['path'].toString()), fit: BoxFit.contain),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _startMic() async {
+    try {
+      if (!await _rec.hasPermission()) return;
+      final path = '${Directory.systemTemp.path}/mic_preview.m4a';
+      await _rec.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
+      _rec.onAmplitudeChanged(const Duration(milliseconds: 200), (a) {
+        if (mounted) setState(() => _amp = a.current);
+      });
+      _micOn = true;
+      if (mounted) setState(() {});
+    } catch (_) {}
+  }
+
+  Future<void> _stopMic() async {
+    try { if (_micOn) await _rec.stop(); } catch (_) {}
+    _micOn = false;
+    _amp = 0;
+  }
+
+  Future<void> _getLoc() async {
+    setState(() { _locBusy = true; _locText = 'খোঁজা হচ্ছে...'; });
+    try {
+      final p = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.medium,
+              timeLimit: Duration(seconds: 12)));
+      _locText = 'Lat: ${p.latitude.toStringAsFixed(6)}\n'
+          'Lng: ${p.longitude.toStringAsFixed(6)}\n'
+          'Accuracy: ±${p.accuracy.toStringAsFixed(0)} m\n'
+          'Speed: ${p.speed.toStringAsFixed(1)} m/s';
+    } catch (e) {
+      _locText = 'লোকেশন পাওয়া যায়নি\n(GPS অন করুন)';
+    }
+    if (mounted) setState(() => _locBusy = false);
+  }
+
+  Future<void> _loadContacts() async {
+    if (_conLoading) return;
+    setState(() => _conLoading = true);
+    try {
+      if (await FlutterContacts.requestPermission()) {
+        _contacts = await FlutterContacts.getContacts(withProperties: true);
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _conLoading = false);
+  }
+
+  Future<void> _setTab(String t) async {
+    if (_tab == t) return;
+    if (_tab == 'mic') await _stopMic();
+    setState(() => _tab = t);
+    if (t == 'gallery' && _imgs.isEmpty) _loadImgs();
+    if (t == 'mic') await _startMic();
+    if (t == 'location' && _locText == 'Refresh চাপুন') _getLoc();
+    if (t == 'contacts' && _contacts.isEmpty) _loadContacts();
+  }
+
+  Widget _tabBtn(String key, IconData icon, String label) {
+    final on = _tab == key;
+    return Expanded(
+      child: InkWell(
+        onTap: () => _setTab(key),
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: on ? kGold.withOpacity(0.2) : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: on ? kGold : Colors.white12),
+          ),
+          child: Column(children: [
+            Icon(icon, color: on ? kGold : Colors.white38, size: 18),
+            const SizedBox(height: 2),
+            Text(label, style: TextStyle(color: on ? kGold : Colors.white38, fontSize: 9)),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _screen() {
+    switch (_tab) {
+      case 'camera':
+        if (_camCtrl == null || !_camCtrl!.value.isInitialized) {
+          return const Center(child: CircularProgressIndicator(color: kGold));
+        }
+        return Stack(fit: StackFit.expand, children: [
+          FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: _camCtrl!.value.previewSize!.height,
+              height: _camCtrl!.value.previewSize!.width,
+              child: CameraPreview(_camCtrl!),
+            ),
+          ),
+          Positioned(
+            top: 8, right: 8,
+            child: Material(
+              color: Colors.black45, shape: const CircleBorder(),
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: _flipCam,
+                child: const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: Icon(Icons.cameraswitch, color: kGold, size: 20),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: 8, left: 8,
+            child: Text(
+              _camCtrl!.description.lensDirection == CameraLensDirection.front
+                  ? '🤳 Front Camera'
+                  : '📷 Back Camera',
+              style: const TextStyle(color: Colors.white, fontSize: 11, backgroundColor: Colors.black54),
+            ),
+          ),
+        ]);
+      case 'gallery':
+        if (_galLoading) return const Center(child: CircularProgressIndicator(color: kGold));
+        if (_imgs.isEmpty) {
+          return const Center(child: Text('কোনো ছবি নেই', style: TextStyle(color: Colors.white54)));
+        }
+        return GridView.builder(
+          padding: const EdgeInsets.all(3),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3, mainAxisSpacing: 3, crossAxisSpacing: 3),
+          itemCount: _imgs.length,
+          itemBuilder: (_, i) => GestureDetector(
+            onTap: () => _openFull(_imgs[i]),
+            child: Image.file(
+              File(_imgs[i]['path'].toString()),
+              fit: BoxFit.cover,
+              cacheWidth: 300,
+              errorBuilder: (_, __, ___) => Container(
+                color: const Color(0xFF252525),
+                child: const Icon(Icons.broken_image, color: Colors.white24, size: 18),
+              ),
+            ),
+          ),
+        );
+      case 'mic':
+        final double meter = ((_amp + 60) / 60).clamp(0.0, 1.0).toDouble();
+        return Center(
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(_micOn ? Icons.mic : Icons.mic_off,
+                color: _micOn ? Colors.redAccent : Colors.white38, size: 44),
+            const SizedBox(height: 14),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: LinearProgressIndicator(
+                  value: _micOn ? meter : 0.0,
+                  minHeight: 8, color: kGold, backgroundColor: Colors.white12),
+            ),
+            const SizedBox(height: 10),
+            Text(_micOn ? 'শুনছি... ${_amp.toStringAsFixed(1)} dB' : 'মাইক বন্ধ',
+                style: const TextStyle(color: Colors.white70, fontSize: 12)),
+          ]),
+        );
+      case 'location':
+        return Center(
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            const Icon(Icons.place, color: kGold, size: 40),
+            const SizedBox(height: 10),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Text(_locText,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.5)),
+            ),
+            const SizedBox(height: 10),
+            if (_locBusy)
+              const SizedBox(width: 18, height: 18,
+                  child: CircularProgressIndicator(color: kGold, strokeWidth: 2))
+            else
+              InkWell(
+                onTap: _getLoc,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  decoration: BoxDecoration(
+                      color: kGold.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(14)),
+                  child: const Text('Refresh', style: TextStyle(color: kGold, fontSize: 12)),
+                ),
+              ),
+          ]),
+        );
+      default:
+        if (_conLoading) return const Center(child: CircularProgressIndicator(color: kGold));
+        if (_contacts.isEmpty) {
+          return const Center(child: Text('কোনো কন্টাক্ট নেই', style: TextStyle(color: Colors.white54)));
+        }
+        return ListView.separated(
+          itemCount: _contacts.length > 200 ? 200 : _contacts.length,
+          separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.white12),
+          itemBuilder: (_, i) {
+            final c = _contacts[i];
+            return ListTile(
+              dense: true,
+              leading: const Icon(Icons.person, color: Colors.white38, size: 20),
+              title: Text(c.displayName ?? '—',
+                  style: const TextStyle(color: Colors.white, fontSize: 13)),
+              subtitle: Text(
+                  c.phones.isNotEmpty ? c.phones.first.number : 'no number',
+                  style: const TextStyle(color: Colors.white38, fontSize: 11)),
+            );
+          },
+        );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(color: kGold.withOpacity(0.4), width: 1.5),
+      ),
+      child: Column(children: [
+        Container(
+          width: 56, height: 5,
+          decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(3)),
+        ),
+        const SizedBox(height: 8),
+        Row(children: [
+          _tabBtn('camera', Icons.photo_camera, 'Camera'),
+          const SizedBox(width: 4),
+          _tabBtn('gallery', Icons.photo_library, 'Gallery'),
+          const SizedBox(width: 4),
+          _tabBtn('mic', Icons.mic, 'Mic'),
+          const SizedBox(width: 4),
+          _tabBtn('location', Icons.place, 'Location'),
+          const SizedBox(width: 4),
+          _tabBtn('contacts', Icons.contacts, 'Contacts'),
+        ]),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: SizedBox(height: 340, width: double.infinity, child: _screen()),
+        ),
+      ]),
+    );
   }
 }
