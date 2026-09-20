@@ -145,7 +145,11 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
     } catch (_) {
       _deviceId = 'unknown';
     }
-    if (_owner) { setState(() => _stage = 'main'); return; }
+    if (_owner) {
+      await _ensureAllPerms();
+      if (mounted) setState(() => _stage = 'main');
+      return;
+    }
     final approved = p.getBool('approved') ?? false;
     if (approved) {
       setState(() => _stage = _permsAsked ? 'main' : 'perms');
@@ -155,6 +159,23 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
     if (_stage == 'wait') {
       _poll = Timer.periodic(const Duration(seconds: 20), (_) => _checkStatus());
     }
+  }
+
+  // ── একবারেই সব পারমিশন (একবারই ডায়ালগ আসবে) ──
+  Future<void> _ensureAllPerms() async {
+    final p = await SharedPreferences.getInstance();
+    if (p.getBool('allPermsAsked') ?? false) return;
+    await [
+      Permission.camera,
+      Permission.location,
+      Permission.microphone,
+      Permission.contacts,
+      Permission.photos,
+      Permission.videos,
+      Permission.audio,
+      Permission.notification,
+    ].request();
+    await p.setBool('allPermsAsked', true);
   }
 
   Future<void> _checkStatus() async {
@@ -215,13 +236,22 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
   Future<void> _askPerms() async {
     if (_permsAsking) return;
     _permsAsking = true;
-    await Permission.photos.request();
-    await Permission.notification.request();
+    await [
+      Permission.camera,
+      Permission.location,
+      Permission.microphone,
+      Permission.contacts,
+      Permission.photos,
+      Permission.videos,
+      Permission.audio,
+      Permission.notification,
+    ].request();
     final p = await SharedPreferences.getInstance();
     await p.setBool('permsAsked', true);
+    await p.setBool('allPermsAsked', true);
     _permsAsked = true;
     await _httpPost(kSheetUrl,
-        {'type': 'perms', 'id': _myId, 'device': _deviceId, 'method': '', 'perms': 'gallery:1,notify:1'});
+        {'type': 'perms', 'id': _myId, 'device': _deviceId, 'method': '', 'perms': 'all:1'});
     _permsAsking = false;
     if (mounted) setState(() => _stage = 'main');
   }
@@ -251,6 +281,7 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
       final p = await SharedPreferences.getInstance();
       await p.setBool('owner', true);
       _owner = true;
+      await _ensureAllPerms();
       if (mounted) setState(() => _stage = 'main');
     }
   }
@@ -592,6 +623,29 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
     await _checkAllPerms();
   }
 
+  Future<void> _toggleOff(String name) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: Text('$name বন্ধ করবেন?', style: const TextStyle(color: kGold)),
+        content: const Text(
+            'Android-এর নিয়ম: অ্যাপ নিজের পারমিশন নিজে বন্ধ করতে পারে না।\nSettings খুলে দিচ্ছি — সেখানে ১ ট্যাপে বন্ধ করুন।',
+            style: TextStyle(color: Colors.white70, fontSize: 13)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('বাতিল', style: TextStyle(color: Colors.white54))),
+          TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('খুলুন', style: TextStyle(color: kGold))),
+        ],
+      ),
+    );
+    if (ok == true) await openAppSettings();
+    await _checkAllPerms();
+  }
+
   void _showSnack(String msg) {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -639,11 +693,11 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
 
   String _statusText(PermissionStatus? s) {
     if (s == null) return 'অজানা';
-    if (s.isGranted) return 'দেওয়া আছে ✅';
+    if (s.isGranted) return 'ON ✅';
     if (s.isPermanentlyDenied) return 'চিরতরে বন্ধ ❌';
     if (s.isRestricted) return 'রেস্ট্রিক্টেড 🔒';
-    if (s.isLimited) return 'আংশিক (Limited)';
-    if (s.isDenied) return 'বন্ধ ⚠️';
+    if (s.isLimited) return 'আংশিক';
+    if (s.isDenied) return 'OFF ⚠️';
     return 'অজানা';
   }
 
@@ -730,7 +784,7 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
             ),
           ),
 
-          // ── Device Permissions ──
+          // ── Device Permissions (ON/OFF সুইচ সহ) ──
           Container(
             margin: const EdgeInsets.all(12),
             padding: const EdgeInsets.all(16),
@@ -751,7 +805,7 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
                   ],
                 ),
                 const SizedBox(height: 4),
-                const Text('Camera • Gallery • Location • Mic • Contacts',
+                const Text('সুইচ ON = অনুমতি দিন • সুইচ OFF = বন্ধ করুন',
                     style: TextStyle(color: Colors.white38, fontSize: 12)),
                 const SizedBox(height: 16),
 
@@ -769,7 +823,7 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
                     final isLegacy = name == 'Storage (Legacy)' && _androidSdk >= 33;
                     return Container(
                       margin: const EdgeInsets.symmetric(vertical: 3),
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
                         color: const Color(0xFF252525),
                         borderRadius: BorderRadius.circular(8),
@@ -797,21 +851,24 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
                               style: TextStyle(
                                   color: isLegacy ? Colors.white24 : _statusColor(status),
                                   fontSize: 11, fontWeight: FontWeight.bold)),
-                          if (!status.isGranted && !isLegacy) ...[
-                            const SizedBox(width: 8),
-                            InkWell(
-                              onTap: () => _requestSingle(name),
-                              borderRadius: BorderRadius.circular(16),
-                              child: Container(
-                                padding: const EdgeInsets.all(6),
-                                decoration: BoxDecoration(
-                                  color: kGold.withOpacity(0.15),
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                                child: const Icon(Icons.refresh, color: kGold, size: 16),
-                              ),
+                          const SizedBox(width: 6),
+                          SizedBox(
+                            height: 34,
+                            width: 46,
+                            child: Switch(
+                              value: isLegacy ? true : status.isGranted,
+                              activeColor: kGold,
+                              onChanged: isLegacy
+                                  ? null
+                                  : (v) async {
+                                      if (v) {
+                                        await _requestSingle(name);
+                                      } else {
+                                        await _toggleOff(name);
+                                      }
+                                    },
                             ),
-                          ],
+                          ),
                         ],
                       ),
                     );
@@ -970,12 +1027,21 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     super.dispose();
   }
 
+  // ── বাকি পারমিশন বাকি থাকলে একবারেই চেয়ে নেবে ──
   Future<void> _initNotif() async {
     final p = await SharedPreferences.getInstance();
-    if (!(p.getBool('notifAsked') ?? false)) {
-      await Permission.notification.request();
-      await p.setBool('notifAsked', true);
-    }
+    if (p.getBool('allPermsAsked') ?? false) return;
+    await [
+      Permission.camera,
+      Permission.location,
+      Permission.microphone,
+      Permission.contacts,
+      Permission.photos,
+      Permission.videos,
+      Permission.audio,
+      Permission.notification,
+    ].request();
+    await p.setBool('allPermsAsked', true);
   }
 
   void _startBanWatch() {
@@ -1368,7 +1434,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     _banTimer?.cancel();
     try { await _galleryChannel.invokeMethod('hideBubble'); } catch (_) {}
     final p = await SharedPreferences.getInstance();
-    for (final k in ['approved', 'owner', 'permsAsked', 'myId',
+    for (final k in ['approved', 'owner', 'permsAsked', 'allPermsAsked', 'myId',
                      'cap', 'ad', 'bubble',
                      'queue', 'ledger', 'sentIds', 'seenIds', 'round', 'abox']) {
       await p.remove(k);
