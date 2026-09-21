@@ -686,7 +686,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                 const SizedBox(height: 4),
               ],
             ),
-          ),
+          );
         },
       ),
     ).whenComplete(() => _sheetRefresh = null);
