@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -12,9 +13,6 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'core.dart';
 import 'main.dart';
 
-// ═══════════════════════════════════════════════════════════════════════
-//  MAIN WEB-VIEW SCREEN
-// ═══════════════════════════════════════════════════════════════════════
 class MainWebViewScreen extends StatefulWidget {
   const MainWebViewScreen({super.key});
 
@@ -688,7 +686,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                 const SizedBox(height: 4),
               ],
             ),
-          );
+          ),
         },
       ),
     ).whenComplete(() => _sheetRefresh = null);
