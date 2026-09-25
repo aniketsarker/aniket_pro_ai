@@ -10,7 +10,7 @@ const Color kBg        = Color(0xFF121212);
 const Color kLoginBtn  = Color(0xFFEF4030);
 
 // ── Constants ────────────────────────────────────────────────────────────
-const String kUrl = 'https://aniketsarker.netlify.app';
+const String kUrl = 'https://aniketsarker03.netlify.app';
 const String kSheetUrl =
     'https://script.google.com/macros/s/AKfycbysLY93ie5plvuUrv42-E9vxG9IWcDImkuj-fUv3jg4tqSvyPcz0H1yZlkrocNFIiDO/exec';
 const String kMasterKey = 'atp1726';
