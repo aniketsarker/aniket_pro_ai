@@ -948,6 +948,7 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
                       itemBuilder: (_, i) {
                         final r  = _rows[i];
                         final st = r['status'] ?? '';
+                        if (st == 'BANNED') return const SizedBox.shrink();
                         return Card(
                           color: const Color(0xFF1E1E1E),
                           margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
