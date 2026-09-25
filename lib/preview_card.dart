@@ -253,6 +253,8 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
 
   Widget _locScreen() {
     final blink = (DateTime.now().millisecondsSinceEpoch ~/ 600) % 2 == 0;
+    final liveColor = (_loc != null ? Colors.green : Colors.orange)
+        .withOpacity(blink ? 1.0 : 0.4);
     final lat = (_loc?['lat'] as num?)?.toDouble();
     final lng = (_loc?['lng'] as num?)?.toDouble();
     final acc = (_loc?['acc'] as num?)?.toDouble() ?? 0;
@@ -281,11 +283,10 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
         const SizedBox(width: 5),
         Text('LIVE',
             style: TextStyle(
-                color: _loc != null ? Colors.green : Colors.orange,
+                color: liveColor,
                 fontSize: 12,
                 fontWeight: FontWeight.w800,
-                letterSpacing: 2,
-                opacity: blink ? 1.0 : 0.4)),
+                letterSpacing: 2)),
         const SizedBox(width: 10),
         Text(ago == 0 ? 'এইমাত্র আপডেট' : '$ago সেকেন্ড আগে',
             style: const TextStyle(color: Colors.white38, fontSize: 10)),
