@@ -33,6 +33,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   bool   _autoDelete = false;
   bool   _overlayShown = false;
   bool   _owner      = false;
+  bool   _camVisible = true;
   String _activeBox  = 'none';
   String _deviceId   = '';
   final Map<String, int> _siteCount = {'htf': 0, 'entry': 0, 'corr': 0};
@@ -548,6 +549,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           try { await _controller.runJavaScript('if(window.__ak){window.__ak["$b"]=[];}'); } catch (_) {}
         } else if (m.startsWith('PICK:')) {
           await _pickAndInject(m.substring(5));
+        } else if (m.startsWith('TAB:')) {
+          final t = m.substring(4).trim().toUpperCase();
+          if (mounted) setState(() => _camVisible = (t == 'SS'));
         }
       })
       ..setNavigationDelegate(NavigationDelegate(
@@ -557,7 +561,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           if (_firstLoad) setState(() => _isLoading = true);
         },
         onPageFinished: (_) async {
-          setState(() { _isLoading = false; _firstLoad = false; });
+          setState(() { _isLoading = false; _firstLoad = false; _camVisible = true; });
           _progressN.value = 1;
           await _controller.runJavaScript(_pageHookJs());
           await _seedCounts();
@@ -581,6 +585,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       if(t2.indexOf('HTF')>=0&&t2.indexOf('CLEAR')>=0)FlutterBridge.postMessage('CLEARED:htf');
       else if(t2.indexOf('CORRELATION')>=0&&t2.indexOf('CLEAR')>=0)FlutterBridge.postMessage('CLEARED:corr');
       else if(t2.indexOf('ENTRY')>=0&&t2.indexOf('CLEAR')>=0)FlutterBridge.postMessage('CLEARED:entry');
+    },true);
+    document.addEventListener('click',function(e){
+      var b=e.target.closest?e.target.closest('button,a,div[role=button]'):null;
+      if(!b)return;
+      var t=(b.innerText||'').trim();
+      if(t==='SS'||t==='Live'||t==='Analysis'||t==='Mode'||t==='Calc'||t==='Journal'||t==='Key'){
+        FlutterBridge.postMessage('TAB:'+t);
+      }
     },true);
   })();''';
 
@@ -643,27 +655,28 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
               ),
             ),
           ),
-          Positioned(
-            bottom: 70, right: 12,
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: _camPickerSheet,
-                borderRadius: BorderRadius.circular(24),
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: kGold,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 10, offset: const Offset(0, 4)),
-                    ],
+          if (_camVisible)
+            Positioned(
+              bottom: 70, right: 12,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: _camPickerSheet,
+                  borderRadius: BorderRadius.circular(24),
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: kGold,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 10, offset: const Offset(0, 4)),
+                      ],
+                    ),
+                    child: const Icon(Icons.photo_camera_rounded, color: Colors.black, size: 24),
                   ),
-                  child: const Icon(Icons.photo_camera_rounded, color: Colors.black, size: 24),
                 ),
               ),
             ),
-          ),
         ]),
       ),
     );
