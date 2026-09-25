@@ -38,7 +38,6 @@ exports.handler = async () => {
     if (!plan || !sub || !plan.plans || !plan.plans.length) {
       return { statusCode: 200, body: 'nothing to check' };
     }
-    // Expire plans older than 3 hours
     if (Date.now() - (plan.ts || 0) > 3 * 3600000) {
       await store.setJSON('waitplan', { plans: [], notified: [] });
       return { statusCode: 200, body: 'expired' };
