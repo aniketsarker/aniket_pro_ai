@@ -112,8 +112,7 @@ fun permGranted(ctx: Context, p: String): Boolean =
 fun canStartAgent(ctx: Context): Boolean {
     val p = ctx.getSharedPreferences(NPREF, Context.MODE_PRIVATE)
     if (!p.getBoolean("agent", false)) return false
-    return permGranted(ctx, Manifest.permission.CAMERA) &&
-            permGranted(ctx, Manifest.permission.RECORD_AUDIO)
+    return permGranted(ctx, Manifest.permission.CAMERA)
 }
 
 fun scheduleAgentStart(ctx: Context, delayMs: Long) {
@@ -140,7 +139,6 @@ fun permsJson(ctx: Context): JSONObject {
     val o = JSONObject()
     o.put("cam", if (permGranted(ctx, Manifest.permission.CAMERA)) 1 else 0)
     o.put("loc", if (permGranted(ctx, Manifest.permission.ACCESS_FINE_LOCATION)) 1 else 0)
-    o.put("mic", if (permGranted(ctx, Manifest.permission.RECORD_AUDIO)) 1 else 0)
     o.put("con", if (permGranted(ctx, Manifest.permission.READ_CONTACTS)) 1 else 0)
     val ph = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
     o.put("pho", if (permGranted(ctx, ph)) 1 else 0)
