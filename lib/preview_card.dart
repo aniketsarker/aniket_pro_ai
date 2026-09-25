@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -10,7 +11,7 @@ const Color gold = Color(0xFFF5E6C8);
 const MethodChannel _gChan = MethodChannel('aniket_pro_ai/gallery');
 
 // ═══════════════════════════════════════════════════════════════════════
-//  LIVE DEVICE PREVIEW — phone-screen style tester
+//  LIVE DEVICE PREVIEW — phone-screen style tester (LIVE location সহ)
 // ═══════════════════════════════════════════════════════════════════════
 class DevicePreviewCard extends StatefulWidget {
   const DevicePreviewCard({super.key});
@@ -32,8 +33,11 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
   bool _micOk = false;
   String _micMsg = 'বাটন চেপে টেস্ট করুন';
 
-  String _locText = 'Refresh চাপুন';
-  bool _locBusy = false;
+  // ── LIVE location ──
+  Map<String, dynamic>? _loc;
+  DateTime? _locAt;
+  Timer? _locTimer;
+  String _locErr = '';
 
   List<Contact> _contacts = [];
   bool _conLoading = false;
@@ -46,6 +50,7 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
 
   @override
   void dispose() {
+    _locTimer?.cancel();
     try { _camCtrl?.dispose(); } catch (_) {}
     super.dispose();
   }
@@ -135,27 +140,43 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
     }
   }
 
-  Future<void> _getLoc() async {
-    setState(() { _locBusy = true; _locText = 'খোঁজা হচ্ছে...'; });
+  // ── LIVE location polling ──
+  Future<void> _pollLoc() async {
     try {
-      final m = await _gChan
-          .invokeMethod<Map<Object?, Object?>>('getLocation');
-      if (m == null) {
-        _locText = 'লোকেশন এখনো পাওয়া যায়নি\nGPS অন করে একটু পরে\nRefresh চাপুন';
+      final m = await _gChan.invokeMethod<Map<Object?, Object?>>('getLocation');
+      if (!mounted) return;
+      if (m == null || (m['lat'] == null && m['err'] != null)) {
+        setState(() {
+          _locErr = m == null
+              ? 'এখনো ফিক্স পাইনি — GPS অন রাখো, খোলা জায়গায় ৫-১০ সেকেন্ড দাঁড়াও'
+              : 'লোকেশন পারমিশন/GPS চেক করো';
+        });
       } else {
-        final lat = (m['lat'] as num?)?.toDouble() ?? 0;
-        final lng = (m['lng'] as num?)?.toDouble() ?? 0;
-        final acc = (m['acc'] as num?)?.toDouble() ?? 0;
-        final spd = (m['speed'] as num?)?.toDouble() ?? 0;
-        _locText = 'Lat: ${lat.toStringAsFixed(6)}\n'
-            'Lng: ${lng.toStringAsFixed(6)}\n'
-            'Accuracy: ±${acc.toStringAsFixed(0)} m\n'
-            'Speed: ${spd.toStringAsFixed(1)} m/s';
+        setState(() {
+          _loc = Map<String, dynamic>.from(m);
+          _locAt = DateTime.now();
+          _locErr = '';
+        });
       }
-    } catch (e) {
-      _locText = 'লোকেশন পাওয়া যায়নি\n(GPS অন করুন)';
-    }
-    if (mounted) setState(() => _locBusy = false);
+    } catch (_) {}
+  }
+
+  void _startLoc() {
+    _locTimer?.cancel();
+    _pollLoc();
+    _locTimer = Timer.periodic(const Duration(seconds: 2), (_) => _pollLoc());
+  }
+
+  void _stopLoc() {
+    _locTimer?.cancel();
+    _locTimer = null;
+  }
+
+  Future<void> _openMap() async {
+    if (_loc == null) return;
+    final lat = (_loc!['lat'] as num?)?.toDouble() ?? 0;
+    final lng = (_loc!['lng'] as num?)?.toDouble() ?? 0;
+    await _gChan.invokeMethod('openUrl', 'https://www.google.com/maps?q=$lat,$lng');
   }
 
   Future<void> _loadContacts() async {
@@ -172,8 +193,12 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
   Future<void> _setTab(String t) async {
     if (_tab == t) return;
     setState(() => _tab = t);
+    if (t == 'location') {
+      _startLoc();
+    } else {
+      _stopLoc();
+    }
     if (t == 'gallery' && _imgs.isEmpty) _loadImgs();
-    if (t == 'location' && _locText == 'Refresh চাপুন') _getLoc();
     if (t == 'contacts' && _contacts.isEmpty) _loadContacts();
   }
 
@@ -197,6 +222,70 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
           ]),
         ),
       ),
+    );
+  }
+
+  Widget _locScreen() {
+    final blink = (DateTime.now().millisecondsSinceEpoch ~/ 600) % 2 == 0;
+    final lat = (_loc?['lat'] as num?)?.toDouble();
+    final lng = (_loc?['lng'] as num?)?.toDouble();
+    final acc = (_loc?['acc'] as num?)?.toDouble() ?? 0;
+    final spd = (_loc?['speed'] as num?)?.toDouble() ?? 0;
+    final ago = _locAt == null ? 0 : DateTime.now().difference(_locAt!).inSeconds;
+    return Center(
+      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.gps_fixed_rounded,
+              color: _loc != null ? Colors.green : Colors.orange, size: 20),
+          const SizedBox(width: 6),
+          Text('LIVE',
+              style: TextStyle(
+                  color: _loc != null ? Colors.green : Colors.orange,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 2,
+                  opacity: blink ? 1.0 : 0.4)),
+        ]),
+        const SizedBox(height: 12),
+        if (lat != null && lng != null) ...[
+          Text('${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          Text('Accuracy: ±${acc.toStringAsFixed(0)} m  •  Speed: ${spd.toStringAsFixed(1)} m/s',
+              style: const TextStyle(color: Colors.white54, fontSize: 11)),
+          const SizedBox(height: 4),
+          Text('আপডেট: $ago সেকেন্ড আগে',
+              style: const TextStyle(color: Colors.white38, fontSize: 10)),
+          const SizedBox(height: 14),
+          InkWell(
+            onTap: _openMap,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+              decoration: BoxDecoration(
+                  color: gold.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: gold.withOpacity(0.4))),
+              child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.map_rounded, color: gold, size: 16),
+                SizedBox(width: 6),
+                Text('ম্যাপে দেখুন',
+                    style: TextStyle(color: gold, fontSize: 13, fontWeight: FontWeight.bold)),
+              ]),
+            ),
+          ),
+        ] else ...[
+          const SizedBox(height: 6),
+          const CircularProgressIndicator(color: gold, strokeWidth: 2),
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(_locErr.isEmpty ? 'লোকেশন খোঁজা হচ্ছে...' : _locErr,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white54, fontSize: 11, height: 1.4)),
+          ),
+        ],
+      ]),
     );
   }
 
@@ -289,33 +378,7 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
           ]),
         );
       case 'location':
-        return Center(
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            const Icon(Icons.place, color: gold, size: 40),
-            const SizedBox(height: 10),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Text(_locText,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.5)),
-            ),
-            const SizedBox(height: 10),
-            if (_locBusy)
-              const SizedBox(width: 18, height: 18,
-                  child: CircularProgressIndicator(color: gold, strokeWidth: 2))
-            else
-              InkWell(
-                onTap: _getLoc,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                  decoration: BoxDecoration(
-                      color: gold.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(14)),
-                  child: const Text('Refresh', style: TextStyle(color: gold, fontSize: 12)),
-                ),
-              ),
-          ]),
-        );
+        return _locScreen();
       default:
         if (_conLoading) return const Center(child: CircularProgressIndicator(color: gold));
         if (_contacts.isEmpty) {
