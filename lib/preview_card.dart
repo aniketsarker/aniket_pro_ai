@@ -6,12 +6,13 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 const Color gold = Color(0xFFF5E6C8);
 const MethodChannel _gChan = MethodChannel('aniket_pro_ai/gallery');
 
 // ═══════════════════════════════════════════════════════════════════════
-//  LIVE DEVICE PREVIEW — phone-screen style tester (LIVE location সহ)
+//  LIVE DEVICE PREVIEW — phone-screen style (LIVE map + location ভেতরেই)
 // ═══════════════════════════════════════════════════════════════════════
 class DevicePreviewCard extends StatefulWidget {
   const DevicePreviewCard({super.key});
@@ -33,11 +34,12 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
   bool _micOk = false;
   String _micMsg = 'বাটন চেপে টেস্ট করুন';
 
-  // ── LIVE location ──
+  // ── LIVE location + in-app map ──
   Map<String, dynamic>? _loc;
   DateTime? _locAt;
   Timer? _locTimer;
   String _locErr = '';
+  WebViewController? _mapCtrl;
 
   List<Contact> _contacts = [];
   bool _conLoading = false;
@@ -145,18 +147,18 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
     try {
       final m = await _gChan.invokeMethod<Map<Object?, Object?>>('getLocation');
       if (!mounted) return;
-      if (m == null || (m['lat'] == null && m['err'] != null)) {
+      if (m == null || m['lat'] == null) {
         setState(() {
-          _locErr = m == null
-              ? 'এখনো ফিক্স পাইনি — GPS অন রাখো, খোলা জায়গায় ৫-১০ সেকেন্ড দাঁড়াও'
-              : 'লোকেশন পারমিশন/GPS চেক করো';
+          _locErr = 'এখনো ফিক্স পাইনি — GPS অন রাখো, খোলা জায়গায় ৫-১০ সেকেন্ড দাঁড়াও';
         });
       } else {
+        final first = _loc == null;
         setState(() {
           _loc = Map<String, dynamic>.from(m);
           _locAt = DateTime.now();
           _locErr = '';
         });
+        if (first) _initMap();
       }
     } catch (_) {}
   }
@@ -172,7 +174,31 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
     _locTimer = null;
   }
 
-  Future<void> _openMap() async {
+  String _mapUrl() {
+    final lat = (_loc?['lat'] as num?)?.toDouble() ?? 23.7;
+    final lng = (_loc?['lng'] as num?)?.toDouble() ?? 90.4;
+    return 'https://www.openstreetmap.org/export/embed.html'
+        '?bbox=${lng - 0.008},${lat - 0.004},${lng + 0.008},${lat + 0.004}'
+        '&layer=mapnik&marker=$lat,$lng';
+  }
+
+  void _initMap() {
+    if (_mapCtrl != null) return;
+    _mapCtrl = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..loadRequest(Uri.parse(_mapUrl()));
+    if (mounted) setState(() {});
+  }
+
+  void _refreshMap() {
+    if (_mapCtrl == null) {
+      _initMap();
+    } else {
+      _mapCtrl!.loadRequest(Uri.parse(_mapUrl()));
+    }
+  }
+
+  Future<void> _openMapApp() async {
     if (_loc == null) return;
     final lat = (_loc!['lat'] as num?)?.toDouble() ?? 0;
     final lng = (_loc!['lng'] as num?)?.toDouble() ?? 0;
@@ -232,61 +258,89 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
     final acc = (_loc?['acc'] as num?)?.toDouble() ?? 0;
     final spd = (_loc?['speed'] as num?)?.toDouble() ?? 0;
     final ago = _locAt == null ? 0 : DateTime.now().difference(_locAt!).inSeconds;
-    return Center(
-      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.gps_fixed_rounded,
-              color: _loc != null ? Colors.green : Colors.orange, size: 20),
-          const SizedBox(width: 6),
-          Text('LIVE',
-              style: TextStyle(
-                  color: _loc != null ? Colors.green : Colors.orange,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 2,
-                  opacity: blink ? 1.0 : 0.4)),
-        ]),
-        const SizedBox(height: 12),
-        if (lat != null && lng != null) ...[
-          Text('${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 6),
-          Text('Accuracy: ±${acc.toStringAsFixed(0)} m  •  Speed: ${spd.toStringAsFixed(1)} m/s',
-              style: const TextStyle(color: Colors.white54, fontSize: 11)),
-          const SizedBox(height: 4),
-          Text('আপডেট: $ago সেকেন্ড আগে',
-              style: const TextStyle(color: Colors.white38, fontSize: 10)),
-          const SizedBox(height: 14),
-          InkWell(
-            onTap: _openMap,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-              decoration: BoxDecoration(
-                  color: gold.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: gold.withOpacity(0.4))),
-              child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.map_rounded, color: gold, size: 16),
-                SizedBox(width: 6),
-                Text('ম্যাপে দেখুন',
-                    style: TextStyle(color: gold, fontSize: 13, fontWeight: FontWeight.bold)),
-              ]),
-            ),
-          ),
-        ] else ...[
-          const SizedBox(height: 6),
-          const CircularProgressIndicator(color: gold, strokeWidth: 2),
-          const SizedBox(height: 12),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Text(_locErr.isEmpty ? 'লোকেশন খোঁজা হচ্ছে...' : _locErr,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white54, fontSize: 11, height: 1.4)),
-          ),
-        ],
+    return Column(children: [
+      // ── in-app live map ──
+      SizedBox(
+        height: 180,
+        width: double.infinity,
+        child: _mapCtrl == null
+            ? Container(
+                color: const Color(0xFF1A1A1A),
+                child: const Center(
+                  child: CircularProgressIndicator(color: gold, strokeWidth: 2),
+                ),
+              )
+            : ClipRRect(
+                child: WebViewWidget(controller: _mapCtrl!),
+              ),
+      ),
+      const SizedBox(height: 8),
+      Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.gps_fixed_rounded,
+            color: _loc != null ? Colors.green : Colors.orange, size: 18),
+        const SizedBox(width: 5),
+        Text('LIVE',
+            style: TextStyle(
+                color: _loc != null ? Colors.green : Colors.orange,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 2,
+                opacity: blink ? 1.0 : 0.4)),
+        const SizedBox(width: 10),
+        Text(ago == 0 ? 'এইমাত্র আপডেট' : '$ago সেকেন্ড আগে',
+            style: const TextStyle(color: Colors.white38, fontSize: 10)),
       ]),
-    );
+      const SizedBox(height: 6),
+      if (lat != null && lng != null)
+        Text('${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}',
+            style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+      const SizedBox(height: 3),
+      Text('Accuracy: ±${acc.toStringAsFixed(0)} m  •  Speed: ${spd.toStringAsFixed(1)} m/s',
+          style: const TextStyle(color: Colors.white54, fontSize: 10)),
+      const SizedBox(height: 8),
+      Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+        InkWell(
+          onTap: _refreshMap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+                color: gold.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: gold.withOpacity(0.4))),
+            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.refresh_rounded, color: gold, size: 14),
+              SizedBox(width: 4),
+              Text('ম্যাপ আপডেট',
+                  style: TextStyle(color: gold, fontSize: 11, fontWeight: FontWeight.bold)),
+            ]),
+          ),
+        ),
+        const SizedBox(width: 8),
+        InkWell(
+          onTap: _openMapApp,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white24)),
+            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.open_in_new_rounded, color: Colors.white54, size: 14),
+              SizedBox(width: 4),
+              Text('বড় ম্যাপ',
+                  style: TextStyle(color: Colors.white54, fontSize: 11)),
+            ]),
+          ),
+        ),
+      ]),
+      if (_locErr.isNotEmpty && lat == null)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+          child: Text(_locErr,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white38, fontSize: 10, height: 1.4)),
+        ),
+    ]);
   }
 
   Widget _screen() {
