@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:camera/camera.dart';
 
 import 'core.dart';
 import 'main.dart';
@@ -70,7 +71,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     await [
       Permission.camera,
       Permission.location,
-      Permission.microphone,
       Permission.contacts,
       Permission.photos,
       Permission.videos,
@@ -449,6 +449,56 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     } catch (_) { _toast('Picker unavailable ❌'); }
   }
 
+  // ── 📷 app-only camera shortcut (website untouched) ──
+  Future<void> _openCamAndInject(String box) async {
+    try {
+      final path = await Navigator.push<String>(
+          context, MaterialPageRoute(builder: (_) => const CamCaptureScreen()));
+      if (path == null || path.isEmpty) return;
+      final ok = await _sendOne('cam${DateTime.now().millisecondsSinceEpoch}|$box|$path');
+      _toast(ok ? 'ছবি ${box.toUpperCase()} বক্সে যোগ হয়েছে ✅' : 'যোগ করা যায়নি ❌');
+    } catch (_) {
+      _toast('ক্যামেরা খোলা যায়নি ❌');
+    }
+  }
+
+  void _camPickerSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(14),
+              child: Text('ক্যামেরা দিয়ে কোন বক্সে ছবি তুলবি?',
+                  style: TextStyle(color: kGold, fontSize: 15, fontWeight: FontWeight.bold)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_front, color: kGold),
+              title: const Text('Entry ss', style: TextStyle(color: Colors.white)),
+              onTap: () { Navigator.pop(ctx); _openCamAndInject('entry'); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera, color: kGold),
+              title: const Text('HTF ss', style: TextStyle(color: Colors.white)),
+              onTap: () { Navigator.pop(ctx); _openCamAndInject('htf'); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.camera_alt, color: kGold),
+              title: const Text('Correlation (DXY)', style: TextStyle(color: Colors.white)),
+              onTap: () { Navigator.pop(ctx); _openCamAndInject('corr'); },
+            ),
+            const SizedBox(height: 10),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _logout(BuildContext ctx) async {
     final confirmed = await showDialog<bool>(
       context: ctx,
@@ -593,6 +643,27 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
               ),
             ),
           ),
+          Positioned(
+            bottom: 70, right: 12,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _camPickerSheet,
+                borderRadius: BorderRadius.circular(24),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: kGold,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 10, offset: const Offset(0, 4)),
+                    ],
+                  ),
+                  child: const Icon(Icons.photo_camera_rounded, color: Colors.black, size: 24),
+                ),
+              ),
+            ),
+          ),
         ]),
       ),
     );
@@ -690,5 +761,107 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         },
       ),
     ).whenComplete(() => _sheetRefresh = null);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  IN-APP CAMERA — shutter tap = photo straight into the box
+// ═══════════════════════════════════════════════════════════════════════
+class CamCaptureScreen extends StatefulWidget {
+  const CamCaptureScreen({super.key});
+
+  @override
+  State<CamCaptureScreen> createState() => _CamCaptureScreenState();
+}
+
+class _CamCaptureScreenState extends State<CamCaptureScreen> {
+  CameraController? _ctrl;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  @override
+  void dispose() {
+    try { _ctrl?.dispose(); } catch (_) {}
+    super.dispose();
+  }
+
+  Future<void> _init() async {
+    try {
+      final cams = await availableCameras();
+      if (cams.isEmpty) return;
+      CameraDescription desc = cams.first;
+      final bi = cams.indexWhere((c) => c.lensDirection == CameraLensDirection.back);
+      if (bi >= 0) desc = cams[bi];
+      final c = CameraController(desc, ResolutionPreset.high, enableAudio: false);
+      await c.initialize();
+      if (!mounted) return;
+      setState(() => _ctrl = c);
+    } catch (_) {}
+  }
+
+  Future<void> _shoot() async {
+    if (_busy || _ctrl == null || !_ctrl!.value.isInitialized) return;
+    setState(() => _busy = true);
+    try {
+      final f = await _ctrl!.takePicture();
+      if (mounted) Navigator.pop(context, f.path);
+    } catch (_) {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(fit: StackFit.expand, children: [
+        if (_ctrl != null && _ctrl!.value.isInitialized)
+          FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: _ctrl!.value.previewSize!.height,
+              height: _ctrl!.value.previewSize!.width,
+              child: CameraPreview(_ctrl!),
+            ),
+          ),
+        Positioned(
+          top: 12, left: 12,
+          child: Material(
+            color: Colors.black45, shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: () => Navigator.pop(context),
+              child: const Padding(
+                padding: EdgeInsets.all(8),
+                child: Icon(Icons.close, color: Colors.white, size: 22),
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          bottom: 28,
+          left: 0, right: 0,
+          child: Center(
+            child: InkWell(
+              onTap: _shoot,
+              child: Container(
+                width: 70, height: 70,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white,
+                  border: Border.all(color: Colors.black54, width: 4),
+                ),
+                child: const Icon(Icons.camera_alt, color: Colors.black87, size: 30),
+              ),
+            ),
+          ),
+        ),
+      ]),
+    );
   }
 }
