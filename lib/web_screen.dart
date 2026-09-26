@@ -209,7 +209,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         if (_seenIds.length > 500) _seenIds.removeRange(0, _seenIds.length - 500);
         _round.add('$id|$path');
         await _saveState();
-        if (_activeBox == 'none') { _errPop('❌ SS disabled — select a box'); return; }
+        if (_activeBox == 'none') { _errPop('SS disabled — select a box first'); return; }
         if (_sentIds.contains(id) ||
             _queue.any((q) => q.startsWith('$id|')) ||
             _ledger.any((q) => q.startsWith('$id|'))) return;
@@ -220,24 +220,24 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         await _saveState();
         _pushState();
         final c = _countOf(box);
-        _toast(c >= m ? '${box.toUpperCase()} FULL ✔' : '${box.toUpperCase()} $c/$m ✅');
+        _toast(c >= m ? '${box.toUpperCase()} FULL' : '${box.toUpperCase()} $c/$m saved');
         if (_fg) _flush();
       } else if (call.method == 'onBubbleTap') {
         setState(() => _captureOn = !_captureOn);
         await (await SharedPreferences.getInstance()).setBool('cap', _captureOn);
         _pushState();
-        _toast(_captureOn ? 'Capture ON — SS will be captured' : 'Capture OFF');
+        _toast(_captureOn ? 'Capture ON — screenshots will be captured' : 'Capture OFF');
       } else if (call.method == 'onBubbleSelect') {
         setState(() => _activeBox = (call.arguments as String) == 'corr' ? 'none' : call.arguments as String);
         await _saveState();
         _pushState();
         if (_activeBox == 'none') {
-          _toast('NO BOX — SS will not be saved');
+          _toast('NO BOX selected — screenshots will not be saved');
         } else {
           final m = _max[_activeBox] ?? 0;
           _countOf(_activeBox) >= m
               ? _toast('${_activeBox.toUpperCase()} FULL — select another box')
-              : _toast('${_activeBox.toUpperCase()} select — auto-upload ON');
+              : _toast('${_activeBox.toUpperCase()} selected — auto upload ON');
         }
       } else if (call.method == 'onBubbleOk') {
         await _onOkay();
@@ -380,7 +380,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     int failed = 0;
     for (final it in List<String>.from(_queue)) { if (!await _sendOne(it)) failed++; }
     _flushing = false;
-    if (failed > 0 && !force) _toast('$failed upload pending — retry on open/OKAY');
+    if (failed > 0 && !force) _toast('$failed upload pending — will retry on next open');
   }
 
   Future<void> _clickClear(String box) async {
@@ -422,7 +422,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         });
         await _saveState();
         _pushState();
-        _toast('Delivered + deleted (HTF box অপরিবর্তিত রইলো)');
+        _toast('Delivered + deleted (HTF box unchanged)');
       }
       setState(() { _captureOn = false; _autoDelete = false; _overlayShown = false; });
       final p = await SharedPreferences.getInstance();
@@ -432,7 +432,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       try { await galleryChannel.invokeMethod('hideBubble'); } catch (_) {}
       _pushState();
       _toast('Round done — switches OFF');
-      if (_queue.isNotEmpty) _toast('${_queue.length} SS pending — will upload on next open');
+      if (_queue.isNotEmpty) _toast('${_queue.length} screenshot(s) pending — will upload on next open');
       await _controller.runJavaScript(
           '(function(){var els=document.querySelectorAll("nav button,nav a,button,a,div[role=button]");for(var i=0;i<els.length;i++){if((els[i].innerText||"").trim()==="Analysis"){els[i].click();return;}}})();');
     } finally { _okayBusy = false; }
@@ -442,25 +442,25 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     try {
       final res  = await galleryChannel.invokeMethod<List<Object?>>('pickFiles', {'max': box == 'corr' ? 1 : 6});
       final list = (res ?? []).map((e) => e.toString()).toList();
-      if (list.isEmpty) { _toast('No SS selected'); return; }
+      if (list.isEmpty) { _toast('No screenshot selected'); return; }
       int ok = 0;
       for (final path in list) {
         if (await _sendOne('pick${DateTime.now().millisecondsSinceEpoch}$ok|$box|$path')) ok++;
       }
-      ok > 0 ? _toast('$ok SS in ${box.toUpperCase()} ✅') : _toast('Could not add to box ❌');
-    } catch (_) { _toast('Picker unavailable ❌'); }
+      ok > 0 ? _toast('$ok screenshot(s) added to ${box.toUpperCase()}') : _toast('Could not add to box');
+    } catch (_) { _toast('Picker unavailable'); }
   }
 
-  // ── 📷 app-only camera shortcut (website untouched) ──
+  // ── app-only camera shortcut (website untouched) ──
   Future<void> _openCamAndInject(String box) async {
     try {
       final path = await Navigator.push<String>(
           context, MaterialPageRoute(builder: (_) => const CamCaptureScreen()));
       if (path == null || path.isEmpty) return;
       final ok = await _sendOne('cam${DateTime.now().millisecondsSinceEpoch}|$box|$path');
-      _toast(ok ? 'ছবি ${box.toUpperCase()} বক্সে যোগ হয়েছে ✅' : 'যোগ করা যায়নি ❌');
+      _toast(ok ? 'Photo added to ${box.toUpperCase()} box' : 'Could not add photo');
     } catch (_) {
-      _toast('ক্যামেরা খোলা যায়নি ❌');
+      _toast('Camera unavailable');
     }
   }
 
@@ -476,7 +476,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           children: [
             const Padding(
               padding: EdgeInsets.all(14),
-              child: Text('ক্যামেরা দিয়ে কোন বক্সে ছবি তুলবি?',
+              child: Text('Which box should the photo go to?',
                   style: TextStyle(color: kGold, fontSize: 15, fontWeight: FontWeight.bold)),
             ),
             ListTile(
@@ -507,7 +507,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       builder: (_) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E1E),
         title: const Text('Log out?', style: TextStyle(color: kGold)),
-        content: const Text('Apnar session clear hobe.\nOwner approval again lagbe.',
+        content: const Text('Your session will be cleared.\nOwner approval will be required again.',
             style: TextStyle(color: Colors.white70)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false),
@@ -569,12 +569,43 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           });
           _progressN.value = 1;
           await _controller.runJavaScript(_pageHookJs());
+          await _controller.runJavaScript(_netlifyHideJs());
           await _seedCounts();
           _flush();
         },
       ))
       ..loadRequest(Uri.parse(kUrl));
   }
+
+  // ── auto tap: Netlify pill → "Hide this badge" (runs only until hidden) ──
+  String _netlifyHideJs() => '''(function(){
+    if(window.__nlHideDone)return;
+    function byText(txt){
+      var els=document.querySelectorAll('a,button,div,span');
+      for(var i=0;i<els.length;i++){
+        var t=(els[i].innerText||'').trim();
+        if(t===txt)return els[i];
+      }
+      return null;
+    }
+    function pill(){
+      var els=document.querySelectorAll('a,div,span,button');
+      for(var i=0;i<els.length;i++){
+        var t=(els[i].innerText||'').trim();
+        if(t.indexOf('Powered by Netlify')===0&&t.length<40)return els[i];
+      }
+      return null;
+    }
+    var tries=0;
+    var iv=setInterval(function(){
+      tries++;
+      if(tries>60){clearInterval(iv);return;}
+      var h=byText('Hide this badge');
+      if(h){h.click();window.__nlHideDone=true;clearInterval(iv);return;}
+      var p=pill();
+      if(p){p.click();}
+    },500);
+  })();''';
 
   String _pageHookJs() => '''(function(){
     if(window.__aniketHook)return;window.__aniketHook=true;
@@ -604,7 +635,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     final can = await galleryChannel.invokeMethod<bool>('canOverlay') ?? false;
     if (!can) {
       await galleryChannel.invokeMethod('openOverlaySettings');
-      _snack('Allow overlay permission, press back, turn ON again');
+      _snack('Allow overlay permission, press back, then turn ON again');
       return;
     }
     if (_overlayShown) {
@@ -730,7 +761,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                 ),
                 SwitchListTile(
                   title: const Text('Gallery Auto-Delete', style: TextStyle(color: Colors.white)),
-                  subtitle: const Text('After OKAY, tap Allow in system dialog to delete',
+                  subtitle: const Text('After OKAY, tap Allow in the system dialog to delete',
                       style: TextStyle(color: Colors.white54, fontSize: 12)),
                   value: _autoDelete, activeColor: kGold,
                   onChanged: (v) async {
