@@ -330,13 +330,6 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
     }
   }
 
-  void _snack(String t) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(t), backgroundColor: Colors.black87));
-    }
-  }
-
   // ── background ──
   Widget _bg() => Container(
         decoration: const BoxDecoration(
@@ -358,8 +351,10 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
         top: top, left: left,
         child: Transform.rotate(
           angle: rot,
-          child: Text(e,
-              style: TextStyle(fontSize: size, opacity: 0.85)),
+          child: Opacity(
+            opacity: 0.85,
+            child: Text(e, style: TextStyle(fontSize: size)),
+          ),
         ),
       );
 
@@ -656,7 +651,7 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
       children: [
         const CircularProgressIndicator(color: Colors.white),
         const SizedBox(height: 20),
-        const Text('Request sent ✅',
+        const Text('Request sent',
             style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800)),
         const SizedBox(height: 10),
         Container(
