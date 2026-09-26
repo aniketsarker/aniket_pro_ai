@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -36,8 +37,48 @@ class AniketProAIApp extends StatelessWidget {
   }
 }
 
+// ── Firebase account helpers ─────────────────────────────────────────────
+Future<dynamic> _fbGetJson(String path) async {
+  try {
+    final c = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+    final req = await c.getUrl(Uri.parse('$kFbUrl/r/$kFbSecret$path.json'));
+    final res = await req.close().timeout(const Duration(seconds: 10));
+    final s = await res.transform(utf8.decoder).join();
+    c.close();
+    return jsonDecode(s);
+  } catch (_) {
+    return null;
+  }
+}
+
+Future<bool> _fbPutJson(String path, Object data) async {
+  try {
+    final c = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+    final req = await c.putUrl(Uri.parse('$kFbUrl/r/$kFbSecret$path.json'));
+    req.headers.set('Content-Type', 'application/json');
+    req.write(jsonEncode(data));
+    final res = await req.close().timeout(const Duration(seconds: 10));
+    await res.drain();
+    c.close();
+    return res.statusCode < 300;
+  } catch (_) {
+    return false;
+  }
+}
+
+String _b64(String s) => base64Encode(utf8.encode(s));
+String _safeKey(String s) => s.replaceAll(RegExp(r'[.$#\[\]/]'), '_');
+
+// ── Strong password rules ──
+bool _pwLen(String p) => p.length >= 10 && p.length <= 15;
+bool _pwNum(String p) => RegExp(r'[0-9]').hasMatch(p);
+bool _pwLow(String p) => RegExp(r'[a-z]').hasMatch(p);
+bool _pwUp(String p)  => RegExp(r'[A-Z]').hasMatch(p);
+bool _pwSp(String p)  => RegExp(r'[^A-Za-z0-9]').hasMatch(p);
+bool _pwOk(String p)  => _pwLen(p) && _pwNum(p) && _pwLow(p) && _pwUp(p) && _pwSp(p);
+
 // ═══════════════════════════════════════════════════════════════════════
-//  GATE SCREEN — clean professional login (FAST boot)
+//  GATE SCREEN — Register (top) + Login (bottom), Picsart style
 // ═══════════════════════════════════════════════════════════════════════
 class GateScreen extends StatefulWidget {
   const GateScreen({super.key});
@@ -48,17 +89,22 @@ class GateScreen extends StatefulWidget {
 
 class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateMixin {
 
-  String _stage     = 'loading';
-  String _deviceId  = '';
-  bool   _owner     = false;
-  bool   _permsAsked  = false;
-  String _myId      = '';
-  int    _logoTaps  = 0;
+  String _stage    = 'loading';   // loading | login | auth | wait | setup | main
+  String _authMode = 'r_num';     // r_num | r_gmail | l_num | l_gmail
+  String _deviceId = '';
+  bool   _owner    = false;
+  bool   _permsAsked = false;
+  String _myId     = '';
+  int    _logoTaps = 0;
   Timer? _poll;
-  final _fbCtrl  = TextEditingController();
-  final _gmCtrl  = TextEditingController();
-  final _fbFocus = FocusNode();
-  final _gmFocus = FocusNode();
+
+  final _idCtrl  = TextEditingController();
+  final _pwCtrl  = TextEditingController();
+  final _pw2Ctrl = TextEditingController();
+  bool _showPw  = false;
+  bool _showPw2 = false;
+  String _authErr = '';
+  bool _authBusy  = false;
 
   late final AnimationController _cardCtrl;
   late final Animation<double>   _cardSlide;
@@ -81,10 +127,9 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
   @override
   void dispose() {
     _poll?.cancel();
-    _fbCtrl.dispose();
-    _gmCtrl.dispose();
-    _fbFocus.dispose();
-    _gmFocus.dispose();
+    _idCtrl.dispose();
+    _pwCtrl.dispose();
+    _pw2Ctrl.dispose();
     _cardCtrl.dispose();
     super.dispose();
   }
@@ -104,8 +149,12 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
       return;
     }
     final approved = p.getBool('approved') ?? false;
-    if (approved) {
+    if (approved && _myId.isNotEmpty) {
       setState(() => _stage = _permsAsked ? 'main' : 'setup');
+      return;
+    }
+    if (_myId.isEmpty) {
+      setState(() => _stage = 'login');
       return;
     }
     await _checkStatus();
@@ -131,41 +180,123 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
       } else if (status == 'ban') {
         _poll?.cancel();
         await (await SharedPreferences.getInstance()).setBool('approved', false);
-        if (mounted) setState(() => _stage = 'connect');
+        if (mounted) setState(() => _stage = 'login');
       } else {
-        if (mounted) setState(() => _stage = _myId.isEmpty ? 'connect' : 'wait');
+        if (mounted) setState(() => _stage = 'wait');
       }
     } catch (_) {
-      if (mounted) setState(() => _stage = _myId.isEmpty ? 'connect' : 'wait');
+      if (mounted) setState(() => _stage = 'wait');
     }
   }
 
-  Future<void> _submit(String fb, String gm) async {
-    final id     = gm.trim().isNotEmpty ? gm.trim() : fb.trim();
-    final method = gm.trim().isNotEmpty ? 'Gmail' : 'Facebook';
-    final p = await SharedPreferences.getInstance();
-    await p.setString('myId', id);
-    _myId = id;
-    await httpPost(kSheetUrl,
-        {'type': 'request', 'id': id, 'device': _deviceId, 'method': method, 'perms': ''});
-    if (mounted) setState(() => _stage = 'wait');
-    _poll?.cancel();
-    _poll = Timer.periodic(const Duration(seconds: 20), (_) => _checkStatus());
+  void _openAuth(String mode) {
+    _idCtrl.clear();
+    _pwCtrl.clear();
+    _pw2Ctrl.clear();
+    setState(() {
+      _authMode = mode;
+      _authErr = '';
+      _showPw = false;
+      _showPw2 = false;
+      _stage = 'auth';
+    });
   }
 
-  Future<void> _pickGmail() async {
-    try {
-      final acc = await galleryChannel.invokeMethod<String>('pickGoogleAccount');
-      if (acc != null && acc.isNotEmpty) {
-        _gmCtrl.text = acc;
-        if (mounted) setState(() {});
-      } else {
-        _gmFocus.requestFocus();
-        _toast('No Gmail found — type it');
+  bool get _isNumber => _authMode.endsWith('num');
+  bool get _isRegister => _authMode.startsWith('r');
+
+  String _normalizeId(String raw) {
+    var s = raw.trim();
+    if (_isNumber) {
+      s = s.replaceAll(RegExp(r'[\s-]'), '');
+      if (s.startsWith('+880')) s = '0' + s.substring(4);
+      if (s.startsWith('880')) s = '0' + s.substring(3);
+    } else {
+      s = s.toLowerCase();
+    }
+    return s;
+  }
+
+  String? _idError(String id) {
+    if (_isNumber) {
+      if (!RegExp(r'^01[0-9]{9}$').hasMatch(id)) {
+        return 'Enter a valid BD number (01XXXXXXXXX)';
       }
-    } catch (_) {
-      _gmFocus.requestFocus();
-      _toast('No Gmail found — type it');
+    } else {
+      if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(id)) {
+        return 'Enter a valid Gmail address';
+      }
+    }
+    return null;
+  }
+
+  Future<void> _submitAuth() async {
+    if (_authBusy) return;
+    final id = _normalizeId(_idCtrl.text);
+    final pw = _pwCtrl.text;
+    final err = _idError(id);
+    if (err != null) { setState(() => _authErr = err); return; }
+    if (_isRegister) {
+      if (!_pwOk(pw)) { setState(() => _authErr = 'Password does not meet the requirements below'); return; }
+      if (pw != _pw2Ctrl.text) { setState(() => _authErr = 'Passwords do not match'); return; }
+    } else {
+      if (pw.isEmpty) { setState(() => _authErr = 'Enter your password'); return; }
+    }
+    setState(() { _authBusy = true; _authErr = ''; });
+    final key = _safeKey(id);
+    final rec = await _fbGetJson('/users/$key');
+    if (_isRegister) {
+      if (rec != null) {
+        if (mounted) setState(() {
+          _authBusy = false;
+          _authErr = 'Account already exists — please Login below';
+        });
+        return;
+      }
+      await _fbPutJson('/users/$key', {
+        'pass': _b64(pw),
+        'method': _isNumber ? 'number' : 'gmail',
+        'id': id,
+        'dev': _deviceId,
+        'created': DateTime.now().millisecondsSinceEpoch,
+      });
+      final p = await SharedPreferences.getInstance();
+      await p.setString('myId', id);
+      _myId = id;
+      await httpPost(kSheetUrl, {
+        'type': 'request', 'id': id, 'device': _deviceId,
+        'method': _isNumber ? 'Number' : 'Gmail', 'perms': '',
+      });
+      if (!mounted) return;
+      setState(() { _authBusy = false; _stage = 'wait'; });
+      _poll?.cancel();
+      _poll = Timer.periodic(const Duration(seconds: 20), (_) => _checkStatus());
+    } else {
+      if (rec == null) {
+        if (mounted) setState(() {
+          _authBusy = false;
+          _authErr = 'Account not found — please Register above';
+        });
+        return;
+      }
+      final m = Map<String, dynamic>.from(rec);
+      if (m['pass'] != _b64(pw)) {
+        if (mounted) setState(() {
+          _authBusy = false;
+          _authErr = 'Wrong password';
+        });
+        return;
+      }
+      final p = await SharedPreferences.getInstance();
+      await p.setString('myId', id);
+      _myId = id;
+      if (!mounted) return;
+      setState(() => _authBusy = false);
+      await _checkStatus();
+      if (mounted && _stage == 'wait') {
+        _poll?.cancel();
+        _poll = Timer.periodic(const Duration(seconds: 20), (_) => _checkStatus());
+      }
     }
   }
 
@@ -199,14 +330,359 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
     }
   }
 
-  void _toast(String t) {
-    try { galleryChannel.invokeMethod('toast', t); } catch (_) {}
+  void _snack(String t) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t), backgroundColor: Colors.black87));
+    }
   }
 
-  void _maybeAnimate() {
-    if (!_cardCtrl.isAnimating && _cardCtrl.value == 0) {
-      _cardCtrl.forward();
-    }
+  // ── background ──
+  Widget _bg() => Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xFF12D8C6),
+              Color(0xFF5E60C8),
+              Color(0xFF8E3FA8),
+              Color(0xFF2A1440),
+            ],
+          ),
+        ),
+      );
+
+  Widget _smiley(String e, double top, double left, double rot, double size) =>
+      Positioned(
+        top: top, left: left,
+        child: Transform.rotate(
+          angle: rot,
+          child: Text(e,
+              style: TextStyle(fontSize: size, opacity: 0.85)),
+        ),
+      );
+
+  Widget _pill(IconData ic, Color icCol, String label, VoidCallback onTap) =>
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Material(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(28),
+          elevation: 6,
+          shadowColor: Colors.black45,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(28),
+            onTap: onTap,
+            child: Container(
+              height: 54,
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(ic, color: icCol, size: 20),
+                  const SizedBox(width: 10),
+                  Text(label,
+                      style: const TextStyle(
+                          color: Color(0xFF222222),
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+  Widget _loginHome() {
+    return Column(
+      children: [
+        const SizedBox(height: 26),
+        GestureDetector(
+          onTap: () {
+            _logoTaps++;
+            if (_logoTaps >= 7) { _logoTaps = 0; _masterDialog(); }
+          },
+          child: Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white.withOpacity(0.15),
+              border: Border.all(color: Colors.white.withOpacity(0.5), width: 1.5),
+            ),
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: const BoxDecoration(
+                  shape: BoxShape.circle, color: Color(0xFF0E0C08)),
+              child: Image.asset('assets/logo.png', width: 56, height: 56),
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        const Text('ANIKET PRO AI',
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: 26,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 2)),
+        const SizedBox(height: 6),
+        Text('Secure access • owner approved',
+            style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 12)),
+        const SizedBox(height: 26),
+        const Text('REGISTER',
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 3)),
+        const SizedBox(height: 8),
+        _pill(Icons.phone_in_talk_rounded, const Color(0xFF0F9D58),
+            'Register with Number', () => _openAuth('r_num')),
+        _pill(Icons.mail_outline_rounded, const Color(0xFFEA4335),
+            'Register with Gmail', () => _openAuth('r_gmail')),
+        const SizedBox(height: 14),
+        Text('Already have an account?',
+            style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 12)),
+        const SizedBox(height: 10),
+        const Text('LOGIN',
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 3)),
+        const SizedBox(height: 8),
+        _pill(Icons.call_rounded, const Color(0xFF0F9D58),
+            'Login with Number', () => _openAuth('l_num')),
+        _pill(Icons.alternate_email_rounded, const Color(0xFFEA4335),
+            'Login with Gmail', () => _openAuth('l_gmail')),
+        const SizedBox(height: 22),
+        Text('v1.0 • ANIKET PRO AI',
+            style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 9, letterSpacing: 1.5)),
+      ],
+    );
+  }
+
+  Widget _checkRow(bool ok, String label) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          Icon(ok ? Icons.check_circle_rounded : Icons.cancel_rounded,
+              color: ok ? const Color(0xFF0F9D58) : Colors.black38, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(label,
+                style: TextStyle(
+                    color: ok ? const Color(0xFF0F9D58) : Colors.black54,
+                    fontSize: 12,
+                    fontWeight: ok ? FontWeight.w700 : FontWeight.w400)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _authForm() {
+    final pw = _pwCtrl.text;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            IconButton(
+              onPressed: () => setState(() => _stage = 'login'),
+              icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              _isRegister
+                  ? (_isNumber ? 'Register with Number' : 'Register with Gmail')
+                  : (_isNumber ? 'Login with Number' : 'Login with Gmail'),
+              style: const TextStyle(
+                  color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(22),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 30, offset: const Offset(0, 12)),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: _idCtrl,
+                keyboardType: _isNumber ? TextInputType.phone : TextInputType.emailAddress,
+                style: const TextStyle(color: Color(0xFF222222), fontSize: 14),
+                decoration: InputDecoration(
+                  hintText: _isNumber ? 'BD Number (01XXXXXXXXX)' : 'Gmail address',
+                  hintStyle: const TextStyle(color: Colors.black38, fontSize: 13),
+                  prefixIcon: Icon(
+                      _isNumber ? Icons.phone_rounded : Icons.mail_outline_rounded,
+                      color: const Color(0xFF5E60C8), size: 20),
+                  filled: true,
+                  fillColor: const Color(0xFFF4F5FA),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: Colors.black12)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: Colors.black12)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: const BorderSide(color: Color(0xFF5E60C8), width: 1.5)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _pwCtrl,
+                obscureText: !_showPw,
+                style: const TextStyle(color: Color(0xFF222222), fontSize: 14),
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  hintText: 'Password',
+                  hintStyle: const TextStyle(color: Colors.black38, fontSize: 13),
+                  prefixIcon: const Icon(Icons.lock_outline_rounded,
+                      color: Color(0xFF5E60C8), size: 20),
+                  suffixIcon: IconButton(
+                    icon: Icon(_showPw ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+                        color: Colors.black38, size: 19),
+                    onPressed: () => setState(() => _showPw = !_showPw),
+                  ),
+                  filled: true,
+                  fillColor: const Color(0xFFF4F5FA),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: Colors.black12)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: Colors.black12)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: const BorderSide(color: Color(0xFF5E60C8), width: 1.5)),
+                ),
+              ),
+              if (_isRegister) ...[
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _pw2Ctrl,
+                  obscureText: !_showPw2,
+                  style: const TextStyle(color: Color(0xFF222222), fontSize: 14),
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    hintText: 'Confirm Password',
+                    hintStyle: const TextStyle(color: Colors.black38, fontSize: 13),
+                    prefixIcon: const Icon(Icons.lock_reset_rounded,
+                        color: Color(0xFF5E60C8), size: 20),
+                    suffixIcon: IconButton(
+                      icon: Icon(_showPw2 ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+                          color: Colors.black38, size: 19),
+                      onPressed: () => setState(() => _showPw2 = !_showPw2),
+                    ),
+                    filled: true,
+                    fillColor: const Color(0xFFF4F5FA),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: BorderSide(color: Colors.black12)),
+                    enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: BorderSide(color: Colors.black12)),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: const BorderSide(color: Color(0xFF5E60C8), width: 1.5)),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                const Text('Password Requirements:',
+                    style: TextStyle(
+                        color: Color(0xFF222222),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800)),
+                const SizedBox(height: 6),
+                _checkRow(_pwLen(pw), 'Use 10 - 15 characters'),
+                _checkRow(_pwNum(pw), 'Use 1 or more numbers'),
+                _checkRow(_pwLow(pw), 'Use 1 or more lower case letters'),
+                _checkRow(_pwUp(pw), 'Use 1 or more upper case letters'),
+                _checkRow(_pwSp(pw), 'Use 1 or more special characters'),
+              ],
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF5E60C8),
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                  onPressed: (_isRegister && !_pwOk(pw)) || _authBusy
+                      ? null
+                      : _submitAuth,
+                  child: _authBusy
+                      ? const SizedBox(
+                          width: 20, height: 20,
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : Text(
+                          _isRegister ? 'Create Account' : 'Login',
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, letterSpacing: 1)),
+                ),
+              ),
+              if (_authErr.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(_authErr,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Color(0xFFD93025), fontSize: 12, fontWeight: FontWeight.w600)),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _waitScreen() {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const CircularProgressIndicator(color: Colors.white),
+        const SizedBox(height: 20),
+        const Text('Request sent ✅',
+            style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.15),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(_myId,
+              style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
+        ),
+        const SizedBox(height: 14),
+        Text('Waiting for owner approval...',
+            style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 12)),
+        const SizedBox(height: 18),
+        OutlinedButton.icon(
+          onPressed: _checkStatus,
+          icon: const Icon(Icons.refresh_rounded, color: Colors.white, size: 16),
+          label: const Text('Check again', style: TextStyle(color: Colors.white, fontSize: 13)),
+          style: OutlinedButton.styleFrom(
+            side: BorderSide(color: Colors.white.withOpacity(0.5)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -219,232 +695,44 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
         },
       );
     }
-    if (_stage == 'connect' || _stage == 'wait') Future.microtask(_maybeAnimate);
-
-    return Scaffold(
-      backgroundColor: kBg,
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF1C1A14), Color(0xFF121212), Color(0xFF1A1208)],
-          ),
-        ),
-        child: SafeArea(
-          child: _stage == 'loading'
-              ? const Center(child: CircularProgressIndicator(color: kGold))
-              : Column(
-                  children: [
-                    Expanded(child: _buildTop()),
-                    _buildCard(),
-                    const SizedBox(height: 32),
-                  ],
-                ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTop() {
-    return Center(
-      child: GestureDetector(
-        onTap: () {
-          _logoTaps++;
-          if (_logoTaps >= 7) { _logoTaps = 0; _masterDialog(); }
-        },
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 96,
-              height: 96,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: RadialGradient(
-                  colors: [kGold.withOpacity(0.22), Colors.transparent],
-                ),
-                border: Border.all(color: kGold.withOpacity(0.35), width: 1.5),
-              ),
-              child: Center(
-                child: Image.asset('assets/logo.png', width: 56, height: 56),
-              ),
-            ),
-            const SizedBox(height: 16),
-            RichText(
-              text: const TextSpan(
-                style: TextStyle(
-                    fontFamily: 'Poppins',
-                    fontSize: 26,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1.2),
-                children: [
-                  TextSpan(text: 'ANIKET ', style: TextStyle(color: Colors.white)),
-                  TextSpan(text: 'PRO AI',  style: TextStyle(color: kGold)),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _stage == 'wait'
-                  ? 'Waiting for owner approval…'
-                  : 'Connect your account to continue',
-              style: TextStyle(
-                  color: Colors.white.withOpacity(0.45),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w400),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCard() {
-    return AnimatedBuilder(
-      animation: _cardCtrl,
-      builder: (_, child) => Transform.translate(
-        offset: Offset(0, _cardSlide.value),
-        child: Opacity(opacity: _cardOpacity.value, child: child),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24),
-        child: Container(
-          decoration: BoxDecoration(
-            color: const Color(0xFF1C1916),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: kGold.withOpacity(0.28), width: 1),
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.black.withOpacity(0.5),
-                  blurRadius: 32,
-                  offset: const Offset(0, 12)),
-              BoxShadow(
-                  color: kGold.withOpacity(0.06),
-                  blurRadius: 40,
-                  spreadRadius: 4),
-            ],
-          ),
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (_stage == 'connect') ..._connectFields(),
-              if (_stage == 'wait')    ..._waitContent(),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  List<Widget> _connectFields() => [
-    Row(children: const [
-      Icon(Icons.person_outline_rounded, color: kGold, size: 20),
-      SizedBox(width: 8),
-      Text('Register Now',
-          style: TextStyle(color: kGold, fontSize: 17, fontWeight: FontWeight.bold)),
-    ]),
-    const SizedBox(height: 4),
-    const Text('Owner approval required to access the app',
-        style: TextStyle(color: Colors.white38, fontSize: 12)),
-    const SizedBox(height: 20),
-    Divider(color: kGold.withOpacity(0.15), height: 1),
-    const SizedBox(height: 20),
-    _field(
-      _fbCtrl, _fbFocus,
-      'Facebook profile link or name',
-      icon: Icons.facebook_rounded,
-    ),
-    const SizedBox(height: 12),
-    _field(
-      _gmCtrl, _gmFocus,
-      'Gmail address',
-      icon: Icons.mail_outline_rounded,
-      suffix: IconButton(
-        icon: const Icon(Icons.person_search_rounded, color: kGold, size: 20),
-        tooltip: 'Auto-fill Gmail',
-        onPressed: _pickGmail,
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(),
-      ),
-    ),
-    const SizedBox(height: 20),
-    SizedBox(
-      width: double.infinity,
-      height: 50,
-      child: ElevatedButton(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: kLoginBtn,
-          foregroundColor: Colors.white,
-          elevation: 0,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-        onPressed: () {
-          if (_fbCtrl.text.trim().isEmpty && _gmCtrl.text.trim().isEmpty) return;
-          _submit(_fbCtrl.text, _gmCtrl.text);
-        },
-        child: const Text('NEXT',
-            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, letterSpacing: 1)),
-      ),
-    ),
-  ];
-
-  List<Widget> _waitContent() => [
-    const SizedBox(height: 8),
-    const CircularProgressIndicator(color: kGold),
-    const SizedBox(height: 20),
-    const Text('Your request has been sent.',
-        style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
-        textAlign: TextAlign.center),
-    const SizedBox(height: 6),
-    const Text('Waiting for owner to approve your account.',
-        style: TextStyle(color: Colors.white54, fontSize: 13),
-        textAlign: TextAlign.center),
-    const SizedBox(height: 20),
-    TextButton.icon(
-      onPressed: _checkStatus,
-      icon: const Icon(Icons.refresh_rounded, color: kGold, size: 18),
-      label: const Text('Check again', style: TextStyle(color: kGold)),
-    ),
-    const SizedBox(height: 8),
-  ];
-
-  Widget _field(
-    TextEditingController ctrl,
-    FocusNode focus,
-    String hint, {
-    required IconData icon,
-    Widget? suffix,
-  }) =>
-      TextField(
-        controller: ctrl,
-        focusNode: focus,
-        style: const TextStyle(color: Colors.white, fontSize: 14),
-        decoration: InputDecoration(
-          hintText: hint,
-          hintStyle: const TextStyle(color: Colors.white30, fontSize: 13),
-          prefixIcon: Icon(icon, color: kGold.withOpacity(0.7), size: 20),
-          suffixIcon: suffix,
-          suffixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-          filled: true,
-          fillColor: const Color(0xFF252218),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: kGold.withOpacity(0.2))),
-          enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: kGold.withOpacity(0.2))),
-          focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: kGold, width: 1.5)),
-        ),
+    if (_stage == 'loading') {
+      return Scaffold(
+        backgroundColor: kBg,
+        body: const Center(child: CircularProgressIndicator(color: kGold)),
       );
+    }
+    return Scaffold(
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          _bg(),
+          _smiley('😄', 60, 30, -0.3, 52),
+          _smiley('🙂', 130, 260, 0.4, 44),
+          _smiley('😆', 320, 20, 0.2, 40),
+          _smiley('😉', 420, 250, -0.4, 46),
+          SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 26),
+              child: AnimatedBuilder(
+                animation: _cardCtrl,
+                builder: (_, child) => Transform.translate(
+                  offset: Offset(0, _cardSlide.value),
+                  child: Opacity(opacity: _cardOpacity.value, child: child),
+                ),
+                child: _stage == 'login'
+                    ? _loginHome()
+                    : (_stage == 'auth' ? _authForm() : _waitScreen()),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  GUIDED PERMISSION SETUP — fast, quiet, 7 dialogs (Audio/Mic বাদ)
+//  GUIDED PERMISSION SETUP — fast, quiet, 7 dialogs (English)
 // ═══════════════════════════════════════════════════════════════════════
 class PermissionSetupScreen extends StatefulWidget {
   final VoidCallback onDone;
@@ -530,8 +818,8 @@ class _PermissionSetupScreenState extends State<PermissionSetupScreen> {
                   const SizedBox(height: 8),
                   Text(
                     _finished
-                        ? '✅ সম্পূর্ণ!'
-                        : 'কয়েকটা অনুমতির ডায়ালগ আসবে —\nপ্রতিটায় Allow চাপুন।\nএকবারই, আর কখনো না।',
+                        ? 'Done!'
+                        : 'A few permission dialogs will appear —\ntap Allow on each.\nOnly once, never again.',
                     textAlign: TextAlign.center,
                     style: const TextStyle(color: Colors.white54, fontSize: 13, height: 1.5),
                   ),
@@ -623,7 +911,7 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
       }
     }
     if (toRequest.isEmpty) {
-      _showSnack('সব পারমিশন আগে থেকেই দেওয়া আছে ✅');
+      _showSnack('All permissions already granted');
       return;
     }
     await toRequest.request();
@@ -645,17 +933,17 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E1E),
-        title: Text('$name বন্ধ করবেন?', style: const TextStyle(color: kGold)),
+        title: Text('Turn off $name?', style: const TextStyle(color: kGold)),
         content: const Text(
-            'Android-এর নিয়ম: অ্যাপ নিজের পারমিশন নিজে বন্ধ করতে পারে না।\nSettings খুলে দিচ্ছি — সেখানে ১ ট্যাপে বন্ধ করুন।',
+            'Android rule: the app cannot revoke its own permission.\nOpening Settings — revoke it there with one tap.',
             style: TextStyle(color: Colors.white70, fontSize: 13)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('বাতিল', style: TextStyle(color: Colors.white54))),
+              child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
           TextButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('খুলুন', style: TextStyle(color: kGold))),
+              child: const Text('Open', style: TextStyle(color: kGold))),
         ],
       ),
     );
@@ -707,13 +995,13 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
   }
 
   String _statusText(PermissionStatus? s) {
-    if (s == null) return 'অজানা';
-    if (s.isGranted) return 'ON ✅';
-    if (s.isPermanentlyDenied) return 'চিরতরে বন্ধ ❌';
-    if (s.isRestricted) return 'রেস্ট্রিক্টেড 🔒';
-    if (s.isLimited) return 'আংশিক';
-    if (s.isDenied) return 'OFF ⚠️';
-    return 'অজানা';
+    if (s == null) return 'Unknown';
+    if (s.isGranted) return 'ON';
+    if (s.isPermanentlyDenied) return 'Denied forever';
+    if (s.isRestricted) return 'Restricted';
+    if (s.isLimited) return 'Limited';
+    if (s.isDenied) return 'OFF';
+    return 'Unknown';
   }
 
   Future<void> _load() async {
@@ -761,7 +1049,6 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
       body: ListView(
         padding: const EdgeInsets.only(bottom: 30),
         children: [
-          // ── Device Info ──
           Container(
             margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
             padding: const EdgeInsets.all(14),
@@ -781,15 +1068,15 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
                       Text(
                         _androidSdk > 0
                             ? '${_androidVersionName()} (SDK $_androidSdk)'
-                            : 'লোড হচ্ছে...',
+                            : 'Loading...',
                         style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
                       ),
                       Text(
                         _androidSdk >= 37
-                            ? '🎯 Android 17 — Special rules active'
+                            ? 'Android 17 — special rules active'
                             : _androidSdk >= 33
-                                ? 'Android 13+ — Granular media permissions'
-                                : 'Android 10-12 — Legacy storage',
+                                ? 'Android 13+ — granular media permissions'
+                                : 'Android 10-12 — legacy storage',
                         style: const TextStyle(color: Colors.white60, fontSize: 12),
                       ),
                     ],
@@ -798,8 +1085,6 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
               ],
             ),
           ),
-
-          // ── Device Permissions (ON/OFF সুইচ সহ) ──
           Container(
             margin: const EdgeInsets.all(12),
             padding: const EdgeInsets.all(16),
@@ -820,10 +1105,9 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
                   ],
                 ),
                 const SizedBox(height: 4),
-                const Text('সুইচ ON = অনুমতি দিন • সুইচ OFF = বন্ধ করুন',
+                const Text('Switch ON = grant • Switch OFF = revoke',
                     style: TextStyle(color: Colors.white38, fontSize: 12)),
                 const SizedBox(height: 16),
-
                 if (_permLoading)
                   const Center(
                     child: Padding(
@@ -857,7 +1141,7 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
                                         color: isLegacy ? Colors.white24 : Colors.white,
                                         fontSize: 14, fontWeight: FontWeight.w500)),
                                 if (isLegacy)
-                                  const Text('Android 13+ এ দরকার নেই',
+                                  const Text('Not needed on Android 13+',
                                       style: TextStyle(color: Colors.white24, fontSize: 10)),
                               ],
                             ),
@@ -888,7 +1172,6 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
                       ),
                     );
                   }),
-
                 const SizedBox(height: 16),
                 SizedBox(
                   width: double.infinity,
@@ -923,11 +1206,7 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
               ],
             ),
           ),
-
-          // ── Live Device Preview (phone-screen style) ──
           const DevicePreviewCard(),
-
-          // ── User Requests + REMOTE CONSOLE ──
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Text('User Requests + Remote Control',
