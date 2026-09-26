@@ -1,27 +1,16 @@
-self.addEventListener('push', function(event) {
-  var data = {};
-  try { data = event.data ? event.data.json() : {}; } catch (e) {
-    data = { title: '🔔 Aniket Pro AI', body: event.data ? event.data.text() : 'Notification' };
-  }
-  var title = data.title || '🔔 Aniket Pro AI';
-  var options = {
-    body: data.body || '',
-    icon: data.icon || undefined,
-    badge: data.badge || undefined,
-    vibrate: [200, 100, 200],
-    data: { url: data.url || '/' }
-  };
-  event.waitUntil(self.registration.showNotification(title, options));
-});
+const { getStore } = require('@netlify/blobs');
 
-self.addEventListener('notificationclick', function(event) {
-  event.notification.close();
-  event.waitUntil(
-    clients.matchAll({ type: 'window' }).then(function(list) {
-      for (var i = 0; i < list.length; i++) {
-        if ('focus' in list[i]) return list[i].focus();
-      }
-      if (clients.openWindow) return clients.openWindow(event.notification.data.url || '/');
-    })
-  );
-});
+exports.handler = async (event) => {
+  if (event.httpMethod !== 'POST') {
+    return { statusCode: 405, body: 'Method not allowed' };
+  }
+  try {
+    const store = getStore('aniket-alerts');
+    const payload = JSON.parse(event.body || '{}');
+    payload.notified = [];
+    await store.setJSON('waitplan', payload);
+    return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+  } catch (e) {
+    return { statusCode: 500, body: JSON.stringify({ error: e.message }) };
+  }
+};
