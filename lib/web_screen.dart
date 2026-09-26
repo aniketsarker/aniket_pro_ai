@@ -501,18 +501,21 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     );
   }
 
-  Future<void> _logout(BuildContext ctx) async {
+  // ── logout: dialog buttons now use the dialog's OWN context (fixed) ──
+  Future<void> _logout() async {
     final confirmed = await showDialog<bool>(
-      context: ctx,
-      builder: (_) => AlertDialog(
+      context: context,
+      builder: (dc) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E1E),
         title: const Text('Log out?', style: TextStyle(color: kGold)),
         content: const Text('Your session will be cleared.\nOwner approval will be required again.',
             style: TextStyle(color: Colors.white70)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false),
+          TextButton(
+              onPressed: () => Navigator.pop(dc, false),
               child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
-          TextButton(onPressed: () => Navigator.pop(ctx, true),
+          TextButton(
+              onPressed: () => Navigator.pop(dc, true),
               child: const Text('Log out', style: TextStyle(color: Colors.redAccent))),
         ],
       ),
@@ -680,7 +683,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(
-                  onTap: () => _showSettings(context),
+                  onTap: () => _showSettings(),
                   borderRadius: BorderRadius.circular(20),
                   child: Container(
                     padding: const EdgeInsets.all(8),
@@ -718,14 +721,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     );
   }
 
-  void _showSettings(BuildContext context) {
+  void _showSettings() {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1E1E1E),
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setModal) {
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (modalCtx, setModal) {
           _sheetRefresh = () => setModal(() {});
           return Padding(
             padding: const EdgeInsets.all(20),
@@ -774,7 +777,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                   const SizedBox(height: 8),
                   ElevatedButton(
                     onPressed: () {
-                      Navigator.pop(context);
+                      Navigator.pop(sheetCtx);
                       Navigator.push(context,
                           MaterialPageRoute(builder: (_) => const OwnerPanelScreen()));
                     },
@@ -785,9 +788,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                 const SizedBox(height: 8),
                 const Divider(color: Colors.white12),
                 InkWell(
-                  onTap: () async {
-                    Navigator.pop(context);
-                    await _logout(context);
+                  onTap: () {
+                    Navigator.pop(sheetCtx);
+                    _logout();
                   },
                   borderRadius: BorderRadius.circular(8),
                   child: const Padding(
