@@ -78,7 +78,7 @@ bool _pwSp(String p)  => RegExp(r'[^A-Za-z0-9]').hasMatch(p);
 bool _pwOk(String p)  => _pwLen(p) && _pwNum(p) && _pwLow(p) && _pwUp(p) && _pwSp(p);
 
 // ═══════════════════════════════════════════════════════════════════════
-//  GATE SCREEN — Register (top) + Login (bottom), Picsart style
+//  GATE SCREEN — Register (top) + Login (bottom), clean gradient
 // ═══════════════════════════════════════════════════════════════════════
 class GateScreen extends StatefulWidget {
   const GateScreen({super.key});
@@ -87,7 +87,7 @@ class GateScreen extends StatefulWidget {
   State<GateScreen> createState() => _GateScreenState();
 }
 
-class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateMixin {
+class _GateScreenState extends State<GateScreen> {
 
   String _stage    = 'loading';   // loading | login | auth | wait | setup | main
   String _authMode = 'r_num';     // r_num | r_gmail | l_num | l_gmail
@@ -106,21 +106,9 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
   String _authErr = '';
   bool _authBusy  = false;
 
-  late final AnimationController _cardCtrl;
-  late final Animation<double>   _cardSlide;
-  late final Animation<double>   _cardOpacity;
-
   @override
   void initState() {
     super.initState();
-    _cardCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 700));
-    _cardSlide = Tween<double>(begin: 60, end: 0)
-        .chain(CurveTween(curve: Curves.easeOutCubic))
-        .animate(_cardCtrl);
-    _cardOpacity = Tween<double>(begin: 0, end: 1)
-        .chain(CurveTween(curve: Curves.easeIn))
-        .animate(_cardCtrl);
     _boot();
   }
 
@@ -130,7 +118,6 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
     _idCtrl.dispose();
     _pwCtrl.dispose();
     _pw2Ctrl.dispose();
-    _cardCtrl.dispose();
     super.dispose();
   }
 
@@ -330,7 +317,6 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
     }
   }
 
-  // ── background ──
   Widget _bg() => Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -342,18 +328,6 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
               Color(0xFF8E3FA8),
               Color(0xFF2A1440),
             ],
-          ),
-        ),
-      );
-
-  Widget _smiley(String e, double top, double left, double rot, double size) =>
-      Positioned(
-        top: top, left: left,
-        child: Transform.rotate(
-          angle: rot,
-          child: Opacity(
-            opacity: 0.85,
-            child: Text(e, style: TextStyle(fontSize: size)),
           ),
         ),
       );
@@ -477,6 +451,49 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
     );
   }
 
+  Widget _inputField({
+    required TextEditingController ctrl,
+    required String hint,
+    required IconData icon,
+    TextInputType? keyboard,
+    bool obscure = false,
+    bool? showObs,
+    VoidCallback? toggleObs,
+    bool liveUpdate = false,
+  }) {
+    return TextField(
+      controller: ctrl,
+      keyboardType: keyboard,
+      obscureText: obscure && (showObs != true),
+      style: const TextStyle(color: Color(0xFF222222), fontSize: 14),
+      onChanged: liveUpdate ? (_) => setState(() {}) : null,
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: const TextStyle(color: Colors.black38, fontSize: 13),
+        prefixIcon: Icon(icon, color: const Color(0xFF5E60C8), size: 20),
+        suffixIcon: toggleObs == null
+            ? null
+            : IconButton(
+                icon: Icon(showObs == true ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+                    color: Colors.black38, size: 19),
+                onPressed: toggleObs,
+              ),
+        filled: true,
+        fillColor: const Color(0xFFF4F5FA),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: Colors.black12)),
+        enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: Colors.black12)),
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: Color(0xFF5E60C8), width: 1.5)),
+      ),
+    );
+  }
+
   Widget _authForm() {
     final pw = _pwCtrl.text;
     return Column(
@@ -511,90 +528,32 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              TextField(
-                controller: _idCtrl,
-                keyboardType: _isNumber ? TextInputType.phone : TextInputType.emailAddress,
-                style: const TextStyle(color: Color(0xFF222222), fontSize: 14),
-                decoration: InputDecoration(
-                  hintText: _isNumber ? 'BD Number (01XXXXXXXXX)' : 'Gmail address',
-                  hintStyle: const TextStyle(color: Colors.black38, fontSize: 13),
-                  prefixIcon: Icon(
-                      _isNumber ? Icons.phone_rounded : Icons.mail_outline_rounded,
-                      color: const Color(0xFF5E60C8), size: 20),
-                  filled: true,
-                  fillColor: const Color(0xFFF4F5FA),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      borderSide: BorderSide(color: Colors.black12)),
-                  enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      borderSide: BorderSide(color: Colors.black12)),
-                  focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      borderSide: const BorderSide(color: Color(0xFF5E60C8), width: 1.5)),
-                ),
+              _inputField(
+                ctrl: _idCtrl,
+                hint: _isNumber ? 'BD Number (01XXXXXXXXX)' : 'Gmail address',
+                icon: _isNumber ? Icons.phone_rounded : Icons.mail_outline_rounded,
+                keyboard: _isNumber ? TextInputType.phone : TextInputType.emailAddress,
               ),
               const SizedBox(height: 12),
-              TextField(
-                controller: _pwCtrl,
-                obscureText: !_showPw,
-                style: const TextStyle(color: Color(0xFF222222), fontSize: 14),
-                onChanged: (_) => setState(() {}),
-                decoration: InputDecoration(
-                  hintText: 'Password',
-                  hintStyle: const TextStyle(color: Colors.black38, fontSize: 13),
-                  prefixIcon: const Icon(Icons.lock_outline_rounded,
-                      color: Color(0xFF5E60C8), size: 20),
-                  suffixIcon: IconButton(
-                    icon: Icon(_showPw ? Icons.visibility_rounded : Icons.visibility_off_rounded,
-                        color: Colors.black38, size: 19),
-                    onPressed: () => setState(() => _showPw = !_showPw),
-                  ),
-                  filled: true,
-                  fillColor: const Color(0xFFF4F5FA),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      borderSide: BorderSide(color: Colors.black12)),
-                  enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      borderSide: BorderSide(color: Colors.black12)),
-                  focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      borderSide: const BorderSide(color: Color(0xFF5E60C8), width: 1.5)),
-                ),
+              _inputField(
+                ctrl: _pwCtrl,
+                hint: 'Password',
+                icon: Icons.lock_outline_rounded,
+                obscure: true,
+                showObs: _showPw,
+                toggleObs: () => setState(() => _showPw = !_showPw),
+                liveUpdate: true,
               ),
               if (_isRegister) ...[
                 const SizedBox(height: 12),
-                TextField(
-                  controller: _pw2Ctrl,
-                  obscureText: !_showPw2,
-                  style: const TextStyle(color: Color(0xFF222222), fontSize: 14),
-                  onChanged: (_) => setState(() {}),
-                  decoration: InputDecoration(
-                    hintText: 'Confirm Password',
-                    hintStyle: const TextStyle(color: Colors.black38, fontSize: 13),
-                    prefixIcon: const Icon(Icons.lock_reset_rounded,
-                        color: Color(0xFF5E60C8), size: 20),
-                    suffixIcon: IconButton(
-                      icon: Icon(_showPw2 ? Icons.visibility_rounded : Icons.visibility_off_rounded,
-                          color: Colors.black38, size: 19),
-                      onPressed: () => setState(() => _showPw2 = !_showPw2),
-                    ),
-                    filled: true,
-                    fillColor: const Color(0xFFF4F5FA),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: BorderSide(color: Colors.black12)),
-                    enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: BorderSide(color: Colors.black12)),
-                    focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: const BorderSide(color: Color(0xFF5E60C8), width: 1.5)),
-                  ),
+                _inputField(
+                  ctrl: _pw2Ctrl,
+                  hint: 'Confirm Password',
+                  icon: Icons.lock_reset_rounded,
+                  obscure: true,
+                  showObs: _showPw2,
+                  toggleObs: () => setState(() => _showPw2 = !_showPw2),
+                  liveUpdate: true,
                 ),
                 const SizedBox(height: 14),
                 const Text('Password Requirements:',
@@ -701,23 +660,12 @@ class _GateScreenState extends State<GateScreen> with SingleTickerProviderStateM
         fit: StackFit.expand,
         children: [
           _bg(),
-          _smiley('😄', 60, 30, -0.3, 52),
-          _smiley('🙂', 130, 260, 0.4, 44),
-          _smiley('😆', 320, 20, 0.2, 40),
-          _smiley('😉', 420, 250, -0.4, 46),
           SafeArea(
             child: SingleChildScrollView(
               padding: const EdgeInsets.symmetric(horizontal: 26),
-              child: AnimatedBuilder(
-                animation: _cardCtrl,
-                builder: (_, child) => Transform.translate(
-                  offset: Offset(0, _cardSlide.value),
-                  child: Opacity(opacity: _cardOpacity.value, child: child),
-                ),
-                child: _stage == 'login'
-                    ? _loginHome()
-                    : (_stage == 'auth' ? _authForm() : _waitScreen()),
-              ),
+              child: _stage == 'login'
+                  ? _loginHome()
+                  : (_stage == 'auth' ? _authForm() : _waitScreen()),
             ),
           ),
         ],
