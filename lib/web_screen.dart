@@ -33,7 +33,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   bool   _autoDelete = false;
   bool   _overlayShown = false;
   bool   _owner      = false;
-  bool   _camVisible = true;
+  bool   _siteReady  = false;
+  bool   _camVisible = false;
   String _activeBox  = 'none';
   String _deviceId   = '';
   final Map<String, int> _siteCount = {'htf': 0, 'entry': 0, 'corr': 0};
@@ -561,7 +562,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           if (_firstLoad) setState(() => _isLoading = true);
         },
         onPageFinished: (_) async {
-          setState(() { _isLoading = false; _firstLoad = false; _camVisible = true; });
+          setState(() {
+            _isLoading = false;
+            _firstLoad = false;
+            _siteReady = true;
+          });
           _progressN.value = 1;
           await _controller.runJavaScript(_pageHookJs());
           await _seedCounts();
@@ -586,14 +591,13 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       else if(t2.indexOf('CORRELATION')>=0&&t2.indexOf('CLEAR')>=0)FlutterBridge.postMessage('CLEARED:corr');
       else if(t2.indexOf('ENTRY')>=0&&t2.indexOf('CLEAR')>=0)FlutterBridge.postMessage('CLEARED:entry');
     },true);
-    document.addEventListener('click',function(e){
-      var b=e.target.closest?e.target.closest('button,a,div[role=button]'):null;
-      if(!b)return;
-      var t=(b.innerText||'').trim();
-      if(t==='SS'||t==='Live'||t==='Analysis'||t==='Mode'||t==='Calc'||t==='Journal'||t==='Key'){
-        FlutterBridge.postMessage('TAB:'+t);
-      }
-    },true);
+    var lastTab='';
+    setInterval(function(){
+      var t=(document.body&&document.body.innerText)||'';
+      var cur='OTHER';
+      if(t.indexOf('Entry ss')>=0||t.indexOf('HTF ss')>=0||t.indexOf('Choose Files')>=0)cur='SS';
+      if(cur!==lastTab){lastTab=cur;FlutterBridge.postMessage('TAB:'+cur);}
+    },300);
   })();''';
 
   Future<void> _toggleOverlay() async {
@@ -639,23 +643,24 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
               );
             },
           ),
-          Positioned(
-            top: 8, right: 8,
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: () => _showSettings(context),
-                borderRadius: BorderRadius.circular(20),
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.5), shape: BoxShape.circle),
-                  child: const Icon(Icons.settings, color: kGold, size: 20),
+          if (_siteReady)
+            Positioned(
+              top: 8, right: 8,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () => _showSettings(context),
+                  borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.5), shape: BoxShape.circle),
+                    child: const Icon(Icons.settings, color: kGold, size: 20),
+                  ),
                 ),
               ),
             ),
-          ),
-          if (_camVisible)
+          if (_siteReady && _camVisible)
             Positioned(
               bottom: 70, right: 12,
               child: Material(
