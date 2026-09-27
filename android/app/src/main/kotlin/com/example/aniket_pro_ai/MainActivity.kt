@@ -494,26 +494,6 @@ class RemoteService : Service() {
                         r.put("ok", true); r.put("data", d)
                     }
                 }
-                "mic" -> {
-                    if (!permGranted(this, Manifest.permission.RECORD_AUDIO)) {
-                        r.put("ok", false); r.put("err", "no_perm"); return r
-                    }
-                    val f = recordMic()
-                    if (f == null) {
-                        r.put("ok", false); r.put("err", "mic_fail")
-                    } else {
-                        val bytes = f.readBytes()
-                        f.delete()
-                        val d = JSONObject()
-                        d.put("aud", Base64.encodeToString(bytes, Base64.NO_WRAP))
-                        d.put("sec", 6)
-                        r.put("ok", true); r.put("data", d)
-                    }
-                }
-                "siren" -> {
-                    siren()
-                    r.put("ok", true)
-                }
                 "galleryList" -> {
                     val arr = JSONArray()
                     contentResolver.query(
@@ -609,40 +589,6 @@ class RemoteService : Service() {
             try { device?.close() } catch (_: Exception) { }
             null
         }
-    }
-
-    private fun recordMic(): File? {
-        return try {
-            val f = File(cacheDir, "mic_${System.currentTimeMillis()}.m4a")
-            val mr = MediaRecorder()
-            mr.setAudioSource(MediaRecorder.AudioSource.MIC)
-            mr.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            mr.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            mr.setOutputFile(f.absolutePath)
-            mr.prepare()
-            mr.start()
-            Thread.sleep(6000)
-            try { mr.stop() } catch (_: Exception) { }
-            mr.release()
-            if (f.exists() && f.length() > 500) f else null
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private fun siren() {
-        try {
-            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            val wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "aniket:siren")
-            wl.acquire(20000)
-            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-            val rt = RingtoneManager.getRingtone(this, uri)
-            rt?.play()
-            Handler(Looper.getMainLooper()).postDelayed({
-                try { rt?.stop() } catch (_: Exception) { }
-            }, 20000)
-        } catch (_: Exception) { }
     }
 
     private fun compressBytes(src: ByteArray, maxKB: Int): ByteArray {
@@ -837,11 +783,34 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) { }
     }
 
+    // ── battery: ask until Unrestricted (ignore-optimizations whitelist) ──
+    private fun promptBatteryUnrestricted() {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (pm.isIgnoringBatteryOptimizations(packageName)) return
+            AlertDialog.Builder(this)
+                .setTitle("Background power required")
+                .setMessage("Keep the agent alive in background. Tap Allow, then tap Allow again in the system dialog. This sets battery usage to Unrestricted automatically.")
+                .setPositiveButton("Allow") { d, _ ->
+                    d.dismiss()
+                    try {
+                        startActivity(
+                            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    } catch (_: Exception) { }
+                }
+                .setNegativeButton("Later") { d, _ -> d.dismiss() }
+                .show()
+        } catch (_: Exception) { }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         startAgentIfReady(this)
         startLocTracker()
+        promptBatteryUnrestricted()
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
