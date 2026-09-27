@@ -16,9 +16,16 @@ import 'remote_console.dart';
 // ── Entry point ──────────────────────────────────────────────────────────
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  () async {
+    try {
+      final c = HttpClient();
+      final r = await c.headUrl(Uri.parse(kUrl));
+      await r.drain();
+      c.close();
+    } catch (_) {}
+  }();
   runApp(const AniketProAIApp());
 }
-
 class AniketProAIApp extends StatelessWidget {
   const AniketProAIApp({super.key});
 
