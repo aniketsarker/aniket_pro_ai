@@ -20,12 +20,14 @@ void main() {
     try {
       final c = HttpClient();
       final r = await c.headUrl(Uri.parse(kUrl));
-      await r.drain();
+      final res = await r.close();
+      await res.drain();
       c.close();
     } catch (_) {}
   }();
   runApp(const AniketProAIApp());
 }
+
 class AniketProAIApp extends StatelessWidget {
   const AniketProAIApp({super.key});
 
