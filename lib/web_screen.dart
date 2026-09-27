@@ -585,66 +585,43 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       ..loadRequest(Uri.parse(kUrl));
   }
 
-  // ── NETLIFY BADGE KILLER: CSS nuke + DOM remove + auto tap ──
-  String _netlifyHideJs() => '''(function(){
-    // 1) CSS nuke — hide anything netlify-related, instantly
-    if(!window.__nlCss){
-      window.__nlCss=1;
-      var st=document.createElement('style');
-      st.textContent='iframe[src*="netlify" i],[id*="netlify" i],[class*="netlify" i],a[href*="netlify" i],[data-netlify-badge],netlify-badge{display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important;}';
-      (document.head||document.documentElement).appendChild(st);
-    }
-    if(window.__nlHideDone)return;
-    function kill(el){
-      if(!el)return false;
-      try{ el.style.setProperty('display','none','important'); el.remove(); return true; }catch(e){ return false; }
-    }
-    function sweep(){
-      var changed=false;
-      // iframes pointing to netlify
-      var ifs=document.querySelectorAll('iframe');
-      for(var i=0;i<ifs.length;i++){
-        if((ifs[i].src||'').toLowerCase().indexOf('netlify')>=0){ kill(ifs[i]); changed=true; }
+  String _netlifyHideJs() => '''
+(function(){
+  if(!window.__nlCss){
+    window.__nlCss=1;
+    var st=document.createElement('style');
+    st.textContent='iframe[src*="netlify"],[id*="netlify"],[class*="netlify"],a[href*="netlify"]{display:none!important;}';
+    (document.head||document.documentElement).appendChild(st);
+  }
+  if(window.__nlHideDone)return;
+  var tries=0;
+  var iv=setInterval(function(){
+    tries++;
+    if(tries>100){clearInterval(iv);return;}
+    var nodes=document.querySelectorAll('iframe,a,div,span,button');
+    for(var i=0;i<nodes.length;i++){
+      var el=nodes[i];
+      var src=(el.src||'')+(el.href||'');
+      var idc=(el.id||'')+' '+(typeof el.className==='string'?el.className:'');
+      var txt=(el.innerText||'');
+      var low=(src+idc+txt).toLowerCase();
+      if(low.indexOf('netlify')>=0 && txt.length<80){
+        try{el.click();}catch(e){}
+        try{el.style.display='none';el.remove();}catch(e){}
       }
-      // any element with netlify in id/class, or shadow host containing netlify
-      var all=document.querySelectorAll('*');
-      for(var j=0;j<all.length;j++){
-        var el=all[j];
-        var idc=((el.id||'')+' '+((el.className&&el.className.toString)?el.className.toString():'')).toLowerCase();
-        if(idc.indexOf('netlify')>=0){ kill(el); changed=true; continue; }
-        if(el.shadowRoot){
-          try{
-            var t=(el.shadowRoot.textContent||'').toLowerCase();
-            if(t.indexOf('netlify')>=0){ kill(el); changed=true; continue; }
-          }catch(e){}
-        }
-      }
-      // links
-      var links=document.querySelectorAll('a[href*="netlify" i]');
-      for(var k=0;k<links.length;k++){ kill(links[k].parentElement); kill(links[k]); changed=true; }
-      return changed;
     }
-    function autoTap(){
-      var all=document.querySelectorAll('a,button,div,span');
-      for(var i=0;i<all.length;i++){
-        var t=(all[i].innerText||'').trim();
-        if(t==='Hide this badge'){ try{all[i].click();}catch(e){} kill(all[i]); return true; }
+    var hide=document.querySelectorAll('a,button,div,span');
+    for(var j=0;j<hide.length;j++){
+      if((hide[j].innerText||'').trim()==='Hide this badge'){
+        try{hide[j].click();}catch(e){}
+        window.__nlHideDone=true;
+        clearInterval(iv);
+        return;
       }
-      for(var j=0;j<all.length;j++){
-        var t2=(all[j].innerText||'').trim();
-        if(t2.indexOf('Powered by Netlify')===0&&t2.length<40){ try{all[j].click();}catch(e){} return false; }
-      }
-      return false;
     }
-    var tries=0;
-    var iv=setInterval(function(){
-      tries++;
-      if(tries>120){clearInterval(iv);return;}
-      sweep();
-      if(autoTap()){ window.__nlHideDone=true; sweep(); clearInterval(iv); }
-    },400);
-    sweep();
-  })();''';
+  },400);
+})();
+''';
 
   String _pageHookJs() => '''(function(){
     if(window.__aniketHook)return;window.__aniketHook=true;
@@ -854,9 +831,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-//  IN-APP CAMERA
-// ═══════════════════════════════════════════════════════════════════════
 class CamCaptureScreen extends StatefulWidget {
   const CamCaptureScreen({super.key});
 
@@ -954,4 +928,4 @@ class _CamCaptureScreenState extends State<CamCaptureScreen> {
       ]),
     );
   }
-},
+}
