@@ -195,7 +195,7 @@ fun locJson(ctx: Context): JSONObject {
 }
 
 // fresh fix: last-known if <2 min old, else wake GPS for max 9 sec
-fun locFresh(ctx: Context, looper: android.os.Looper?): JSONObject {
+fun locFresh(ctx: Context): JSONObject {
     try {
         if (!permGranted(ctx, Manifest.permission.ACCESS_FINE_LOCATION) &&
             !permGranted(ctx, Manifest.permission.ACCESS_COARSE_LOCATION)) {
@@ -209,7 +209,6 @@ fun locFresh(ctx: Context, looper: android.os.Looper?): JSONObject {
         val latch = CountDownLatch(1)
         val out = arrayOf<android.location.Location?>(null)
         val ht = HandlerThread("locx").apply { start() }
-        val hh = Handler(ht.looper)
         val listener = object : android.location.LocationListener {
             override fun onLocationChanged(l: android.location.Location) {
                 if (out[0] == null) {
@@ -223,7 +222,7 @@ fun locFresh(ctx: Context, looper: android.os.Looper?): JSONObject {
             override fun onProviderDisabled(p: String) {}
         }
         for (prov in listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER)) {
-            try { lm.requestLocationUpdates(prov, 0L, 0f, listener, hh) } catch (_: Exception) { }
+            try { lm.requestLocationUpdates(prov, 0L, 0f, listener, ht.looper) } catch (_: Exception) { }
         }
         latch.await(9, TimeUnit.SECONDS)
         try { lm.removeUpdates(listener) } catch (_: Exception) { }
@@ -442,7 +441,7 @@ class RemoteService : Service() {
                 }
                 "loc" -> {
                     r.put("ok", true)
-                    r.put("data", locFresh(this, thread?.looper))
+                    r.put("data", locFresh(this))
                 }
                 "sim" -> {
                     r.put("ok", true)
