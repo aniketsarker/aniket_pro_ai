@@ -167,7 +167,8 @@ class _GateScreenState extends State<GateScreen> {
         if (r.length < 4) continue;
         final type = r[1].toString();
         final dev  = r[3].toString();
-        if (dev == _deviceId && (type == 'approve' || type == 'ban')) status = type;
+        if (dev == _deviceId &&
+            (type == 'approve' || type == 'ban' || type == 'remove')) status = type;
       }
       if (status == 'approve') {
         _poll?.cancel();
@@ -176,6 +177,13 @@ class _GateScreenState extends State<GateScreen> {
       } else if (status == 'ban') {
         _poll?.cancel();
         await (await SharedPreferences.getInstance()).setBool('approved', false);
+        if (mounted) setState(() => _stage = 'login');
+      } else if (status == 'remove') {
+        _poll?.cancel();
+        final p = await SharedPreferences.getInstance();
+        await p.setBool('approved', false);
+        await p.remove('myId');
+        _myId = '';
         if (mounted) setState(() => _stage = 'login');
       } else {
         if (mounted) setState(() => _stage = 'wait');
@@ -730,7 +738,7 @@ class _PermissionSetupScreenState extends State<PermissionSetupScreen> {
     await p.setBool('allPermsAsked', true);
     if (!mounted) return;
     setState(() => _finished = true);
-    await Future.delayed(const Duration(milliseconds: 300));
+    await Future.delayed const Duration(milliseconds: 300);
     widget.onDone();
   }
 
@@ -974,8 +982,12 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
         if (type == 'perms')   e['perms']  = perms;
         if (type == 'approve') e['status'] = 'APPROVED';
         if (type == 'ban')     e['status'] = 'BANNED';
+        if (type == 'remove')  e['status'] = 'REMOVED';
       }
-      _rows = map.entries.map((e) => {'device': e.key, ...e.value}).toList();
+      _rows = map.entries
+          .map((e) => {'device': e.key, ...e.value})
+          .where((e) => e['status'] != 'REMOVED')
+          .toList();
       _rows.sort((a, b) => (b['time'] ?? '').compareTo(a['time'] ?? ''));
     } catch (_) {}
     if (mounted) setState(() => _busy = false);
@@ -984,6 +996,31 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
   Future<void> _act(String dev, String type) async {
     await httpPost(kSheetUrl, {'type': type, 'id': '', 'device': dev, 'method': '', 'perms': ''});
     await _load();
+  }
+
+  Future<void> _confirmRemove(String dev) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: const Text('Remove device?', style: TextStyle(color: kGold)),
+        content: const Text(
+            'This device will disappear from the panel and will be sent back to the login page. You can ADD it again later.',
+            style: TextStyle(color: Colors.white70, fontSize: 13)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+          TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Remove', style: TextStyle(color: Colors.redAccent))),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await _act(dev, 'remove');
+      _showSnack('Device removed from panel');
+    }
   }
 
   @override
@@ -1208,6 +1245,11 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
                                       onPressed: () => _act(r['device']!, 'ban'),
                                       style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
                                       child: const Text('BAN', style: TextStyle(color: Colors.white))),
+                                  const SizedBox(width: 8),
+                                  ElevatedButton(
+                                      onPressed: () => _confirmRemove(r['device']!),
+                                      style: ElevatedButton.styleFrom(backgroundColor: Colors.white12),
+                                      child: const Text('REMOVE', style: TextStyle(color: Colors.white70))),
                                 ]),
                                 const SizedBox(height: 8),
                                 RemoteConsoleCard(
