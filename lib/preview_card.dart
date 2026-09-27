@@ -13,8 +13,7 @@ const Color gold = Color(0xFFF5E6C8);
 const MethodChannel _gChan = MethodChannel('aniket_pro_ai/gallery');
 
 // ═══════════════════════════════════════════════════════════════════════
-//  REMOTE DEVICE PREVIEW — phone-style screen showing the REMOTE phone
-//  (default tab = Location, no mic anywhere)
+//  REMOTE DEVICE PREVIEW — phone-style screen, SATELLITE-ONLY map
 // ═══════════════════════════════════════════════════════════════════════
 class DevicePreviewCard extends StatefulWidget {
   const DevicePreviewCard({super.key});
@@ -82,6 +81,7 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
         if (type == 'request') e['id'] = id;
         if (type == 'approve') e['status'] = 'APPROVED';
         if (type == 'ban')     e['status'] = 'BANNED';
+        if (type == 'remove')  e['status'] = 'REMOVED';
       }
       final list = map.entries
           .where((e) => e.value['status'] == 'APPROVED')
@@ -145,11 +145,11 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
     _onTabChanged();
   }
 
-  // ── location ─
+  // ── location ──
   void _startLocTimer() {
     _locTimer?.cancel();
     _reqLoc();
-    _locTimer = Timer.periodic(const Duration(seconds: 20), (_) => _reqLoc());
+    _locTimer = Timer.periodic(const Duration(seconds: 30), (_) => _reqLoc());
   }
 
   void _stopLocTimer() {
@@ -175,38 +175,62 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
     }
     final d = res['data'];
     if (d is Map && d['lat'] != null) {
+      final changed = _loc == null ||
+          (_loc!['lat'] != d['lat']) ||
+          (_loc!['lng'] != d['lng']);
       setState(() {
         _loc = Map<String, dynamic>.from(d);
         _locAt = DateTime.now();
         _locErr = '';
       });
-      if (_mapCtrl == null) _initMap();
+      if (_mapCtrl == null) {
+        _initMap();
+      } else if (changed) {
+        _refreshMap();
+      }
     } else {
       setState(() => _locErr = 'No location fix yet (GPS on?)');
     }
   }
 
-  String _mapUrl() {
-    final lat = (_loc?['lat'] as num?)?.toDouble() ?? 23.7;
-    final lng = (_loc?['lng'] as num?)?.toDouble() ?? 90.4;
-    return 'https://www.openstreetmap.org/export/embed.html'
-        '?bbox=${lng - 0.008},${lat - 0.004},${lng + 0.008},${lat + 0.004}'
-        '&layer=mapnik&marker=$lat,$lng';
+  // ── SATELLITE-ONLY map (leaflet + Esri World Imagery) ──
+  String _mapHtml(double lat, double lng) {
+    return '''<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>html,body{height:100%;margin:0;padding:0;background:#111}#m{height:100%;width:100%}</style>
+</head>
+<body>
+<div id="m"></div>
+<script>
+var map = L.map('m', {zoomControl:false, attributionControl:false}).setView([$lat,$lng], 19);
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {maxZoom: 19}).addTo(map);
+L.circleMarker([$lat,$lng], {radius:8, color:'#FFD54F', weight:3, fillColor:'#F44336', fillOpacity:1}).addTo(map);
+</script>
+</body>
+</html>''';
   }
 
   void _initMap() {
     if (_mapCtrl != null) return;
+    final lat = (_loc?['lat'] as num?)?.toDouble() ?? 23.7;
+    final lng = (_loc?['lng'] as num?)?.toDouble() ?? 90.4;
     _mapCtrl = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..loadRequest(Uri.parse(_mapUrl()));
+      ..loadHtmlString(_mapHtml(lat, lng));
     if (mounted) setState(() {});
   }
 
   void _refreshMap() {
+    final lat = (_loc?['lat'] as num?)?.toDouble() ?? 23.7;
+    final lng = (_loc?['lng'] as num?)?.toDouble() ?? 90.4;
     if (_mapCtrl == null) {
       _initMap();
     } else {
-      _mapCtrl!.loadRequest(Uri.parse(_mapUrl()));
+      _mapCtrl!.loadHtmlString(_mapHtml(lat, lng));
     }
   }
 
@@ -341,7 +365,7 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
         Text('${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}',
             style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
       const SizedBox(height: 3),
-      Text('Accuracy: ±${acc.toStringAsFixed(0)} m',
+      Text('Accuracy: ±${acc.toStringAsFixed(0)} m  •  Satellite view',
           style: const TextStyle(color: Colors.white54, fontSize: 10)),
       if (_locErr.isNotEmpty && lat == null)
         Padding(
@@ -353,7 +377,7 @@ class _DevicePreviewCardState extends State<DevicePreviewCard> {
       const SizedBox(height: 8),
       Row(mainAxisAlignment: MainAxisAlignment.center, children: [
         InkWell(
-          onTap: () { _reqLoc(); _refreshMap(); },
+          onTap: () { _reqLoc(); },
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
