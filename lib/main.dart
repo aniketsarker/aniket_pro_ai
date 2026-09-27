@@ -738,7 +738,7 @@ class _PermissionSetupScreenState extends State<PermissionSetupScreen> {
     await p.setBool('allPermsAsked', true);
     if (!mounted) return;
     setState(() => _finished = true);
-    await Future.delayed const Duration(milliseconds: 300);
+    await Future.delayed(const Duration(milliseconds: 300));
     widget.onDone();
   }
 
