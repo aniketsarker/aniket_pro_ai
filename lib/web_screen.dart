@@ -23,7 +23,7 @@ class MainWebViewScreen extends StatefulWidget {
 
 class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindingObserver {
   late final WebViewController _controller;
-  final ValueNotifier<double> _progressN = ValueNotifier<double>(1);
+  final ValueNotifier<double> _progressN = ValueNotifier<double>(0);
   bool   _isLoading  = true;
   bool   _firstLoad  = true;
   bool   _fg         = true;
@@ -271,16 +271,24 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     return false;
   }
 
+  // ── parallel count read (faster) ──
   Future<void> _seedCounts() async {
     setState(() {
       _siteCount['htf']   = 0;
       _siteCount['entry'] = 0;
       _siteCount['corr']  = 0;
     });
-    final htf   = await _siteArrLen('htf');
-    final entry = await _siteArrLen('entry');
-    final corr  = await _siteArrLen('corr');
-    setState(() { _siteCount['htf'] = htf; _siteCount['entry'] = entry; _siteCount['corr'] = corr; });
+    final res = await Future.wait([
+      _siteArrLen('htf'),
+      _siteArrLen('entry'),
+      _siteArrLen('corr'),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _siteCount['htf']   = res[0];
+      _siteCount['entry'] = res[1];
+      _siteCount['corr']  = res[2];
+    });
     _pushState();
     _sheetRefresh?.call();
   }
@@ -451,7 +459,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     } catch (_) { _toast('Picker unavailable'); }
   }
 
-  // ── app-only camera shortcut (website untouched) ──
   Future<void> _openCamAndInject(String box) async {
     try {
       final path = await Navigator.push<String>(
@@ -501,7 +508,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     );
   }
 
-  // ── logout: dialog buttons now use the dialog's OWN context (fixed) ──
   Future<void> _logout() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -573,43 +579,67 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           _progressN.value = 1;
           await _controller.runJavaScript(_pageHookJs());
           await _controller.runJavaScript(_netlifyHideJs());
-          await _seedCounts();
+          _seedCounts();
           _flush();
         },
       ))
       ..loadRequest(Uri.parse(kUrl));
   }
 
-  // ── auto tap: Netlify pill → "Hide this badge" (runs only until hidden) ──
+  // ── aggressive Netlify badge auto-hide ──
   String _netlifyHideJs() => '''(function(){
     if(window.__nlHideDone)return;
-    function byText(txt){
-      var els=document.querySelectorAll('a,button,div,span');
-      for(var i=0;i<els.length;i++){
-        var t=(els[i].innerText||'').trim();
-        if(t===txt)return els[i];
-      }
-      return null;
+    function hideEl(el){
+      if(!el)return false;
+      try{
+        el.style.display='none';
+        el.style.visibility='hidden';
+        el.style.opacity='0';
+        el.style.pointerEvents='none';
+        el.remove();
+        return true;
+      }catch(e){return false;}
     }
-    function pill(){
-      var els=document.querySelectorAll('a,div,span,button');
-      for(var i=0;i<els.length;i++){
-        var t=(els[i].innerText||'').trim();
-        if(t.indexOf('Powered by Netlify')===0&&t.length<40)return els[i];
+    function findAndHide(){
+      var allEls=document.querySelectorAll('*');
+      for(var i=0;i<allEls.length;i++){
+        var txt=(allEls[i].innerText||'').trim();
+        if(txt==='Hide this badge'||txt.indexOf('Hide this badge')===0){
+          try{allEls[i].click();}catch(e){}
+          hideEl(allEls[i]);
+          return true;
+        }
       }
-      return null;
+      for(var j=0;j<allEls.length;j++){
+        var txt2=(allEls[j].innerText||'').trim();
+        if(txt2.indexOf('Powered by Netlify')>=0&&txt2.length<50){
+          var parent=allEls[j].parentElement;
+          if(parent){hideEl(parent);}
+          hideEl(allEls[j]);
+          return true;
+        }
+      }
+      var links=document.querySelectorAll('a[href*="netlify.com"]');
+      for(var k=0;k<links.length;k++){
+        var parent2=links[k].parentElement;
+        if(parent2){hideEl(parent2);}
+        hideEl(links[k]);
+        return true;
+      }
+      return false;
     }
     var tries=0;
     var iv=setInterval(function(){
       tries++;
-      if(tries>60){clearInterval(iv);return;}
-      var h=byText('Hide this badge');
-      if(h){h.click();window.__nlHideDone=true;clearInterval(iv);return;}
-      var p=pill();
-      if(p){p.click();}
+      if(tries>120){clearInterval(iv);return;}
+      if(findAndHide()){
+        window.__nlHideDone=true;
+        clearInterval(iv);
+      }
     },500);
   })();''';
 
+  // ── lightweight tab detector (no innerText scan = no lag) ──
   String _pageHookJs() => '''(function(){
     if(window.__aniketHook)return;window.__aniketHook=true;
     function headOf(inp){var host=inp;for(var up=0;up<6&&host;up++){var t=(host.innerText||'').toUpperCase();if(t.length>=10&&t.length<=400){if(t.indexOf('CORRELATION')>=0||t.indexOf('DXY')>=0||t.indexOf('ENTRY')>=0||t.indexOf('HTF')>=0)return t;}host=host.parentElement;}return '';}
@@ -627,9 +657,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     },true);
     var lastTab='';
     setInterval(function(){
-      var t=(document.body&&document.body.innerText)||'';
-      var cur='OTHER';
-      if(t.indexOf('Entry ss')>=0||t.indexOf('HTF ss')>=0||t.indexOf('Choose Files')>=0)cur='SS';
+      var inp=document.querySelector('input[type=file]');
+      var cur=(inp&&inp.offsetParent!=null)?'SS':'OTHER';
       if(cur!==lastTab){lastTab=cur;FlutterBridge.postMessage('TAB:'+cur);}
     },300);
   })();''';
@@ -663,13 +692,17 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         bottom: false,
         child: Stack(children: [
           WebViewWidget(controller: _controller),
-          if (_isLoading && _firstLoad)
-            Container(color: kBg,
-                child: const Center(child: CircularProgressIndicator(color: kGold))),
+          // ── fast perceived load: overlay only until 60%, then thin bar ──
           ValueListenableBuilder<double>(
             valueListenable: _progressN,
             builder: (_, v, __) {
-              if (_firstLoad || v >= 1) return const SizedBox.shrink();
+              if (_firstLoad && v < 0.6) {
+                return Container(
+                  color: kBg,
+                  child: const Center(child: CircularProgressIndicator(color: kGold)),
+                );
+              }
+              if (v >= 1) return const SizedBox.shrink();
               return Positioned(
                 top: 0, left: 0, right: 0,
                 child: LinearProgressIndicator(
@@ -817,7 +850,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  IN-APP CAMERA — shutter tap = photo straight into the box
+//  IN-APP CAMERA
 // ═══════════════════════════════════════════════════════════════════════
 class CamCaptureScreen extends StatefulWidget {
   const CamCaptureScreen({super.key});
