@@ -46,7 +46,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   DateTime _lastErrPop = DateTime(2000);
   Timer?   _banTimer;
   VoidCallback? _sheetRefresh;
-  // ── FIX 2: site says HTF max 4 — now 4 everywhere ──
+  // FIX 1: website-e HTF max "6" theke "4" kora hoyeche — age mismatch chilo,
+  // bubble-e "5/6" dekhato kintu website 4-tar por baki silently drop korto.
+  // Ekhon sob jaygay (bubble FULL, settings, queue limit) 4-i use hobe.
   static const Map<String, int> _max = {'htf': 4, 'entry': 4, 'corr': 1};
 
   @override
@@ -198,8 +200,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  📸 SS AUTO-IMPORT — bubble box → queue → website Choose Files
-  //  FIX 1: box select = capture auto ON
+  //  📸 SS AUTO-IMPORT — bubble box select → queue → website Choose Files
+  //  FIX 2: bubble-e box select korlei "Capture ON" auto hoye jay,
+  //  age eta off-i thakto — user ke manual toggle korte hoto, bhule gele
+  //  screenshot dhora-i porto na, tai input-o hoto na.
   // ═══════════════════════════════════════════════════════════════════
   void _initScreenshotListener() {
     screenshotChannel.setMethodCallHandler((call) async {
@@ -236,7 +240,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         final sel = (call.arguments as String) == 'corr' ? 'none' : call.arguments as String;
         setState(() {
           _activeBox = sel;
-          // ── FIX 1: selecting a box turns capture ON automatically ──
+          // FIX 2: box select korlei capture auto ON — user ke toggle korte hobe na
           if (sel != 'none') _captureOn = true;
         });
         if (sel != 'none') {
@@ -340,8 +344,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     } catch (_) { return bytes; }
   }
 
+  // ── JS: chobi-ta website-er <input type=file> e dhokano (DataTransfer diye) ──
   String _injectJs(String box, String b64, String name) => '''(function(){
-    function headOf(inp){var host=inp;for(var up=0;up<10&&host;up++){var t=(host.innerText||'').toUpperCase();if(t.length>=10&&t.length<=400){if(t.indexOf('CORRELATION')>=0||t.indexOf('DXY')>=0||t.indexOf('ENTRY')>=0||t.indexOf('HTF')>=0)return t;}host=host.parentElement;}return '';}
+    function headOf(inp){var host=inp;for(var up=0;up<6&&host;up++){var t=(host.innerText||'').toUpperCase();if(t.length>=10&&t.length<=400){if(t.indexOf('CORRELATION')>=0||t.indexOf('DXY')>=0||t.indexOf('ENTRY')>=0||t.indexOf('HTF')>=0)return t;}host=host.parentElement;}return '';}
     function pickInput(b){var inputs=document.querySelectorAll('input[type=file]');var i;for(i=0;i<inputs.length;i++){var h=headOf(inputs[i]);if(b==='corr'&&(h.indexOf('CORRELATION')>=0||h.indexOf('DXY')>=0))return inputs[i];if(b==='entry'&&h.indexOf('ENTRY')>=0)return inputs[i];if(b==='htf'&&h.indexOf('HTF')>=0)return inputs[i];}if(b==='corr'){for(i=0;i<inputs.length;i++){if(!inputs[i].multiple)return inputs[i];}return null;}var muls=[];for(i=0;i<inputs.length;i++){if(inputs[i].multiple)muls.push(inputs[i]);}if(b==='entry')return muls[0]||null;if(b==='htf')return muls[muls.length-1]||muls[0]||null;return null;}
     var inp=pickInput('$box');if(!inp)return 'fail';
     window.__ak=window.__ak||{};var key='$box';var list=window.__ak[key];
@@ -380,10 +385,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         bytes = await _compress(rawBytes, maxKB: 300);
         count = await _injectAt(box, base64Encode(bytes), name);
       }
-      if (count == null) {
-        _toast('Inject failed — site input not found for ${box.toUpperCase()}');
-        return false;
-      }
+      if (count == null) return false;
       if (box == 'htf' || box == 'entry') await _waitSiteLen(box, count);
       setState(() {
         _queue.remove(entry);
@@ -415,7 +417,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  🗑️ SS DELIVERY + AUTO-DELETE — bubble OKAY
+  //  🗑️ SS DELIVERY + AUTO-DELETE — bubble OKAY chaple ei code chole
+  //  FIX 3: age delete fail hole kono kotha bolto na — user bhbto hoye
+  //  geche, actually "Allow" dialog miss hole delete hoto na. Ekhon
+  //  fail hole explicit toast dekhabe, jate user bujhte pare ki hoyeche.
   // ═══════════════════════════════════════════════════════════════════
   Future<void> _onOkay() async {
     if (_okayBusy) return;
@@ -645,7 +650,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
   String _pageHookJs() => '''(function(){
     if(window.__aniketHook)return;window.__aniketHook=true;
-    function headOf(inp){var host=inp;for(var up=0;up<10&&host;up++){var t=(host.innerText||'').toUpperCase();if(t.length>=10&&t.length<=400){if(t.indexOf('CORRELATION')>=0||t.indexOf('DXY')>=0||t.indexOf('ENTRY')>=0||t.indexOf('HTF')>=0)return t;}host=host.parentElement;}return '';}
+    function headOf(inp){var host=inp;for(var up=0;up<6&&host;up++){var t=(host.innerText||'').toUpperCase();if(t.length>=10&&t.length<=400){if(t.indexOf('CORRELATION')>=0||t.indexOf('DXY')>=0||t.indexOf('ENTRY')>=0||t.indexOf('HTF')>=0)return t;}host=host.parentElement;}return '';}
     function classify(inp){var h=headOf(inp);if(h.indexOf('CORRELATION')>=0||h.indexOf('DXY')>=0)return 'corr';if(h.indexOf('ENTRY')>=0)return 'entry';if(h.indexOf('HTF')>=0)return 'htf';if(!inp.multiple)return 'corr';var inputs=document.querySelectorAll('input[type=file]');var idx=Array.prototype.indexOf.call(inputs,inp);if(idx===0)return 'entry';return 'htf';}
     document.addEventListener('click',function(e){
       var t=e.target,inp=null;
@@ -756,6 +761,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════════
+  //  ⚙️ SETTINGS — Capture ON + Gallery Auto-Delete switch ekhane
+  // ═══════════════════════════════════════════════════════════════════
   void _showSettings() {
     showModalBottomSheet(
       context: context,
