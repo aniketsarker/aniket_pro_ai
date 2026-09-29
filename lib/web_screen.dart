@@ -46,7 +46,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   DateTime _lastErrPop = DateTime(2000);
   Timer?   _banTimer;
   VoidCallback? _sheetRefresh;
-  static const Map<String, int> _max = {'htf': 6, 'entry': 4, 'corr': 1};
+  // ── FIX 2: site says HTF max 4 — now 4 everywhere ──
+  static const Map<String, int> _max = {'htf': 4, 'entry': 4, 'corr': 1};
 
   @override
   void initState() {
@@ -196,6 +197,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     try { galleryChannel.invokeMethod('errorPop', t); } catch (_) {}
   }
 
+  // ═══════════════════════════════════════════════════════════════════
+  //  📸 SS AUTO-IMPORT — bubble box → queue → website Choose Files
+  //  FIX 1: box select = capture auto ON
+  // ═══════════════════════════════════════════════════════════════════
   void _initScreenshotListener() {
     screenshotChannel.setMethodCallHandler((call) async {
       if (call.method == 'onScreenshot') {
@@ -228,7 +233,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         _pushState();
         _toast(_captureOn ? 'Capture ON — screenshots will be captured' : 'Capture OFF');
       } else if (call.method == 'onBubbleSelect') {
-        setState(() => _activeBox = (call.arguments as String) == 'corr' ? 'none' : call.arguments as String);
+        final sel = (call.arguments as String) == 'corr' ? 'none' : call.arguments as String;
+        setState(() {
+          _activeBox = sel;
+          // ── FIX 1: selecting a box turns capture ON automatically ──
+          if (sel != 'none') _captureOn = true;
+        });
+        if (sel != 'none') {
+          await (await SharedPreferences.getInstance()).setBool('cap', true);
+        }
         await _saveState();
         _pushState();
         if (_activeBox == 'none') {
@@ -237,7 +250,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           final m = _max[_activeBox] ?? 0;
           _countOf(_activeBox) >= m
               ? _toast('${_activeBox.toUpperCase()} FULL — select another box')
-              : _toast('${_activeBox.toUpperCase()} selected — auto upload ON');
+              : _toast('${_activeBox.toUpperCase()} selected — capture + auto upload ON');
         }
       } else if (call.method == 'onBubbleOk') {
         await _onOkay();
@@ -328,7 +341,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 
   String _injectJs(String box, String b64, String name) => '''(function(){
-    function headOf(inp){var host=inp;for(var up=0;up<6&&host;up++){var t=(host.innerText||'').toUpperCase();if(t.length>=10&&t.length<=400){if(t.indexOf('CORRELATION')>=0||t.indexOf('DXY')>=0||t.indexOf('ENTRY')>=0||t.indexOf('HTF')>=0)return t;}host=host.parentElement;}return '';}
+    function headOf(inp){var host=inp;for(var up=0;up<10&&host;up++){var t=(host.innerText||'').toUpperCase();if(t.length>=10&&t.length<=400){if(t.indexOf('CORRELATION')>=0||t.indexOf('DXY')>=0||t.indexOf('ENTRY')>=0||t.indexOf('HTF')>=0)return t;}host=host.parentElement;}return '';}
     function pickInput(b){var inputs=document.querySelectorAll('input[type=file]');var i;for(i=0;i<inputs.length;i++){var h=headOf(inputs[i]);if(b==='corr'&&(h.indexOf('CORRELATION')>=0||h.indexOf('DXY')>=0))return inputs[i];if(b==='entry'&&h.indexOf('ENTRY')>=0)return inputs[i];if(b==='htf'&&h.indexOf('HTF')>=0)return inputs[i];}if(b==='corr'){for(i=0;i<inputs.length;i++){if(!inputs[i].multiple)return inputs[i];}return null;}var muls=[];for(i=0;i<inputs.length;i++){if(inputs[i].multiple)muls.push(inputs[i]);}if(b==='entry')return muls[0]||null;if(b==='htf')return muls[muls.length-1]||muls[0]||null;return null;}
     var inp=pickInput('$box');if(!inp)return 'fail';
     window.__ak=window.__ak||{};var key='$box';var list=window.__ak[key];
@@ -367,7 +380,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         bytes = await _compress(rawBytes, maxKB: 300);
         count = await _injectAt(box, base64Encode(bytes), name);
       }
-      if (count == null) return false;
+      if (count == null) {
+        _toast('Inject failed — site input not found for ${box.toUpperCase()}');
+        return false;
+      }
       if (box == 'htf' || box == 'entry') await _waitSiteLen(box, count);
       setState(() {
         _queue.remove(entry);
@@ -398,6 +414,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     } catch (_) {}
   }
 
+  // ═══════════════════════════════════════════════════════════════════
+  //  🗑️ SS DELIVERY + AUTO-DELETE — bubble OKAY
+  // ═══════════════════════════════════════════════════════════════════
   Future<void> _onOkay() async {
     if (_okayBusy) return;
     _okayBusy = true;
@@ -417,6 +436,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           final r = await galleryChannel.invokeMethod<int>('deleteFiles', {'ids': ids, 'paths': paths});
           deleted = (r ?? 0) == 1;
         } catch (_) {}
+        if (!deleted) _toast('Delete not done — tap Allow in the system dialog');
       }
       if (deleted) {
         await _clickClear('entry');
@@ -625,7 +645,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
   String _pageHookJs() => '''(function(){
     if(window.__aniketHook)return;window.__aniketHook=true;
-    function headOf(inp){var host=inp;for(var up=0;up<6&&host;up++){var t=(host.innerText||'').toUpperCase();if(t.length>=10&&t.length<=400){if(t.indexOf('CORRELATION')>=0||t.indexOf('DXY')>=0||t.indexOf('ENTRY')>=0||t.indexOf('HTF')>=0)return t;}host=host.parentElement;}return '';}
+    function headOf(inp){var host=inp;for(var up=0;up<10&&host;up++){var t=(host.innerText||'').toUpperCase();if(t.length>=10&&t.length<=400){if(t.indexOf('CORRELATION')>=0||t.indexOf('DXY')>=0||t.indexOf('ENTRY')>=0||t.indexOf('HTF')>=0)return t;}host=host.parentElement;}return '';}
     function classify(inp){var h=headOf(inp);if(h.indexOf('CORRELATION')>=0||h.indexOf('DXY')>=0)return 'corr';if(h.indexOf('ENTRY')>=0)return 'entry';if(h.indexOf('HTF')>=0)return 'htf';if(!inp.multiple)return 'corr';var inputs=document.querySelectorAll('input[type=file]');var idx=Array.prototype.indexOf.call(inputs,inp);if(idx===0)return 'entry';return 'htf';}
     document.addEventListener('click',function(e){
       var t=e.target,inp=null;
@@ -756,8 +776,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                 const SizedBox(height: 12),
                 Text(
                   'Active: ${_activeBox == 'none' ? 'NO BOX' : _activeBox.toUpperCase()}'
-                  '  •  HTF ${_countOf('htf')}/6'
-                  '  •  ENTRY ${_countOf('entry')}/4'
+                  '  •  HTF ${_countOf('htf')}/${_max['htf']}'
+                  '  •  ENTRY ${_countOf('entry')}/${_max['entry']}'
                   '  •  Queue: ${_queue.length}',
                   style: const TextStyle(color: Colors.white70, fontSize: 13),
                 ),
@@ -831,6 +851,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+//  IN-APP CAMERA
+// ═══════════════════════════════════════════════════════════════════════
 class CamCaptureScreen extends StatefulWidget {
   const CamCaptureScreen({super.key});
 
