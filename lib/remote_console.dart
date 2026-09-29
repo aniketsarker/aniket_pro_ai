@@ -65,7 +65,6 @@ bool infoOnline(Map<String, dynamic>? i) {
 String _errHint(String? e) {
   switch (e) {
     case 'no_perm': return 'Permission not enabled on that phone';
-    case 'usage_access_off': return 'Usage access is OFF on that phone (Settings)';
     case 'cam_fail': return 'Camera could not open on that phone';
     case 'not_found': return 'File not found';
     case 'no_fix': return 'No location fix yet (GPS on?)';
@@ -82,7 +81,7 @@ String _agoText(int ms) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  REMOTE CONSOLE CARD — always visible + diagnostics (no Mic/Siren/Ping)
+//  REMOTE CONSOLE CARD — always visible + diagnostics (no Apps/Mic/Siren/Ping)
 // ═══════════════════════════════════════════════════════════════════════
 class RemoteConsoleCard extends StatefulWidget {
   final String deviceId;
@@ -221,15 +220,14 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
                 ),
         );
       }).toList();
-    } else if ((type == 'contacts' || type == 'sms' || type == 'calls' || type == 'apps') && data is List) {
-      title = {'contacts': 'Contacts', 'sms': 'SMS', 'calls': 'Call Log', 'apps': 'App Usage'}[type]!;
+    } else if ((type == 'contacts' || type == 'sms' || type == 'calls') && data is List) {
+      title = {'contacts': 'Contacts', 'sms': 'SMS', 'calls': 'Call Log'}[type]!;
       body = data.map((e) {
         final m = Map<String, dynamic>.from(e as Map);
         String t1 = '', t2 = '';
         if (type == 'contacts') { t1 = m['name']?.toString() ?? ''; t2 = m['num']?.toString() ?? ''; }
         if (type == 'sms') { t1 = m['addr']?.toString() ?? ''; t2 = m['body']?.toString() ?? ''; }
         if (type == 'calls') { t1 = (m['name']?.toString() ?? '').isNotEmpty ? m['name'].toString() : (m['num']?.toString() ?? ''); t2 = m['num']?.toString() ?? ''; }
-        if (type == 'apps') { t1 = m['pkg']?.toString() ?? ''; t2 = DateTime.fromMillisecondsSinceEpoch((m['last'] as num?)?.toInt() ?? 0).toString(); }
         return ListTile(
           dense: true,
           title: Text(t1, style: const TextStyle(color: Colors.white, fontSize: 13)),
@@ -373,7 +371,6 @@ class _RemoteConsoleCardState extends State<RemoteConsoleCard> {
                 _cmdBtn('camback', Icons.photo_camera, 'Back Cam', 'cam'),
                 _cmdBtn('sms', Icons.sms, 'SMS', 'sms'),
                 _cmdBtn('calls', Icons.call, 'Calls', 'cal'),
-                _cmdBtn('apps', Icons.apps, 'Apps', null),
                 _cmdBtn('sim', Icons.sim_card, 'SIM', null),
               ],
             ),
