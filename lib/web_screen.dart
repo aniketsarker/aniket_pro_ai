@@ -46,9 +46,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   DateTime _lastErrPop = DateTime(2000);
   Timer?   _banTimer;
   VoidCallback? _sheetRefresh;
-  // FIX 1: website-e HTF max "6" theke "4" kora hoyeche — age mismatch chilo,
-  // bubble-e "5/6" dekhato kintu website 4-tar por baki silently drop korto.
-  // Ekhon sob jaygay (bubble FULL, settings, queue limit) 4-i use hobe.
   static const Map<String, int> _max = {'htf': 4, 'entry': 4, 'corr': 1};
 
   @override
@@ -185,6 +182,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         'htf': _countOf('htf'),
         'entry': _countOf('entry'),
         'corr': _countOf('corr'),
+        // FIX: max-count-o native/Kotlin bubble UI-ke pathano hocche, jate popup-e
+        // "HTF (0/6)"-er bodole "HTF (0/4)" thik-moto dekhায় (age eta pathanoi hoyto na,
+        // tai native side nijer purono hardcoded "6" diye dekhachilo).
+        'htfMax': _max['htf'],
+        'entryMax': _max['entry'],
+        'corrMax': _max['corr'],
         'active': _activeBox,
         'capture': _captureOn ? 1 : 0,
       });
@@ -200,10 +203,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  📸 SS AUTO-IMPORT — bubble box select → queue → website Choose Files
-  //  FIX 2: bubble-e box select korlei "Capture ON" auto hoye jay,
-  //  age eta off-i thakto — user ke manual toggle korte hoto, bhule gele
-  //  screenshot dhora-i porto na, tai input-o hoto na.
+  //  🫧 BUBBLE + SS AUTO-IMPORT — the brain of the whole flow
   // ═══════════════════════════════════════════════════════════════════
   void _initScreenshotListener() {
     screenshotChannel.setMethodCallHandler((call) async {
@@ -240,7 +240,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         final sel = (call.arguments as String) == 'corr' ? 'none' : call.arguments as String;
         setState(() {
           _activeBox = sel;
-          // FIX 2: box select korlei capture auto ON — user ke toggle korte hobe na
           if (sel != 'none') _captureOn = true;
         });
         if (sel != 'none') {
@@ -344,11 +343,17 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     } catch (_) { return bytes; }
   }
 
-  // ── JS: chobi-ta website-er <input type=file> e dhokano (DataTransfer diye) ──
+  // FIX: age eta "ancestor-text guess" (headOf/pickInput) diye website-er input
+  // khujto — website-er design ektu change hoile-i bhul input dhorto ba kichu-i
+  // pেto na, tai bubble diye SS nile Entry/HTF/Correlation kono-tay-i website-e
+  // jachchilo na. Ekhon SIDHA website-er exact element ID (entryInput / htfInput /
+  // dxyInput) use kora hoy prothome — 100% reliable, website-er layout/text
+  // jotoi change hok. ID na pele-i shudhu purono heuristic-e fallback kore.
   String _injectJs(String box, String b64, String name) => '''(function(){
+    function byId(b){if(b==='htf')return document.getElementById('htfInput');if(b==='entry')return document.getElementById('entryInput');if(b==='corr')return document.getElementById('dxyInput');return null;}
     function headOf(inp){var host=inp;for(var up=0;up<6&&host;up++){var t=(host.innerText||'').toUpperCase();if(t.length>=10&&t.length<=400){if(t.indexOf('CORRELATION')>=0||t.indexOf('DXY')>=0||t.indexOf('ENTRY')>=0||t.indexOf('HTF')>=0)return t;}host=host.parentElement;}return '';}
-    function pickInput(b){var inputs=document.querySelectorAll('input[type=file]');var i;for(i=0;i<inputs.length;i++){var h=headOf(inputs[i]);if(b==='corr'&&(h.indexOf('CORRELATION')>=0||h.indexOf('DXY')>=0))return inputs[i];if(b==='entry'&&h.indexOf('ENTRY')>=0)return inputs[i];if(b==='htf'&&h.indexOf('HTF')>=0)return inputs[i];}if(b==='corr'){for(i=0;i<inputs.length;i++){if(!inputs[i].multiple)return inputs[i];}return null;}var muls=[];for(i=0;i<inputs.length;i++){if(inputs[i].multiple)muls.push(inputs[i]);}if(b==='entry')return muls[0]||null;if(b==='htf')return muls[muls.length-1]||muls[0]||null;return null;}
-    var inp=pickInput('$box');if(!inp)return 'fail';
+    function pickInputFallback(b){var inputs=document.querySelectorAll('input[type=file]');var i;for(i=0;i<inputs.length;i++){var h=headOf(inputs[i]);if(b==='corr'&&(h.indexOf('CORRELATION')>=0||h.indexOf('DXY')>=0))return inputs[i];if(b==='entry'&&h.indexOf('ENTRY')>=0)return inputs[i];if(b==='htf'&&h.indexOf('HTF')>=0)return inputs[i];}if(b==='corr'){for(i=0;i<inputs.length;i++){if(!inputs[i].multiple)return inputs[i];}return null;}var muls=[];for(i=0;i<inputs.length;i++){if(inputs[i].multiple)muls.push(inputs[i]);}if(b==='entry')return muls[0]||null;if(b==='htf')return muls[muls.length-1]||muls[0]||null;return null;}
+    var inp=byId('$box')||pickInputFallback('$box');if(!inp)return 'fail';
     window.__ak=window.__ak||{};var key='$box';var list=window.__ak[key];
     if(!list){list=[];window.__ak[key]=list;}
     if(list.length===0&&inp.files){for(var e2=0;e2<inp.files.length;e2++)list.push(inp.files[e2]);}
@@ -385,7 +390,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         bytes = await _compress(rawBytes, maxKB: 300);
         count = await _injectAt(box, base64Encode(bytes), name);
       }
-      if (count == null) return false;
+      if (count == null) {
+        _toast('Inject failed — site input not found for ${box.toUpperCase()}');
+        return false;
+      }
       if (box == 'htf' || box == 'entry') await _waitSiteLen(box, count);
       setState(() {
         _queue.remove(entry);
@@ -417,10 +425,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  🗑️ SS DELIVERY + AUTO-DELETE — bubble OKAY chaple ei code chole
-  //  FIX 3: age delete fail hole kono kotha bolto na — user bhbto hoye
-  //  geche, actually "Allow" dialog miss hole delete hoto na. Ekhon
-  //  fail hole explicit toast dekhabe, jate user bujhte pare ki hoyeche.
+  //  🗑️ SS DELIVERY + AUTO-DELETE — bubble OKAY
   // ═══════════════════════════════════════════════════════════════════
   Future<void> _onOkay() async {
     if (_okayBusy) return;
@@ -651,7 +656,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   String _pageHookJs() => '''(function(){
     if(window.__aniketHook)return;window.__aniketHook=true;
     function headOf(inp){var host=inp;for(var up=0;up<6&&host;up++){var t=(host.innerText||'').toUpperCase();if(t.length>=10&&t.length<=400){if(t.indexOf('CORRELATION')>=0||t.indexOf('DXY')>=0||t.indexOf('ENTRY')>=0||t.indexOf('HTF')>=0)return t;}host=host.parentElement;}return '';}
-    function classify(inp){var h=headOf(inp);if(h.indexOf('CORRELATION')>=0||h.indexOf('DXY')>=0)return 'corr';if(h.indexOf('ENTRY')>=0)return 'entry';if(h.indexOf('HTF')>=0)return 'htf';if(!inp.multiple)return 'corr';var inputs=document.querySelectorAll('input[type=file]');var idx=Array.prototype.indexOf.call(inputs,inp);if(idx===0)return 'entry';return 'htf';}
+    function classify(inp){if(inp.id==='htfInput')return 'htf';if(inp.id==='entryInput')return 'entry';if(inp.id==='dxyInput')return 'corr';var h=headOf(inp);if(h.indexOf('CORRELATION')>=0||h.indexOf('DXY')>=0)return 'corr';if(h.indexOf('ENTRY')>=0)return 'entry';if(h.indexOf('HTF')>=0)return 'htf';if(!inp.multiple)return 'corr';var inputs=document.querySelectorAll('input[type=file]');var idx=Array.prototype.indexOf.call(inputs,inp);if(idx===0)return 'entry';return 'htf';}
     document.addEventListener('click',function(e){
       var t=e.target,inp=null;
       if(t&&t.tagName==='INPUT'&&t.type==='file')inp=t;
@@ -761,9 +766,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════════
-  //  ⚙️ SETTINGS — Capture ON + Gallery Auto-Delete switch ekhane
-  // ═══════════════════════════════════════════════════════════════════
   void _showSettings() {
     showModalBottomSheet(
       context: context,
