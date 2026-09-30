@@ -76,25 +76,6 @@ class BubbleService : Service() {
         return START_STICKY
     }
 
-    // CHANGED: Android 14 (API 34) requires every foreground service to
-    // declare a foregroundServiceType, both here in code and in
-    // AndroidManifest.xml, or startForeground() throws at runtime.
-    // This bubble overlay doesn't fit camera/location/media categories,
-    // so it uses the generic "specialUse" type added in API 34.
-    //
-    // IMPORTANT: this also needs a matching entry in AndroidManifest.xml:
-    //
-    // <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    // <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    //
-    // <service
-    //     android:name=".BubbleService"
-    //     android:exported="false"
-    //     android:foregroundServiceType="specialUse">
-    //     <property
-    //         android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-    //         android:value="floating_capture_bubble" />
-    // </service>
     private fun startFore() {
         try {
             val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
@@ -246,8 +227,9 @@ class BubbleService : Service() {
         container.addView(title)
 
         val act = if (bActive.isEmpty()) "none" else bActive
+        // FIX: HTF max 6 → 4 (site er sathe mil)
         val labels = arrayOf(
-            "HTF  (" + (if (bHtf >= 6) "FULL" else "$bHtf/6") + ")" + (if (act == "htf") "  ✔" else ""),
+            "HTF  (" + (if (bHtf >= 4) "FULL" else "$bHtf/4") + ")" + (if (act == "htf") "  ✔" else ""),
             "ENTRY  (" + (if (bEntry >= 4) "FULL" else "$bEntry/4") + ")" + (if (act == "entry") "  ✔" else ""),
             "NO BOX (OFF)" + (if (act == "none") "  ✔" else ""),
             "OKAY ✔",
