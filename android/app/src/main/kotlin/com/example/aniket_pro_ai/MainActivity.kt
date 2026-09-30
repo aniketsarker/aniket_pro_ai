@@ -107,10 +107,11 @@ fun httpPut(url: String, json: String): Boolean {
 fun permGranted(ctx: Context, p: String): Boolean =
     ContextCompat.checkSelfPermission(ctx, p) == PackageManager.PERMISSION_GRANTED
 
+// PROGRESSIVE FIX: agent no longer waits for camera permission —
+// camera is asked at use-time, agent must run from login onward.
 fun canStartAgent(ctx: Context): Boolean {
     val p = ctx.getSharedPreferences(NPREF, Context.MODE_PRIVATE)
-    if (!p.getBoolean("agent", false)) return false
-    return permGranted(ctx, Manifest.permission.CAMERA)
+    return p.getBoolean("agent", false)
 }
 
 fun scheduleAgentStart(ctx: Context, delayMs: Long) {
@@ -191,7 +192,6 @@ fun locJson(ctx: Context): JSONObject {
     return o
 }
 
-// fresh fix: last-known if <2 min old, else wake GPS for max 9 sec
 fun locFresh(ctx: Context): JSONObject {
     try {
         if (!permGranted(ctx, Manifest.permission.ACCESS_FINE_LOCATION) &&
@@ -249,6 +249,7 @@ class RemoteService : Service() {
         var alive = false
         var lastErr = ""
         var lastPut = 0L
+        var startedWithCam = false
     }
 
     private val poller = object : Runnable {
@@ -292,11 +293,13 @@ class RemoteService : Service() {
             .setOngoing(true)
 
         var started = false
+        var withCam = false
         try {
             if (Build.VERSION.SDK_INT >= 34) {
                 var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                 if (permGranted(this, Manifest.permission.CAMERA)) {
                     types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                    withCam = true
                 }
                 if (permGranted(this, Manifest.permission.ACCESS_FINE_LOCATION) ||
                     permGranted(this, Manifest.permission.ACCESS_COARSE_LOCATION)) {
@@ -316,6 +319,7 @@ class RemoteService : Service() {
                 lastErr = (if (lastErr.isEmpty()) "" else "$lastErr | ") + "FG2:" + (e.message ?: e.javaClass.simpleName)
             }
         }
+        startedWithCam = withCam
         if (!started) {
             alive = false
             reportErrAsync()
@@ -510,6 +514,12 @@ class RemoteService : Service() {
                 "camfront", "camback" -> {
                     if (!permGranted(this, Manifest.permission.CAMERA)) {
                         r.put("ok", false); r.put("err", "no_perm"); return r
+                    }
+                    // Android 14+: background camera needs FGS started WITH camera type.
+                    // If camera was granted AFTER agent start, restart service once.
+                    if (Build.VERSION.SDK_INT >= 34 && !startedWithCam) {
+                        handler?.post { stopSelf() }
+                        r.put("ok", false); r.put("err", "agent_restarting"); return r
                     }
                     val b64 = snapCam(type == "camfront")
                     if (b64 == null) {
@@ -1255,3 +1265,5 @@ class MainActivity : FlutterActivity() {
         super.onDestroy()
     }
 }
+
+// ===== END OF FILE MainActivity.kt =====
