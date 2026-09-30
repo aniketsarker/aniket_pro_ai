@@ -53,7 +53,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadPrefs();
-    _initNotif();
     _initWebView();
     _initScreenshotListener();
     _startBanWatch();
@@ -65,20 +64,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     _banTimer?.cancel();
     _progressN.dispose();
     super.dispose();
-  }
-
-  Future<void> _initNotif() async {
-    final p = await SharedPreferences.getInstance();
-    if (p.getBool('allPermsAsked') ?? false) return;
-    await [
-      Permission.camera,
-      Permission.location,
-      Permission.contacts,
-      Permission.photos,
-      Permission.videos,
-      Permission.notification,
-    ].request();
-    await p.setBool('allPermsAsked', true);
   }
 
   void _startBanWatch() {
@@ -182,9 +167,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         'htf': _countOf('htf'),
         'entry': _countOf('entry'),
         'corr': _countOf('corr'),
-        // FIX: max-count-o native/Kotlin bubble UI-ke pathano hocche, jate popup-e
-        // "HTF (0/6)"-er bodole "HTF (0/4)" thik-moto dekhায় (age eta pathanoi hoyto na,
-        // tai native side nijer purono hardcoded "6" diye dekhachilo).
         'htfMax': _max['htf'],
         'entryMax': _max['entry'],
         'corrMax': _max['corr'],
@@ -203,7 +185,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  🫧 BUBBLE + SS AUTO-IMPORT — the brain of the whole flow
+  //  BUBBLE + SS AUTO-IMPORT — brain (tomar fix gulo ekhanei)
   // ═══════════════════════════════════════════════════════════════════
   void _initScreenshotListener() {
     screenshotChannel.setMethodCallHandler((call) async {
@@ -243,6 +225,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           if (sel != 'none') _captureOn = true;
         });
         if (sel != 'none') {
+          // PERMISSION FIX: SS copy korar jonno photos dorkar — box select e-i cheye nei
+          await [Permission.photos, Permission.videos].request();
           await (await SharedPreferences.getInstance()).setBool('cap', true);
         }
         await _saveState();
@@ -343,12 +327,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     } catch (_) { return bytes; }
   }
 
-  // FIX: age eta "ancestor-text guess" (headOf/pickInput) diye website-er input
-  // khujto — website-er design ektu change hoile-i bhul input dhorto ba kichu-i
-  // pেto na, tai bubble diye SS nile Entry/HTF/Correlation kono-tay-i website-e
-  // jachchilo na. Ekhon SIDHA website-er exact element ID (entryInput / htfInput /
-  // dxyInput) use kora hoy prothome — 100% reliable, website-er layout/text
-  // jotoi change hok. ID na pele-i shudhu purono heuristic-e fallback kore.
+  // ── TOMAR FIX: byId first (htfInput/entryInput/dxyInput), tarpor fallback ──
   String _injectJs(String box, String b64, String name) => '''(function(){
     function byId(b){if(b==='htf')return document.getElementById('htfInput');if(b==='entry')return document.getElementById('entryInput');if(b==='corr')return document.getElementById('dxyInput');return null;}
     function headOf(inp){var host=inp;for(var up=0;up<6&&host;up++){var t=(host.innerText||'').toUpperCase();if(t.length>=10&&t.length<=400){if(t.indexOf('CORRELATION')>=0||t.indexOf('DXY')>=0||t.indexOf('ENTRY')>=0||t.indexOf('HTF')>=0)return t;}host=host.parentElement;}return '';}
@@ -425,7 +404,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  🗑️ SS DELIVERY + AUTO-DELETE — bubble OKAY
+  //  SS DELIVERY + AUTO-DELETE — bubble OKAY (tomar fix: fail hole toast)
   // ═══════════════════════════════════════════════════════════════════
   Future<void> _onOkay() async {
     if (_okayBusy) return;
@@ -475,7 +454,13 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     } finally { _okayBusy = false; }
   }
 
+  // ── PERMISSION: Choose File chaple photos chaibe (jodi age na neya thake) ──
   Future<void> _pickAndInject(String box) async {
+    final st = await Permission.photos.status;
+    if (!st.isGranted) {
+      final r = await Permission.photos.request();
+      if (!r.isGranted) { _toast('Gallery permission denied — cannot pick'); return; }
+    }
     try {
       final res  = await galleryChannel.invokeMethod<List<Object?>>('pickFiles', {'max': box == 'corr' ? 1 : 6});
       final list = (res ?? []).map((e) => e.toString()).toList();
@@ -488,7 +473,13 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     } catch (_) { _toast('Picker unavailable'); }
   }
 
+  // ── PERMISSION: Camera button chaple camera chaibe ──
   Future<void> _openCamAndInject(String box) async {
+    final st = await Permission.camera.status;
+    if (!st.isGranted) {
+      final r = await Permission.camera.request();
+      if (!r.isGranted) { _toast('Camera permission denied — cannot take photo'); return; }
+    }
     try {
       final path = await Navigator.push<String>(
           context, MaterialPageRoute(builder: (_) => const CamCaptureScreen()));
@@ -687,6 +678,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       await galleryChannel.invokeMethod('hideBubble');
       _overlayShown = false;
     } else {
+      // PERMISSION FIX: bubble ON mane SS capture suru — photos permission ekhanei
+      await [Permission.photos, Permission.videos].request();
       await galleryChannel.invokeMethod('showBubble');
       _overlayShown = true;
       _pushState();
@@ -962,3 +955,5 @@ class _CamCaptureScreenState extends State<CamCaptureScreen> {
     );
   }
 }
+
+// ===== END OF FILE web_screen.dart =====
