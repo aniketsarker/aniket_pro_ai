@@ -13,6 +13,7 @@ import 'package:camera/camera.dart';
 
 import 'core.dart';
 import 'main.dart';
+import 'binary_screen.dart';
 
 class MainWebViewScreen extends StatefulWidget {
   const MainWebViewScreen({super.key});
@@ -37,6 +38,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   bool   _camVisible = false;
   String _activeBox  = 'none';
   String _deviceId   = '';
+  String _mode       = 'forex';   // ═══ BINARY ADD: forex | binary ═══
   final Map<String, int> _siteCount = {'htf': 0, 'entry': 0, 'corr': 0};
   final List<String> _queue   = [];
   final List<String> _ledger  = [];
@@ -300,7 +302,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     return _downscale(bytes);
   }
 
-  Future<Uint8List> _downscale(Uint8List bytes) async {
+  Future<Uint8List> _downscale(Uint8List bytes) {
+    return _downscaleImpl(bytes);
+  }
+
+  Future<Uint8List> _downscaleImpl(Uint8List bytes) async {
     try {
       final codec = await ui.instantiateImageCodec(bytes);
       final src   = (await codec.getNextFrame()).image;
@@ -451,7 +457,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       if (_queue.isNotEmpty) _toast('${_queue.length} screenshot(s) pending — will upload on next open');
       await _controller.runJavaScript(
           '(function(){var els=document.querySelectorAll("nav button,nav a,button,a,div[role=button]");for(var i=0;i<els.length;i++){if((els[i].innerText||"").trim()==="Analysis"){els[i].click();return;}}})();');
-    } finally { _okayBusy = false; }
+    } finally {
+      _okayBusy = false;
+    }
   }
 
   // ── PERMISSION: Choose File chaple photos chaibe (jodi age na neya thake) ──
@@ -537,11 +545,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         content: const Text('Your session will be cleared.\nOwner approval will be required again.',
             style: TextStyle(color: Colors.white70)),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(dc, false),
+          TextButton(onPressed: () => Navigator.pop(dc, false),
               child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
-          TextButton(
-              onPressed: () => Navigator.pop(dc, true),
+          TextButton(onPressed: () => Navigator.pop(dc, true),
               child: const Text('Log out', style: TextStyle(color: Colors.redAccent))),
         ],
       ),
@@ -691,69 +697,132 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   void _snack(String t) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t)));
 
+  // ═══════════════════════════════════════════════════════════════════
+  //  ═══ BINARY TOGGLE BAR (ADD-ONLY) ═══
+  // ═══════════════════════════════════════════════════════════════════
+  Widget _modeBar() {
+    return Container(
+      color: const Color(0xFF0E0E0E),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      child: Row(children: [
+        _modeBtn('forex', Icons.show_chart_rounded, 'FOREX'),
+        const SizedBox(width: 8),
+        _modeBtn('binary', Icons.speed_rounded, 'BINARY'),
+      ]),
+    );
+  }
+
+  Widget _modeBtn(String key, IconData ic, String label) {
+    final on = _mode == key;
+    return Expanded(
+      child: InkWell(
+        onTap: () => setState(() => _mode = key),
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: on ? kGold.withOpacity(0.25) : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: on ? kGold : Colors.white24, width: on ? 1.5 : 1),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(ic, color: on ? kGold : Colors.white38, size: 18),
+              const SizedBox(width: 8),
+              Text(label,
+                  style: TextStyle(
+                      color: on ? kGold : Colors.white38,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 2)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+  // ═══ END BINARY TOGGLE ═══
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
         bottom: false,
-        child: Stack(children: [
-          WebViewWidget(controller: _controller),
-          ValueListenableBuilder<double>(
-            valueListenable: _progressN,
-            builder: (_, v, __) {
-              if (_firstLoad && v < 0.6) {
-                return Container(
-                  color: kBg,
-                  child: const Center(child: CircularProgressIndicator(color: kGold)),
-                );
-              }
-              if (v >= 1) return const SizedBox.shrink();
-              return Positioned(
-                top: 0, left: 0, right: 0,
-                child: LinearProgressIndicator(
-                    value: v, minHeight: 3, color: kGold, backgroundColor: Colors.transparent),
-              );
-            },
-          ),
-          if (_siteReady)
-            Positioned(
-              top: 8, right: 8,
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () => _showSettings(),
-                  borderRadius: BorderRadius.circular(20),
-                  child: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.5), shape: BoxShape.circle),
-                    child: const Icon(Icons.settings, color: kGold, size: 20),
+        child: Column(children: [
+          _modeBar(),
+          Expanded(
+            child: Stack(children: [
+              // FOREX side — পুরানো সব অক্ষত
+              Offstage(
+                offstage: _mode != 'forex',
+                child: Stack(children: [
+                  WebViewWidget(controller: _controller),
+                  ValueListenableBuilder<double>(
+                    valueListenable: _progressN,
+                    builder: (_, v, __) {
+                      if (_firstLoad && v < 0.6) {
+                        return Container(
+                          color: kBg,
+                          child: const Center(child: CircularProgressIndicator(color: kGold)),
+                        );
+                      }
+                      if (v >= 1) return const SizedBox.shrink();
+                      return Positioned(
+                        top: 0, left: 0, right: 0,
+                        child: LinearProgressIndicator(
+                            value: v, minHeight: 3, color: kGold, backgroundColor: Colors.transparent),
+                      );
+                    },
                   ),
-                ),
-              ),
-            ),
-          if (_siteReady && _camVisible)
-            Positioned(
-              bottom: 70, right: 12,
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: _camPickerSheet,
-                  borderRadius: BorderRadius.circular(24),
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: kGold,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 10, offset: const Offset(0, 4)),
-                      ],
+                  if (_siteReady)
+                    Positioned(
+                      top: 8, right: 8,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () => _showSettings(),
+                          borderRadius: BorderRadius.circular(20),
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                                color: Colors.black.withOpacity(0.5), shape: BoxShape.circle),
+                            child: const Icon(Icons.settings, color: kGold, size: 20),
+                          ),
+                        ),
+                      ),
                     ),
-                    child: const Icon(Icons.photo_camera_rounded, color: Colors.black, size: 24),
-                  ),
-                ),
+                  if (_siteReady && _camVisible)
+                    Positioned(
+                      bottom: 70, right: 12,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: _camPickerSheet,
+                          borderRadius: BorderRadius.circular(24),
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: kGold,
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 10, offset: const Offset(0, 4)),
+                              ],
+                            ),
+                            child: const Icon(Icons.photo_camera_rounded, color: Colors.black, size: 24),
+                          ),
+                        ),
+                      ),
+                    ),
+                ]),
               ),
-            ),
+              // BINARY side — নতুন screen
+              Offstage(
+                offstage: _mode != 'binary',
+                child: const BinarySignalScreen(),
+              ),
+            ]),
+          ),
         ]),
       ),
     );
