@@ -27,8 +27,7 @@ import java.net.URL
 import org.json.JSONObject
 
 // ═══════════════════════════════════════════════════════════════════
-//  BINARY SIGNAL SERVICE (PROVEN PATH: ShotWatcher reuse)
-//  MediaProjection বাদ — system screenshot ব্যবহার করব
+//  BINARY SIGNAL SERVICE (FIX: 30s window + confirm toast)
 // ═══════════════════════════════════════════════════════════════════
 class BinaryService : Service() {
 
@@ -38,11 +37,9 @@ class BinaryService : Service() {
         var pair: String = "EUR/USD"
         var time: String = "1m"
         var onResult: ((Map<String, Any>) -> Unit)? = null
-        // ═══ নতুন: ShotWatcher থেকে screenshot receive করার জন্য ═══
         var pendingAnalysis: Boolean = false
         var lastScreenshotPath: String? = null
         var lastScreenshotId: Long = 0
-        // ═══ END ═══
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -102,7 +99,6 @@ class BinaryService : Service() {
         return START_STICKY
     }
 
-    // ── floating button ──
     private fun showFloat() {
         if (floatView != null) return
         if (!android.provider.Settings.canDrawOverlays(this)) {
@@ -132,7 +128,7 @@ class BinaryService : Service() {
         } catch (_: Exception) {}
     }
 
-    // ── নতুন flow: screenshot request ──
+    // ── FIX: 30 second window ──
     private fun requestAnalysis() {
         if (busy) return
         if (keys.isEmpty()) {
@@ -142,16 +138,14 @@ class BinaryService : Service() {
         busy = true
         pendingAnalysis = true
         lastScreenshotPath = null
-        lastScreenshotId = 0
         main.post {
             Toast.makeText(this,
-                "📸 Screenshot nao (Power + Volume Down)",
+                "📸 Screenshot nao (Power + Volume Down) — 30 second time ache",
                 Toast.LENGTH_LONG).show()
         }
-        // ৫ সেকেন্ড wait করব ShotWatcher screenshot ধরার জন্য
         Thread {
             val start = System.currentTimeMillis()
-            while (System.currentTimeMillis() - start < 5500) {
+            while (System.currentTimeMillis() - start < 30000) {
                 if (lastScreenshotPath != null) break
                 Thread.sleep(150)
             }
@@ -161,7 +155,7 @@ class BinaryService : Service() {
                 busy = false
                 main.post {
                     Toast.makeText(this,
-                        "Screenshot pawa jai ni — abar cheshta koro",
+                        "30s e ss pawa jai ni — abar 🎯 chapo",
                         Toast.LENGTH_LONG).show()
                 }
                 return@Thread
@@ -170,15 +164,17 @@ class BinaryService : Service() {
         }.start()
     }
 
-    // ── ShotWatcher থেকে screenshot receive করার callback ──
+    // ── FIX: confirm toast jokhon ss dhora pore ──
     fun onScreenshotReceived(id: Long, path: String) {
         if (!pendingAnalysis) return
         if (id <= lastScreenshotId) return
         lastScreenshotId = id
         lastScreenshotPath = path
+        main.post {
+            Toast.makeText(this, "✅ SS pelechi — analysis cholche...", Toast.LENGTH_SHORT).show()
+        }
     }
 
-    // ── analysis flow ──
     private fun doAnalysis(path: String) {
         try {
             val f = File(path)
@@ -188,7 +184,7 @@ class BinaryService : Service() {
                 pendingAnalysis = false
                 return
             }
-            main.post { showCount("📸") }
+            main.post { showCount("🧠") }
             val bytes = f.readBytes()
             val b64 = bytesToB64(bytes)
             val res = callGemini(b64)
@@ -209,7 +205,6 @@ class BinaryService : Service() {
         pendingAnalysis = false
     }
 
-    // ── countdown overlay ──
     private fun showCount(t: String) {
         main.post {
             try {
@@ -240,7 +235,6 @@ class BinaryService : Service() {
         }
     }
 
-    // ── result overlay ──
     private fun showResult(dir: String, conf: Int, reason: String) {
         main.post {
             try {
