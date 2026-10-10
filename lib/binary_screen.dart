@@ -9,7 +9,7 @@ import 'core.dart';
 
 const MethodChannel binaryChannel = MethodChannel('aniket_pro_ai/binary');
 
-// ── Pocket Option এর সব market (forex+crypto+commodity+stock+OTC) ──
+// ── Pocket Option এর সব market ──
 const List<String> kBinaryPairs = [
   // FOREX
   'EUR/USD', 'GBP/USD', 'USD/JPY', 'AUD/USD', 'USD/CAD', 'USD/CHF', 'NZD/USD',
@@ -24,7 +24,7 @@ const List<String> kBinaryPairs = [
   // STOCKS & INDICES
   'Apple', 'Tesla', 'Amazon', 'Google', 'Meta', 'Microsoft',
   'S&P 500', 'Nasdaq 100', 'Dow Jones',
-  // OTC (24/7 market)
+  // OTC (24/7)
   'EUR/USD (OTC)', 'GBP/USD (OTC)', 'USD/JPY (OTC)', 'AUD/USD (OTC)',
   'NZD/USD (OTC)', 'USD/CAD (OTC)', 'CAD/CHF (OTC)', 'EUR/GBP (OTC)',
   'BTC/USD (OTC)', 'ETH/USD (OTC)', 'Gold/USD (OTC)',
@@ -51,7 +51,7 @@ String _fmtRem(int s) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  BINARY SIGNAL SCREEN (নতুন tab — Forex এ হাত দেওয়া হয়নি)
+//  BINARY SIGNAL SCREEN (FIX: STATE message signal হিসেবে দেখাবে না)
 // ═══════════════════════════════════════════════════════════════════
 class BinarySignalScreen extends StatefulWidget {
   const BinarySignalScreen({super.key});
@@ -65,7 +65,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
   String _time = '1m';
   String _dir = '—';
   int _conf = 0;
-  String _reason = 'Signal er jonno Analyze Now chapo';
+  String _reason = 'Capture ON kore screenshot nao — signal ekhane ashbe';
   List<String> _history = [];
   List<String> _keys = [];
   bool _floatOn = false;
@@ -83,8 +83,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
       if (call.method == 'onBinaryResult') {
         final m = Map<String, Object?>.from(call.arguments as Map);
         _onResult(m);
-      } else if (call.method == 'onFloatState') {
-        if (mounted) setState(() => _floatOn = (call.arguments as int?) == 1);
       }
     });
   }
@@ -114,6 +112,14 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
   void _onResult(Map m) {
     final dir = (m['dir'] ?? 'WAIT').toString();
     final conf = (m['conf'] as num?)?.toInt() ?? 0;
+
+    // ═══ FIX: STATE = শুধু switch sync, signal না ═══
+    if (dir == 'STATE') {
+      if (mounted) setState(() => _floatOn = (conf == 1));
+      return;
+    }
+    // ═══ END FIX ═══
+
     final reason = (m['reason'] ?? '').toString();
     final pair = (m['pair'] ?? _pair).toString();
     final time = (m['time'] ?? _time).toString();
@@ -125,7 +131,8 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
       _dir = dir;
       _conf = conf;
       _reason = reason.isEmpty ? '—' : reason;
-      _history.insert(0, '${dir == 'UP' ? '⬆️' : dir == 'DOWN' ? '⬇️' : '⏸️'} $conf% $pair $time $hh:$mm');
+      _history.insert(0,
+          '${dir == 'UP' ? '⬆️' : dir == 'DOWN' ? '⬇️' : '⏸️'} $conf% $pair $time $hh:$mm');
       if (_history.length > 5) _history = _history.sublist(0, 5);
     });
     _saveHist();
@@ -143,7 +150,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E1E),
-        title: const Text('Gemini Keys (12 ta)', style: TextStyle(color: kGold)),
+        title: const Text('Gemini Keys', style: TextStyle(color: kGold)),
         content: SizedBox(
           width: double.maxFinite,
           child: TextField(
@@ -187,13 +194,12 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
         'keys': _keys,
         'pair': _pair,
         'time': _time,
-        'delay': 6,
+        'delay': 0,
       });
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Pocket Option e jao! 5...4...3... tarpor capture hobe'),
+          content: Text('Capture ON holo — ekhon screenshot nao'),
           backgroundColor: Color(0xFF2A2A2A)));
-    } catch (_) {
-    }
+    } catch (_) {}
     setState(() => _busy = false);
   }
 
@@ -239,7 +245,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
         child: ListView(
           padding: const EdgeInsets.all(14),
           children: [
-            // ── Pair + Time selector ──
             Row(children: [
               Expanded(
                 child: Container(
@@ -337,34 +342,17 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
             ),
             const SizedBox(height: 12),
 
-            // ── Analyze Now ──
-            SizedBox(
-              width: double.infinity,
-              height: 52,
-              child: ElevatedButton.icon(
-                onPressed: _busy ? null : _analyze,
-                icon: const Icon(Icons.center_focus_strong_rounded, size: 20),
-                label: Text(_busy ? 'Capturing...' : 'Analyze Now (ss → Gemini)',
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: kGold.withOpacity(0.2),
-                  foregroundColor: kGold,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-
-            // ── Floating button toggle ──
+            // ── AUTO CAPTURE SWITCH ──
             Container(
               decoration: BoxDecoration(
                 color: const Color(0xFF1A1A2E),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: SwitchListTile(
-                title: const Text('Floating Button (Pocket Option er upore)',
-                    style: TextStyle(color: Colors.white, fontSize: 14)),
-                subtitle: const Text('ON korle choto button sob app er upore bhasbe',
+                title: const Text('AUTO SS ANALYSIS 🎯',
+                    style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+                subtitle: const Text(
+                    'ON korle: screenshot nilei 1-2 sec e auto analysis + result overlay',
                     style: TextStyle(color: Colors.white38, fontSize: 11)),
                 value: _floatOn,
                 activeColor: kGold,
@@ -387,7 +375,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
                       color: _keys.isEmpty ? Colors.orange : kGold, size: 18),
                   const SizedBox(width: 8),
                   Text(_keys.isEmpty
-                          ? 'Key nei — tap kore 12 ta Gemini key boshao'
+                          ? 'Key nei — tap kore Gemini key boshao'
                           : '${_keys.length} ta key ache — tap kore edit koro',
                       style: const TextStyle(color: Colors.white70, fontSize: 12)),
                 ]),
@@ -400,7 +388,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
                 style: TextStyle(color: kGold, fontSize: 13, fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
             if (_history.isEmpty)
-              const Text('ekhon o kono signal nei',
+              const Text('ekhon o kono signal nei — capture ON kore ss nao',
                   style: TextStyle(color: Colors.white24, fontSize: 11))
             else
               ..._history.map((h) => Container(
