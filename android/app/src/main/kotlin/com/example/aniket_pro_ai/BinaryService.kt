@@ -27,7 +27,8 @@ import java.net.URL
 import org.json.JSONObject
 
 // ═══════════════════════════════════════════════════════════════════
-//  BINARY SIGNAL SERVICE (FIX: 30s window + confirm toast)
+//  BINARY SIGNAL SERVICE — AUTO MODE (forex এর ShotWatcher reuse)
+//  capture ON থাকলে: screenshot হলেই সাথে সাথে analysis
 // ═══════════════════════════════════════════════════════════════════
 class BinaryService : Service() {
 
@@ -36,10 +37,9 @@ class BinaryService : Service() {
         var keys: List<String> = emptyList()
         var pair: String = "EUR/USD"
         var time: String = "1m"
+        var captureOn: Boolean = false
+        var lastId: Long = 0
         var onResult: ((Map<String, Any>) -> Unit)? = null
-        var pendingAnalysis: Boolean = false
-        var lastScreenshotPath: String? = null
-        var lastScreenshotId: Long = 0
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -75,7 +75,7 @@ class BinaryService : Service() {
         val nb = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "bin_chan")
         else @Suppress("DEPRECATION") Notification.Builder(this)
         nb.setContentTitle("ANIKET PRO AI")
-            .setContentText("Binary signal — tap 🎯 then take screenshot")
+            .setContentText("Binary capture ON — screenshot nilei analysis")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setOngoing(true)
         var started = false
@@ -91,14 +91,17 @@ class BinaryService : Service() {
         }
         if (!started) { stopSelf(); return START_NOT_STICKY }
 
+        captureOn = true
         showFloat()
-
-        if (action == "ANALYZE_ONCE") {
-            main.postDelayed({ requestAnalysis() }, 500)
+        main.post {
+            Toast.makeText(this,
+                "🎯 Binary capture ON — ekhon screenshot nilei auto analysis hobe",
+                Toast.LENGTH_LONG).show()
         }
         return START_STICKY
     }
 
+    // ── floating 🎯 (tap = capture ON/OFF) ──
     private fun showFloat() {
         if (floatView != null) return
         if (!android.provider.Settings.canDrawOverlays(this)) {
@@ -121,88 +124,66 @@ class BinaryService : Service() {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT)
         p.gravity = Gravity.END or Gravity.CENTER_VERTICAL
-        v.setOnClickListener { requestAnalysis() }
+        v.setOnClickListener { toggleCapture() }
         try {
             wm?.addView(v, p)
             floatView = v
         } catch (_: Exception) {}
     }
 
-    // ── FIX: 30 second window ──
-    private fun requestAnalysis() {
-        if (busy) return
-        if (keys.isEmpty()) {
-            Toast.makeText(this, "Key nei — Binary tab e giye key boshao", Toast.LENGTH_LONG).show()
-            return
-        }
-        busy = true
-        pendingAnalysis = true
-        lastScreenshotPath = null
+    private fun toggleCapture() {
+        captureOn = !captureOn
         main.post {
             Toast.makeText(this,
-                "📸 Screenshot nao (Power + Volume Down) — 30 second time ache",
-                Toast.LENGTH_LONG).show()
+                if (captureOn) "🎯 Capture ON — ss nilei analysis"
+                else "🎯 Capture OFF — ss analysis hobe na",
+                Toast.LENGTH_SHORT).show()
         }
-        Thread {
-            val start = System.currentTimeMillis()
-            while (System.currentTimeMillis() - start < 30000) {
-                if (lastScreenshotPath != null) break
-                Thread.sleep(150)
-            }
-            val path = lastScreenshotPath
-            if (path == null) {
-                pendingAnalysis = false
-                busy = false
-                main.post {
-                    Toast.makeText(this,
-                        "30s e ss pawa jai ni — abar 🎯 chapo",
-                        Toast.LENGTH_LONG).show()
-                }
-                return@Thread
-            }
-            doAnalysis(path)
-        }.start()
-    }
-
-    // ── FIX: confirm toast jokhon ss dhora pore ──
-    fun onScreenshotReceived(id: Long, path: String) {
-        if (!pendingAnalysis) return
-        if (id <= lastScreenshotId) return
-        lastScreenshotId = id
-        lastScreenshotPath = path
-        main.post {
-            Toast.makeText(this, "✅ SS pelechi — analysis cholche...", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun doAnalysis(path: String) {
         try {
-            val f = File(path)
-            if (!f.exists()) {
-                main.post { Toast.makeText(this, "Screenshot file missing", Toast.LENGTH_LONG).show() }
-                busy = false
-                pendingAnalysis = false
-                return
+            onResult?.invoke(mapOf<String, Any>(
+                "dir" to "STATE", "conf" to (if (captureOn) 1 else 0),
+                "reason" to "", "pair" to pair, "time" to time))
+        } catch (_: Exception) { }
+    }
+
+    // ── ShotWatcher থেকে ss এলেই সাথে সাথে analysis (forex এর same path) ──
+    fun onScreenshotReceived(id: Long, path: String) {
+        if (!captureOn) return
+        if (id <= lastId) return
+        lastId = id
+        analyze(path)
+    }
+
+    private fun analyze(path: String) {
+        if (busy) return
+        busy = true
+        Thread {
+            try {
+                val f = File(path)
+                if (!f.exists()) {
+                    main.post { Toast.makeText(this, "SS file missing", Toast.LENGTH_SHORT).show() }
+                    busy = false
+                    return@Thread
+                }
+                main.post { showCount("🧠") }
+                val b64 = bytesToB64(f.readBytes())
+                val res = callGemini(b64)
+                val dir = res.optString("dir", "WAIT")
+                val conf = res.optInt("conf", 0)
+                val reason = res.optString("reason", "")
+                main.post { hideCount() }
+                main.post { showResult(dir, conf, reason) }
+                try {
+                    onResult?.invoke(mapOf<String, Any>(
+                        "dir" to dir, "conf" to conf, "reason" to reason,
+                        "pair" to pair, "time" to time))
+                } catch (_: Exception) { }
+                appendHistory(dir, conf)
+            } catch (e: Exception) {
+                main.post { Toast.makeText(this, "Analysis fail: ${e.message}", Toast.LENGTH_LONG).show() }
             }
-            main.post { showCount("🧠") }
-            val bytes = f.readBytes()
-            val b64 = bytesToB64(bytes)
-            val res = callGemini(b64)
-            val dir = res.optString("dir", "WAIT")
-            val conf = res.optInt("conf", 0)
-            val reason = res.optString("reason", "")
-            main.post { hideCount() }
-            main.post { showResult(dir, conf, reason) }
-            val map = mapOf<String, Any>(
-                "dir" to dir, "conf" to conf, "reason" to reason,
-                "pair" to pair, "time" to time)
-            main.post { onResult?.invoke(map) }
-            appendHistory(dir, conf)
-        } catch (e: Exception) {
-            main.post { Toast.makeText(this, "Analysis fail: ${e.message}", Toast.LENGTH_LONG).show() }
-        }
-        busy = false
-        pendingAnalysis = false
+            busy = false
+        }.start()
     }
 
     private fun showCount(t: String) {
@@ -361,6 +342,7 @@ class BinaryService : Service() {
     }
 
     override fun onDestroy() {
+        captureOn = false
         try { floatView?.let { wm?.removeView(it) } } catch (_: Exception) {}
         try { resultView?.let { wm?.removeView(it) } } catch (_: Exception) {}
         try { countView?.let { wm?.removeView(it) } } catch (_: Exception) {}
