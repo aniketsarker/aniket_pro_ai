@@ -20,7 +20,6 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Base64
-import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.LinearLayout
@@ -32,8 +31,7 @@ import java.net.URL
 import org.json.JSONObject
 
 // ═══════════════════════════════════════════════════════════════════
-//  BINARY SIGNAL SERVICE (নতুন file — পুরানো code এ হাত দেওয়া হয়নি)
-//  Floating button + screen capture + Gemini vision + result overlay
+//  BINARY SIGNAL SERVICE (FIXED: capture metrics + stale token fix)
 // ═══════════════════════════════════════════════════════════════════
 class BinaryService : Service() {
 
@@ -115,6 +113,8 @@ class BinaryService : Service() {
         } catch (e: Exception) {
             projection = null
         }
+        // FIX: token nosto hole clear kore debo — pore abar "Start now" chabe
+        if (projection == null) projectionData = null
     }
 
     // ── floating button ──
@@ -245,7 +245,11 @@ class BinaryService : Service() {
                 hideCount()
                 val bmp = capture()
                 if (bmp == null) {
-                    main.post { Toast.makeText(this, "Capture fail — projection restart koro", Toast.LENGTH_LONG).show() }
+                    main.post {
+                        Toast.makeText(this,
+                            "Capture fail — Binary tab e giye Floating OFF-ON koro, Start now Allow koro",
+                            Toast.LENGTH_LONG).show()
+                    }
                     busy = false
                     return@Thread
                 }
@@ -267,13 +271,11 @@ class BinaryService : Service() {
         }.start()
     }
 
-    // ── screen capture ──
+    // ── screen capture (FIXED: resources.displayMetrics) ──
     private fun capture(): Bitmap? {
         val proj = projection ?: return null
         return try {
-            val m = DisplayMetrics()
-            @Suppress("DEPRECATION")
-            wm?.defaultDisplay?.getRealMetrics(m)
+            val m = resources.displayMetrics
             val w = m.widthPixels
             val h = m.heightPixels
             val dpi = m.densityDpi
@@ -283,7 +285,7 @@ class BinaryService : Service() {
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 reader.surface, null, null)
             var bmp: Bitmap? = null
-            val deadline = System.currentTimeMillis() + 2500
+            val deadline = System.currentTimeMillis() + 4000
             while (System.currentTimeMillis() < deadline && bmp == null) {
                 val img = reader.acquireLatestImage()
                 if (img != null) {
@@ -291,11 +293,8 @@ class BinaryService : Service() {
                     val buf = planes[0].buffer
                     val rowStride = planes[0].rowStride
                     val pixelStride = planes[0].pixelStride
-                    val bw = buf.remaining()
-                    val bytes = ByteArray(bw)
+                    val bytes = ByteArray(buf.remaining())
                     buf.get(bytes)
-                    val full = Bitmap.createBitmap(rowStride / pixelStride, h, Bitmap.Config.ARGB_8888)
-                    // RGBA → ARGB conversion row by row
                     val ints = IntArray(w * h)
                     var y = 0
                     while (y < h) {
@@ -312,8 +311,6 @@ class BinaryService : Service() {
                         }
                         y++
                     }
-                    full.setPixels(ints, 0, w, 0, 0, w, h)
-                    full.recycle()
                     bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
                     bmp.setPixels(ints, 0, w, 0, 0, w, h)
                     img.close()
@@ -382,9 +379,7 @@ class BinaryService : Service() {
                     return JSONObject().put("dir", "WAIT").put("conf", 0).put("reason", "parse fail")
                 }
                 c.disconnect()
-                // 429/403/400 → next key
             } catch (_: Exception) {
-                // next key
             }
         }
         return JSONObject().put("dir", "WAIT").put("conf", 0).put("reason", "sob key fail — net/key check koro")
