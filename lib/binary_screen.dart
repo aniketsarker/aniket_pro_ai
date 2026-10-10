@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,20 +13,15 @@ const MethodChannel binaryChannel = MethodChannel('aniket_pro_ai/binary');
 
 // ── Pocket Option এর সব market ──
 const List<String> kBinaryPairs = [
-  // FOREX
   'EUR/USD', 'GBP/USD', 'USD/JPY', 'AUD/USD', 'USD/CAD', 'USD/CHF', 'NZD/USD',
   'EUR/GBP', 'EUR/JPY', 'GBP/JPY', 'AUD/JPY', 'EUR/AUD', 'EUR/CAD', 'EUR/CHF',
   'GBP/AUD', 'GBP/CAD', 'GBP/CHF', 'AUD/CAD', 'AUD/CHF', 'AUD/NZD', 'CAD/CHF',
   'CAD/JPY', 'CHF/JPY', 'NZD/CAD', 'NZD/CHF', 'NZD/JPY',
-  // CRYPTO
   'BTC/USD', 'ETH/USD', 'LTC/USD', 'XRP/USD', 'SOL/USD', 'DOGE/USD', 'BNB/USD',
   'ADA/USD', 'TRX/USD', 'DOT/USD', 'BCH/USD', 'LINK/USD',
-  // COMMODITIES
   'Gold/USD', 'Silver/USD', 'WTI Oil', 'Brent Oil',
-  // STOCKS & INDICES
   'Apple', 'Tesla', 'Amazon', 'Google', 'Meta', 'Microsoft',
   'S&P 500', 'Nasdaq 100', 'Dow Jones',
-  // OTC (24/7)
   'EUR/USD (OTC)', 'GBP/USD (OTC)', 'USD/JPY (OTC)', 'AUD/USD (OTC)',
   'NZD/USD (OTC)', 'USD/CAD (OTC)', 'CAD/CHF (OTC)', 'EUR/GBP (OTC)',
   'BTC/USD (OTC)', 'ETH/USD (OTC)', 'Gold/USD (OTC)',
@@ -51,7 +48,7 @@ String _fmtRem(int s) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  BINARY SIGNAL SCREEN (FIX: STATE message signal হিসেবে দেখাবে না)
+//  BINARY SIGNAL SCREEN (MANUAL UPLOAD = guaranteed path)
 // ═══════════════════════════════════════════════════════════════════
 class BinarySignalScreen extends StatefulWidget {
   const BinarySignalScreen({super.key});
@@ -65,7 +62,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
   String _time = '1m';
   String _dir = '—';
   int _conf = 0;
-  String _reason = 'Capture ON kore screenshot nao — signal ekhane ashbe';
+  String _reason = 'Screenshot nao → Analyze Now → ss choose koro';
   List<String> _history = [];
   List<String> _keys = [];
   bool _floatOn = false;
@@ -112,14 +109,10 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
   void _onResult(Map m) {
     final dir = (m['dir'] ?? 'WAIT').toString();
     final conf = (m['conf'] as num?)?.toInt() ?? 0;
-
-    // ═══ FIX: STATE = শুধু switch sync, signal না ═══
     if (dir == 'STATE') {
       if (mounted) setState(() => _floatOn = (conf == 1));
       return;
     }
-    // ═══ END FIX ═══
-
     final reason = (m['reason'] ?? '').toString();
     final pair = (m['pair'] ?? _pair).toString();
     final time = (m['time'] ?? _time).toString();
@@ -133,6 +126,22 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
       _reason = reason.isEmpty ? '—' : reason;
       _history.insert(0,
           '${dir == 'UP' ? '⬆️' : dir == 'DOWN' ? '⬇️' : '⏸️'} $conf% $pair $time $hh:$mm');
+      if (_history.length > 5) _history = _history.sublist(0, 5);
+    });
+    _saveHist();
+  }
+
+  void _applyResult(String dir, int conf, String reason) {
+    final now = DateTime.now();
+    final hh = now.hour.toString().padLeft(2, '0');
+    final mm = now.minute.toString().padLeft(2, '0');
+    if (!mounted) return;
+    setState(() {
+      _dir = dir;
+      _conf = conf;
+      _reason = reason.isEmpty ? '—' : reason;
+      _history.insert(0,
+          '${dir == 'UP' ? '⬆️' : dir == 'DOWN' ? '⬇️' : '⏸️'} $conf% $_pair $_time $hh:$mm');
       if (_history.length > 5) _history = _history.sublist(0, 5);
     });
     _saveHist();
@@ -182,7 +191,8 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
     }
   }
 
-  Future<void> _analyze() async {
+  // ═══ MANUAL UPLOAD: forex er Choose Files engine + dart http ═══
+  Future<void> _pickAndAnalyze() async {
     if (_busy) return;
     if (_keys.isEmpty) {
       await _keysDialog();
@@ -190,17 +200,79 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
     }
     setState(() => _busy = true);
     try {
-      await binaryChannel.invokeMethod('analyzeNow', {
-        'keys': _keys,
-        'pair': _pair,
-        'time': _time,
-        'delay': 0,
-      });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Capture ON holo — ekhon screenshot nao'),
-          backgroundColor: Color(0xFF2A2A2A)));
-    } catch (_) {}
-    setState(() => _busy = false);
+      final res = await galleryChannel
+          .invokeMethod<List<Object?>>('pickFiles', {'max': 1});
+      final list = (res ?? []).map((e) => e.toString()).toList();
+      if (list.isEmpty) {
+        setState(() => _busy = false);
+        return;
+      }
+      var bytes = await File(list.first).readAsBytes();
+      try {
+        final comp = await galleryChannel
+            .invokeMethod<Uint8List>('compress', {'bytes': bytes, 'maxKB': 700});
+        if (comp != null && comp.isNotEmpty) bytes = comp;
+      } catch (_) {}
+      final b64 = base64Encode(bytes);
+      final r = await _geminiVision(b64);
+      _applyResult(
+          (r['dir'] ?? 'WAIT').toString(),
+          (r['conf'] as num?)?.toInt() ?? 0,
+          (r['reason'] ?? '').toString());
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Fail: $e'), backgroundColor: const Color(0xFF2A2A2A)));
+      }
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
+  Future<Map<String, dynamic>> _geminiVision(String b64) async {
+    final prompt = 'You are a professional binary options trader. Look at this '
+        'trading chart screenshot carefully (candles, trend, support/resistance). '
+        'Predict the NEXT candle direction for $_pair on $_time timeframe. '
+        'Reply ONLY with JSON like: {"dir":"UP","conf":72,"reason":"short Banglish reason"} '
+        'dir must be UP or DOWN or WAIT. If chart is unclear or not a trading chart, use WAIT.';
+    for (final key in _keys) {
+      try {
+        final c = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+        final req = await c.postUrl(Uri.parse(
+            'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$key'));
+        req.headers.set('Content-Type', 'application/json');
+        req.write(jsonEncode({
+          'contents': [
+            {
+              'parts': [
+                {'text': prompt},
+                {
+                  'inline_data': {'mime_type': 'image/jpeg', 'data': b64}
+                }
+              ]
+            }
+          ]
+        }));
+        final res = await req.close().timeout(const Duration(seconds: 30));
+        final s = await res.transform(utf8.decoder).join();
+        c.close();
+        if (res.statusCode == 200) {
+          final j = jsonDecode(s);
+          final parts = j['candidates'][0]['content']['parts'] as List;
+          String text = '';
+          for (final p in parts) {
+            text += (p['text'] ?? '').toString();
+          }
+          final a = text.indexOf('{');
+          final z = text.lastIndexOf('}');
+          if (a >= 0 && z > a) {
+            return Map<String, dynamic>.from(
+                jsonDecode(text.substring(a, z + 1)));
+          }
+          return {'dir': 'WAIT', 'conf': 0, 'reason': 'parse fail'};
+        }
+      } catch (_) {}
+    }
+    return {'dir': 'WAIT', 'conf': 0, 'reason': 'sob key fail — net/key check koro'};
   }
 
   Future<void> _toggleFloat() async {
@@ -342,17 +414,36 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
             ),
             const SizedBox(height: 12),
 
-            // ── AUTO CAPTURE SWITCH ──
+            // ═══ MANUAL UPLOAD BUTTON (guaranteed) ═══
+            SizedBox(
+              width: double.infinity,
+              height: 54,
+              child: ElevatedButton.icon(
+                onPressed: _busy ? null : _pickAndAnalyze,
+                icon: const Icon(Icons.folder_open_rounded, size: 22),
+                label: Text(
+                    _busy ? 'Analysis cholche...' : 'Analyze Now — ss choose koro',
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: kGold.withOpacity(0.25),
+                  foregroundColor: kGold,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            // ── AUTO SS (bonus) ──
             Container(
               decoration: BoxDecoration(
                 color: const Color(0xFF1A1A2E),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: SwitchListTile(
-                title: const Text('AUTO SS ANALYSIS 🎯',
-                    style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+                title: const Text('AUTO SS ANALYSIS 🎯 (bonus)',
+                    style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
                 subtitle: const Text(
-                    'ON korle: screenshot nilei 1-2 sec e auto analysis + result overlay',
+                    'ON korle: ss nile auto cheshta korbe (na hole uporer button use koro)',
                     style: TextStyle(color: Colors.white38, fontSize: 11)),
                 value: _floatOn,
                 activeColor: kGold,
@@ -361,7 +452,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
             ),
             const SizedBox(height: 8),
 
-            // ── Keys status ──
+            // ── Keys ──
             InkWell(
               onTap: _keysDialog,
               child: Container(
@@ -388,7 +479,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
                 style: TextStyle(color: kGold, fontSize: 13, fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
             if (_history.isEmpty)
-              const Text('ekhon o kono signal nei — capture ON kore ss nao',
+              const Text('ekhon o kono signal nei',
                   style: TextStyle(color: Colors.white24, fontSize: 11))
             else
               ..._history.map((h) => Container(
