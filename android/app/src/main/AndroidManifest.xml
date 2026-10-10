@@ -44,10 +44,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
 
-    <!-- ═══ BINARY SIGNAL (ADD-ONLY) ═══ -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
-    <!-- ═══ END BINARY ADD ═══ -->
-
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
@@ -95,12 +91,14 @@
                 android:value="remote_agent"/>
         </service>
 
-        <!-- ═══ BINARY SIGNAL (ADD-ONLY) ═══ -->
         <service
             android:name=".BinaryService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection"/>
-        <!-- ═══ END BINARY ADD ═══ -->
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="binary_signal"/>
+        </service>
 
         <receiver
             android:name=".BootReceiver"
