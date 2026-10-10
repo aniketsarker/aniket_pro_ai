@@ -7,14 +7,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
-import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
-import android.media.ImageReader
-import android.media.projection.MediaProjection
-import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -26,28 +21,32 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import org.json.JSONObject
 
 // ═══════════════════════════════════════════════════════════════════
-//  BINARY SIGNAL SERVICE (FIXED: capture metrics + stale token fix)
+//  BINARY SIGNAL SERVICE (PROVEN PATH: ShotWatcher reuse)
+//  MediaProjection বাদ — system screenshot ব্যবহার করব
 // ═══════════════════════════════════════════════════════════════════
 class BinaryService : Service() {
 
     companion object {
         var instance: BinaryService? = null
-        var projectionCode: Int = 0
-        var projectionData: Intent? = null
         var keys: List<String> = emptyList()
         var pair: String = "EUR/USD"
         var time: String = "1m"
         var onResult: ((Map<String, Any>) -> Unit)? = null
+        // ═══ নতুন: ShotWatcher থেকে screenshot receive করার জন্য ═══
+        var pendingAnalysis: Boolean = false
+        var lastScreenshotPath: String? = null
+        var lastScreenshotId: Long = 0
+        // ═══ END ═══
     }
 
     private val main = Handler(Looper.getMainLooper())
     private var wm: WindowManager? = null
-    private var projection: MediaProjection? = null
     private var floatView: TextView? = null
     private var resultView: LinearLayout? = null
     private var countView: TextView? = null
@@ -79,13 +78,13 @@ class BinaryService : Service() {
         val nb = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "bin_chan")
         else @Suppress("DEPRECATION") Notification.Builder(this)
         nb.setContentTitle("ANIKET PRO AI")
-            .setContentText("Binary signal active")
+            .setContentText("Binary signal — tap 🎯 then take screenshot")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setOngoing(true)
         var started = false
         try {
             if (Build.VERSION.SDK_INT >= 34) {
-                startForeground(9002, nb.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+                startForeground(9002, nb.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             } else {
                 startForeground(9002, nb.build())
             }
@@ -95,26 +94,12 @@ class BinaryService : Service() {
         }
         if (!started) { stopSelf(); return START_NOT_STICKY }
 
-        if (projection == null) initProjection()
         showFloat()
 
         if (action == "ANALYZE_ONCE") {
-            val delay = intent?.getIntExtra("delay", 6) ?: 6
-            main.postDelayed({ analyze(delay) }, 800)
+            main.postDelayed({ requestAnalysis() }, 500)
         }
         return START_STICKY
-    }
-
-    private fun initProjection() {
-        try {
-            if (projectionData == null) return
-            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            projection = mpm.getMediaProjection(projectionCode, projectionData!!)
-        } catch (e: Exception) {
-            projection = null
-        }
-        // FIX: token nosto hole clear kore debo — pore abar "Start now" chabe
-        if (projection == null) projectionData = null
     }
 
     // ── floating button ──
@@ -140,22 +125,99 @@ class BinaryService : Service() {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT)
         p.gravity = Gravity.END or Gravity.CENTER_VERTICAL
-        v.setOnClickListener { analyze(0) }
+        v.setOnClickListener { requestAnalysis() }
         try {
             wm?.addView(v, p)
             floatView = v
         } catch (_: Exception) {}
     }
 
+    // ── নতুন flow: screenshot request ──
+    private fun requestAnalysis() {
+        if (busy) return
+        if (keys.isEmpty()) {
+            Toast.makeText(this, "Key nei — Binary tab e giye key boshao", Toast.LENGTH_LONG).show()
+            return
+        }
+        busy = true
+        pendingAnalysis = true
+        lastScreenshotPath = null
+        lastScreenshotId = 0
+        main.post {
+            Toast.makeText(this,
+                "📸 Screenshot nao (Power + Volume Down)",
+                Toast.LENGTH_LONG).show()
+        }
+        // ৫ সেকেন্ড wait করব ShotWatcher screenshot ধরার জন্য
+        Thread {
+            val start = System.currentTimeMillis()
+            while (System.currentTimeMillis() - start < 5500) {
+                if (lastScreenshotPath != null) break
+                Thread.sleep(150)
+            }
+            val path = lastScreenshotPath
+            if (path == null) {
+                pendingAnalysis = false
+                busy = false
+                main.post {
+                    Toast.makeText(this,
+                        "Screenshot pawa jai ni — abar cheshta koro",
+                        Toast.LENGTH_LONG).show()
+                }
+                return@Thread
+            }
+            doAnalysis(path)
+        }.start()
+    }
+
+    // ── ShotWatcher থেকে screenshot receive করার callback ──
+    fun onScreenshotReceived(id: Long, path: String) {
+        if (!pendingAnalysis) return
+        if (id <= lastScreenshotId) return
+        lastScreenshotId = id
+        lastScreenshotPath = path
+    }
+
+    // ── analysis flow ──
+    private fun doAnalysis(path: String) {
+        try {
+            val f = File(path)
+            if (!f.exists()) {
+                main.post { Toast.makeText(this, "Screenshot file missing", Toast.LENGTH_LONG).show() }
+                busy = false
+                pendingAnalysis = false
+                return
+            }
+            main.post { showCount("📸") }
+            val bytes = f.readBytes()
+            val b64 = bytesToB64(bytes)
+            val res = callGemini(b64)
+            val dir = res.optString("dir", "WAIT")
+            val conf = res.optInt("conf", 0)
+            val reason = res.optString("reason", "")
+            main.post { hideCount() }
+            main.post { showResult(dir, conf, reason) }
+            val map = mapOf<String, Any>(
+                "dir" to dir, "conf" to conf, "reason" to reason,
+                "pair" to pair, "time" to time)
+            main.post { onResult?.invoke(map) }
+            appendHistory(dir, conf)
+        } catch (e: Exception) {
+            main.post { Toast.makeText(this, "Analysis fail: ${e.message}", Toast.LENGTH_LONG).show() }
+        }
+        busy = false
+        pendingAnalysis = false
+    }
+
     // ── countdown overlay ──
-    private fun showCount(n: Int) {
+    private fun showCount(t: String) {
         main.post {
             try {
                 if (countView == null) {
-                    val t = TextView(this)
-                    t.textSize = 60f
-                    t.setTextColor(0xFFF5E6C8.toInt())
-                    t.gravity = Gravity.CENTER
+                    val tv = TextView(this)
+                    tv.textSize = 54f
+                    tv.setTextColor(0xFFF5E6C8.toInt())
+                    tv.gravity = Gravity.CENTER
                     val p = WindowManager.LayoutParams(
                         WindowManager.LayoutParams.WRAP_CONTENT,
                         WindowManager.LayoutParams.WRAP_CONTENT,
@@ -163,10 +225,10 @@ class BinaryService : Service() {
                         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                         PixelFormat.TRANSLUCENT)
                     p.gravity = Gravity.CENTER
-                    wm?.addView(t, p)
-                    countView = t
+                    wm?.addView(tv, p)
+                    countView = tv
                 }
-                countView?.text = if (n > 0) "$n" else "📸"
+                countView?.text = t
             } catch (_: Exception) {}
         }
     }
@@ -223,122 +285,30 @@ class BinaryService : Service() {
                 main.postDelayed({
                     try { wm?.removeView(box) } catch (_: Exception) {}
                     if (resultView == box) resultView = null
-                }, 9000)
+                }, 12000)
             } catch (_: Exception) {}
         }
     }
 
-    // ── analyze flow ──
-    fun analyze(delaySec: Int) {
-        if (busy) return
-        busy = true
-        Thread {
-            try {
-                var d = delaySec
-                while (d > 0) {
-                    showCount(d)
-                    Thread.sleep(1000)
-                    d--
-                }
-                showCount(0)
-                Thread.sleep(400)
-                hideCount()
-                val bmp = capture()
-                if (bmp == null) {
-                    main.post {
-                        Toast.makeText(this,
-                            "Capture fail — Binary tab e giye Floating OFF-ON koro, Start now Allow koro",
-                            Toast.LENGTH_LONG).show()
-                    }
-                    busy = false
-                    return@Thread
-                }
-                val b64 = bmpToB64(bmp)
-                val res = callGemini(b64)
-                val dir = res.optString("dir", "WAIT")
-                val conf = res.optInt("conf", 0)
-                val reason = res.optString("reason", "")
-                showResult(dir, conf, reason)
-                val map = mapOf<String, Any>(
-                    "dir" to dir, "conf" to conf, "reason" to reason,
-                    "pair" to pair, "time" to time)
-                main.post { onResult?.invoke(map) }
-                appendHistory(dir, conf)
-            } catch (e: Exception) {
-                main.post { Toast.makeText(this, "Analysis fail: ${e.message}", Toast.LENGTH_LONG).show() }
-            }
-            busy = false
-        }.start()
-    }
-
-    // ── screen capture (FIXED: resources.displayMetrics) ──
-    private fun capture(): Bitmap? {
-        val proj = projection ?: return null
+    private fun bytesToB64(src: ByteArray): String {
         return try {
-            val m = resources.displayMetrics
-            val w = m.widthPixels
-            val h = m.heightPixels
-            val dpi = m.densityDpi
-            val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
-            val vd: VirtualDisplay = proj.createVirtualDisplay(
-                "bin_cap", w, h, dpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                reader.surface, null, null)
-            var bmp: Bitmap? = null
-            val deadline = System.currentTimeMillis() + 4000
-            while (System.currentTimeMillis() < deadline && bmp == null) {
-                val img = reader.acquireLatestImage()
-                if (img != null) {
-                    val planes = img.planes
-                    val buf = planes[0].buffer
-                    val rowStride = planes[0].rowStride
-                    val pixelStride = planes[0].pixelStride
-                    val bytes = ByteArray(buf.remaining())
-                    buf.get(bytes)
-                    val ints = IntArray(w * h)
-                    var y = 0
-                    while (y < h) {
-                        var x = 0
-                        while (x < w) {
-                            val i = y * rowStride + x * pixelStride
-                            if (i + 3 < bytes.size) {
-                                val r = bytes[i].toInt() and 0xFF
-                                val g = bytes[i + 1].toInt() and 0xFF
-                                val b = bytes[i + 2].toInt() and 0xFF
-                                ints[y * w + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-                            }
-                            x++
-                        }
-                        y++
-                    }
-                    bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                    bmp.setPixels(ints, 0, w, 0, 0, w, h)
-                    img.close()
-                } else {
-                    Thread.sleep(120)
-                }
+            var bmp = BitmapFactory.decodeByteArray(src, 0, src.size) ?: return Base64.encodeToString(src, Base64.NO_WRAP)
+            val maxDim = 1280
+            if (bmp.width > maxDim || bmp.height > maxDim) {
+                val s = maxDim.toFloat() / Math.max(bmp.width, bmp.height)
+                val nb = android.graphics.Bitmap.createScaledBitmap(bmp, (bmp.width * s).toInt(), (bmp.height * s).toInt(), true)
+                if (nb != bmp) bmp.recycle()
+                bmp = nb
             }
-            vd.release()
-            reader.close()
-            bmp
+            val bos = ByteArrayOutputStream()
+            bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, bos)
+            bmp.recycle()
+            Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP)
         } catch (e: Exception) {
-            null
+            Base64.encodeToString(src, Base64.NO_WRAP)
         }
     }
 
-    private fun bmpToB64(bmp: Bitmap): String {
-        var b = bmp
-        val maxDim = 1280
-        if (b.width > maxDim || b.height > maxDim) {
-            val s = maxDim.toFloat() / Math.max(b.width, b.height)
-            b = Bitmap.createScaledBitmap(b, (b.width * s).toInt(), (b.height * s).toInt(), true)
-        }
-        val bos = ByteArrayOutputStream()
-        b.compress(Bitmap.CompressFormat.JPEG, 80, bos)
-        return Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP)
-    }
-
-    // ── Gemini vision + 12 key rotation ──
     private fun callGemini(b64: String): JSONObject {
         val prompt = "You are a professional binary options trader. Look at this trading " +
             "chart screenshot carefully (candles, trend, support/resistance). " +
@@ -387,7 +357,7 @@ class BinaryService : Service() {
 
     private fun appendHistory(dir: String, conf: Int) {
         try {
-            val f = java.io.File(filesDir, "binary_history.txt")
+            val f = File(filesDir, "binary_history.txt")
             val now = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
             val line = "$dir $conf% $pair $time $now"
             val old = if (f.exists()) f.readLines() else emptyList()
@@ -401,8 +371,6 @@ class BinaryService : Service() {
         try { resultView?.let { wm?.removeView(it) } } catch (_: Exception) {}
         try { countView?.let { wm?.removeView(it) } } catch (_: Exception) {}
         floatView = null; resultView = null; countView = null
-        try { projection?.stop() } catch (_: Exception) {}
-        projection = null
         instance = null
         super.onDestroy()
     }
