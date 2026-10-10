@@ -29,6 +29,13 @@ const List<String> kBinaryPairs = [
 
 const List<String> kBinaryTimes = ['1m', '2m', '3m', '5m', '15m', '30m', '1h'];
 
+// ── FIX: একাধিক model চেষ্টা করবে ──
+const List<String> kGeminiModels = [
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-flash-latest',
+];
+
 int _periodSec(String t) {
   switch (t) {
     case '2m': return 120;
@@ -48,7 +55,7 @@ String _fmtRem(int s) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  BINARY SIGNAL SCREEN (MANUAL UPLOAD = guaranteed path)
+//  BINARY SIGNAL SCREEN (manual upload + exact error display)
 // ═══════════════════════════════════════════════════════════════════
 class BinarySignalScreen extends StatefulWidget {
   const BinarySignalScreen({super.key});
@@ -114,6 +121,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
       return;
     }
     final reason = (m['reason'] ?? '').toString();
+    if (reason.startsWith('fail:')) return; // fail history তে যাবে না
     final pair = (m['pair'] ?? _pair).toString();
     final time = (m['time'] ?? _time).toString();
     final now = DateTime.now();
@@ -191,7 +199,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
     }
   }
 
-  // ═══ MANUAL UPLOAD: forex er Choose Files engine + dart http ═══
+  // ═══ MANUAL UPLOAD (guaranteed path) ═══
   Future<void> _pickAndAnalyze() async {
     if (_busy) return;
     if (_keys.isEmpty) {
@@ -215,10 +223,26 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
       } catch (_) {}
       final b64 = base64Encode(bytes);
       final r = await _geminiVision(b64);
-      _applyResult(
-          (r['dir'] ?? 'WAIT').toString(),
-          (r['conf'] as num?)?.toInt() ?? 0,
-          (r['reason'] ?? '').toString());
+      final reason = (r['reason'] ?? '').toString();
+      if (reason.startsWith('fail:')) {
+        // FIX: fail hole card এ exact error, history তে নয়
+        if (mounted) {
+          setState(() {
+            _dir = '—';
+            _conf = 0;
+            _reason = reason;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(reason),
+              backgroundColor: const Color(0xFF2A2A2A),
+              duration: const Duration(seconds: 6)));
+        }
+      } else {
+        _applyResult(
+            (r['dir'] ?? 'WAIT').toString(),
+            (r['conf'] as num?)?.toInt() ?? 0,
+            reason);
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -228,51 +252,63 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
     if (mounted) setState(() => _busy = false);
   }
 
+  // ── FIX: multi-model + exact error ──
   Future<Map<String, dynamic>> _geminiVision(String b64) async {
     final prompt = 'You are a professional binary options trader. Look at this '
         'trading chart screenshot carefully (candles, trend, support/resistance). '
         'Predict the NEXT candle direction for $_pair on $_time timeframe. '
         'Reply ONLY with JSON like: {"dir":"UP","conf":72,"reason":"short Banglish reason"} '
         'dir must be UP or DOWN or WAIT. If chart is unclear or not a trading chart, use WAIT.';
+    String lastErr = '';
     for (final key in _keys) {
-      try {
-        final c = HttpClient()..connectionTimeout = const Duration(seconds: 15);
-        final req = await c.postUrl(Uri.parse(
-            'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$key'));
-        req.headers.set('Content-Type', 'application/json');
-        req.write(jsonEncode({
-          'contents': [
-            {
-              'parts': [
-                {'text': prompt},
-                {
-                  'inline_data': {'mime_type': 'image/jpeg', 'data': b64}
-                }
-              ]
+      for (final model in kGeminiModels) {
+        try {
+          final c = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+          final req = await c.postUrl(Uri.parse(
+              'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$key'));
+          req.headers.set('Content-Type', 'application/json');
+          req.write(jsonEncode({
+            'contents': [
+              {
+                'parts': [
+                  {'text': prompt},
+                  {
+                    'inline_data': {'mime_type': 'image/jpeg', 'data': b64}
+                  }
+                ]
+              }
+            ]
+          }));
+          final res = await req.close().timeout(const Duration(seconds: 30));
+          final s = await res.transform(utf8.decoder).join();
+          c.close();
+          if (res.statusCode == 200) {
+            final j = jsonDecode(s);
+            final parts = j['candidates'][0]['content']['parts'] as List;
+            String text = '';
+            for (final p in parts) {
+              text += (p['text'] ?? '').toString();
             }
-          ]
-        }));
-        final res = await req.close().timeout(const Duration(seconds: 30));
-        final s = await res.transform(utf8.decoder).join();
-        c.close();
-        if (res.statusCode == 200) {
-          final j = jsonDecode(s);
-          final parts = j['candidates'][0]['content']['parts'] as List;
-          String text = '';
-          for (final p in parts) {
-            text += (p['text'] ?? '').toString();
+            final a = text.indexOf('{');
+            final z = text.lastIndexOf('}');
+            if (a >= 0 && z > a) {
+              return Map<String, dynamic>.from(
+                  jsonDecode(text.substring(a, z + 1)));
+            }
+            return {'dir': 'WAIT', 'conf': 0, 'reason': 'parse fail'};
+          } else {
+            lastErr = 'fail: HTTP ${res.statusCode} — key invalid/quota/model block';
           }
-          final a = text.indexOf('{');
-          final z = text.lastIndexOf('}');
-          if (a >= 0 && z > a) {
-            return Map<String, dynamic>.from(
-                jsonDecode(text.substring(a, z + 1)));
-          }
-          return {'dir': 'WAIT', 'conf': 0, 'reason': 'parse fail'};
+        } catch (e) {
+          lastErr = 'fail: net — ${e.toString().split('\n').first}';
         }
-      } catch (_) {}
+      }
     }
-    return {'dir': 'WAIT', 'conf': 0, 'reason': 'sob key fail — net/key check koro'};
+    return {
+      'dir': 'WAIT',
+      'conf': 0,
+      'reason': lastErr.isEmpty ? 'fail: key nei — key boshao' : lastErr
+    };
   }
 
   Future<void> _toggleFloat() async {
@@ -373,7 +409,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
             ]),
             const SizedBox(height: 12),
 
-            // ── BIG SIGNAL CARD ──
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
@@ -414,7 +449,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
             ),
             const SizedBox(height: 12),
 
-            // ═══ MANUAL UPLOAD BUTTON (guaranteed) ═══
             SizedBox(
               width: double.infinity,
               height: 54,
@@ -433,7 +467,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
             ),
             const SizedBox(height: 8),
 
-            // ── AUTO SS (bonus) ──
             Container(
               decoration: BoxDecoration(
                 color: const Color(0xFF1A1A2E),
@@ -452,7 +485,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
             ),
             const SizedBox(height: 8),
 
-            // ── Keys ──
             InkWell(
               onTap: _keysDialog,
               child: Container(
@@ -474,7 +506,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
             ),
             const SizedBox(height: 14),
 
-            // ── History ──
             const Text('শেষ ৫ signal:',
                 style: TextStyle(color: kGold, fontSize: 13, fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
