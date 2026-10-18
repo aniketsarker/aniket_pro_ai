@@ -1,62 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'core.dart';
-
-const MethodChannel binaryChannel = MethodChannel('aniket_pro_ai/binary');
-
-// ── Pocket Option এর সব market ──
-const List<String> kBinaryPairs = [
-  'EUR/USD', 'GBP/USD', 'USD/JPY', 'AUD/USD', 'USD/CAD', 'USD/CHF', 'NZD/USD',
-  'EUR/GBP', 'EUR/JPY', 'GBP/JPY', 'AUD/JPY', 'EUR/AUD', 'EUR/CAD', 'EUR/CHF',
-  'GBP/AUD', 'GBP/CAD', 'GBP/CHF', 'AUD/CAD', 'AUD/CHF', 'AUD/NZD', 'CAD/CHF',
-  'CAD/JPY', 'CHF/JPY', 'NZD/CAD', 'NZD/CHF', 'NZD/JPY',
-  'BTC/USD', 'ETH/USD', 'LTC/USD', 'XRP/USD', 'SOL/USD', 'DOGE/USD', 'BNB/USD',
-  'ADA/USD', 'TRX/USD', 'DOT/USD', 'BCH/USD', 'LINK/USD',
-  'Gold/USD', 'Silver/USD', 'WTI Oil', 'Brent Oil',
-  'Apple', 'Tesla', 'Amazon', 'Google', 'Meta', 'Microsoft',
-  'S&P 500', 'Nasdaq 100', 'Dow Jones',
-  'EUR/USD (OTC)', 'GBP/USD (OTC)', 'USD/JPY (OTC)', 'AUD/USD (OTC)',
-  'NZD/USD (OTC)', 'USD/CAD (OTC)', 'CAD/CHF (OTC)', 'EUR/GBP (OTC)',
-  'BTC/USD (OTC)', 'ETH/USD (OTC)', 'Gold/USD (OTC)',
-];
-
-const List<String> kBinaryTimes = ['1m', '2m', '3m', '5m', '15m', '30m', '1h'];
-
-// ── FIX: একাধিক model চেষ্টা করবে ──
-const List<String> kGeminiModels = [
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-flash-latest',
-];
-
-int _periodSec(String t) {
-  switch (t) {
-    case '2m': return 120;
-    case '3m': return 180;
-    case '5m': return 300;
-    case '15m': return 900;
-    case '30m': return 1800;
-    case '1h': return 3600;
-    default: return 60;
-  }
-}
-
-String _fmtRem(int s) {
-  final m = s ~/ 60;
-  final ss = s % 60;
-  return '${m.toString().padLeft(2, '0')}:${ss.toString().padLeft(2, '0')}';
-}
-
-// ═══════════════════════════════════════════════════════════════════
-//  BINARY SIGNAL SCREEN (manual upload + exact error display)
-// ═══════════════════════════════════════════════════════════════════
 class BinarySignalScreen extends StatefulWidget {
   const BinarySignalScreen({super.key});
 
@@ -65,469 +15,1511 @@ class BinarySignalScreen extends StatefulWidget {
 }
 
 class _BinarySignalScreenState extends State<BinarySignalScreen> {
-  String _pair = kBinaryPairs[0];
-  String _time = '1m';
-  String _dir = '—';
-  int _conf = 0;
-  String _reason = 'Screenshot nao → Analyze Now → ss choose koro';
-  List<String> _history = [];
+  static const MethodChannel _bin = MethodChannel('aniket_pro_ai/binary');
+  static const MethodChannel _gal = MethodChannel('aniket_pro_ai/gallery');
+  static const MethodChannel _ss = MethodChannel('aniket_pro_ai/screenshot');
+
+  // Market Category Filter: ALL, OTC, LIVE, CRYPTO
+  String _marketFilter = 'ALL';
+
+  static const List<String> _allPairs = [
+    // Popular Pocket Option OTC Pairs
+    'EUR/USD (OTC)',
+    'GBP/USD (OTC)',
+    'USD/JPY (OTC)',
+    'AUD/USD (OTC)',
+    'USD/CAD (OTC)',
+    'EUR/GBP (OTC)',
+    'EUR/JPY (OTC)',
+    'GBP/JPY (OTC)',
+    'NZD/USD (OTC)',
+    'CAD/CHF (OTC)',
+    'AUD/CAD (OTC)',
+    'AUD/JPY (OTC)',
+    'CHF/JPY (OTC)',
+    'USD/CHF (OTC)',
+    'EUR/AUD (OTC)',
+    'EUR/CAD (OTC)',
+    'GBP/AUD (OTC)',
+    'GBP/CAD (OTC)',
+    'USD/BDT (OTC)',
+    'USD/INR (OTC)',
+    'USD/PKR (OTC)',
+    'USD/BRL (OTC)',
+    'AED/CNY (OTC)',
+    'GOLD (OTC)',
+    // Crypto OTC & Live
+    'BTC/USD (OTC)',
+    'ETH/USD (OTC)',
+    'SOL/USD',
+    'BTC/USD',
+    'ETH/USD',
+    'BNB/USD',
+    'XRP/USD',
+    'ADA/USD',
+    'LTC/USD',
+    'TRX/USD',
+    'DOT/USD',
+    'BCH/USD',
+    // Live Forex Pairs
+    'EUR/USD',
+    'GBP/USD',
+    'USD/JPY',
+    'AUD/USD',
+    'USD/CAD',
+    'USD/CHF',
+    'EUR/GBP',
+    'EUR/JPY',
+    'GBP/JPY',
+    'EUR/AUD',
+    'EUR/CAD',
+    'EUR/CHF',
+    'GBP/AUD',
+    'GBP/CAD',
+    'GBP/CHF',
+    'AUD/CAD',
+    'AUD/CHF',
+    'AUD/JPY',
+    'AUD/NZD',
+    'CAD/CHF',
+    'CAD/JPY',
+    'CHF/JPY',
+    'NZD/USD',
+    'NZD/CAD',
+    'NZD/CHF',
+    'NZD/JPY',
+  ];
+
+  static const List<String> _timeframes = [
+    '5s',
+    '15s',
+    '30s',
+    '1m',
+    '2m',
+    '3m',
+    '5m',
+    '15m',
+  ];
+
+  // Fast Gemini Vision Models with Automatic Fallback
+  static const List<String> _models = [
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-2.5-flash-lite',
+    'gemini-1.5-flash',
+  ];
+
+  String _pair = 'EUR/USD (OTC)';
+  String _tf = '1m';
   List<String> _keys = [];
   bool _floatOn = false;
   bool _busy = false;
-  Timer? _clock;
+  int _lastAnalyzeMs = 0;
+  String _lastSsPath = '';
+
+  // Current Signal State
+  String _dir = '—';
+  int _conf = 0;
+  String _reason = 'Screenshot nao → Analyze Now → ss choose koro';
+  String _pattern = '—';
+  String _structure = '—';
+  String _smcZone = '—';
+  String _entryGuide = '—';
+  String _riskLevel = '—';
+  bool _otcTrap = false;
+
+  // 4-Pillar Confluence Scores (0-100)
+  int _trendScore = 0;
+  int _patternScore = 0;
+  int _snrScore = 0;
+  int _momentumScore = 0;
+  int _latencyMs = 0;
+
+  // Session Win/Loss & Money Management State
+  int _wins = 0;
+  int _losses = 0;
+  double _baseStake = 1.0;
+  final double _payoutPct = 92.0;
+  String _mmMode = '1-Step MTG'; // 'Flat', '1-Step MTG', 'Compounding'
+  bool _lastTradeLost = false;
+  int _winStreak = 0;
+  bool _showMmCalc = false;
+
+  List<String> _hist = [];
+  Timer? _timer;
+
+  List<String> get _filteredPairs {
+    if (_marketFilter == 'OTC') {
+      return _allPairs.where((p) => p.contains('(OTC)')).toList();
+    } else if (_marketFilter == 'LIVE') {
+      return _allPairs
+          .where((p) =>
+              !p.contains('(OTC)') &&
+              !p.startsWith('BTC') &&
+              !p.startsWith('ETH') &&
+              !p.startsWith('SOL') &&
+              !p.startsWith('BNB') &&
+              !p.startsWith('XRP') &&
+              !p.startsWith('ADA') &&
+              !p.startsWith('LTC') &&
+              !p.startsWith('TRX') &&
+              !p.startsWith('DOT') &&
+              !p.startsWith('BCH'))
+          .toList();
+    } else if (_marketFilter == 'CRYPTO') {
+      return _allPairs
+          .where((p) =>
+              p.startsWith('BTC') ||
+              p.startsWith('ETH') ||
+              p.startsWith('SOL') ||
+              p.startsWith('BNB') ||
+              p.startsWith('XRP') ||
+              p.startsWith('ADA') ||
+              p.startsWith('LTC') ||
+              p.startsWith('TRX') ||
+              p.startsWith('DOT') ||
+              p.startsWith('BCH'))
+          .toList();
+    }
+    return _allPairs;
+  }
 
   @override
   void initState() {
     super.initState();
+    _bin.setMethodCallHandler(_onResult);
+    _ss.setMethodCallHandler(_onScreenshotEvent);
     _load();
-    _clock = Timer.periodic(const Duration(seconds: 1), (_) {
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
-    });
-    binaryChannel.setMethodCallHandler((call) async {
-      if (call.method == 'onBinaryResult') {
-        final m = Map<String, Object?>.from(call.arguments as Map);
-        _onResult(m);
-      }
     });
   }
 
   @override
   void dispose() {
-    _clock?.cancel();
+    _timer?.cancel();
     super.dispose();
+  }
+
+  String _formatHistLine(String raw) {
+    final s = raw.trim();
+    if (s.startsWith('UP ')) return '⬆️ ${s.substring(3)}';
+    if (s.startsWith('DOWN ')) return '⬇️ ${s.substring(5)}';
+    if (s.startsWith('WAIT ')) return '⏸️ ${s.substring(5)}';
+    return s;
   }
 
   Future<void> _load() async {
     final p = await SharedPreferences.getInstance();
+    final savedPair = p.getString('bin_pair') ?? 'EUR/USD (OTC)';
+    final savedTf = p.getString('bin_time') ?? '1m';
+    final savedKeys = p.getStringList('bin_keys') ?? [];
+    final savedHist = p.getStringList('bin_hist') ?? [];
+    final savedWins = p.getInt('bin_wins') ?? 0;
+    final savedLosses = p.getInt('bin_losses') ?? 0;
+    final savedStake = p.getDouble('bin_stake') ?? 1.0;
+
+    bool alive = false;
+    try {
+      alive = (await _bin.invokeMethod<bool>('floatAlive')) ?? false;
+    } catch (_) {}
+
+    List<String> nativeHist = [];
+    try {
+      final raw = await _bin.invokeMethod<List>('getHist');
+      if (raw != null) {
+        nativeHist = raw
+            .map((e) => _formatHistLine(e.toString()))
+            .where((s) => s.isNotEmpty && !s.contains(' 0% '))
+            .toList();
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
     setState(() {
-      _history = p.getStringList('bin_hist') ?? [];
-      _keys = (p.getStringList('bin_keys') ?? []);
-      _floatOn = p.getBool('bin_float') ?? false;
-      _pair = p.getString('bin_pair') ?? _pair;
-      _time = p.getString('bin_time') ?? _time;
+      _pair = _allPairs.contains(savedPair) ? savedPair : 'EUR/USD (OTC)';
+      _tf = _timeframes.contains(savedTf) ? savedTf : '1m';
+      _keys = savedKeys;
+      _floatOn = alive;
+      _wins = savedWins;
+      _losses = savedLosses;
+      _baseStake = savedStake;
+      _hist = (nativeHist.isNotEmpty ? nativeHist : savedHist.map(_formatHistLine))
+          .where((s) => !s.contains(' 0% '))
+          .take(5)
+          .toList();
     });
   }
 
-  Future<void> _saveHist() async {
+  Future<void> _saveHist(
+    String dir,
+    int conf, {
+    String? customPair,
+    String? customTf,
+    String? tag,
+  }) async {
+    if (conf <= 0 && dir == 'WAIT') return;
+    final now = DateTime.now();
+    final hh = now.hour.toString().padLeft(2, '0');
+    final mm = now.minute.toString().padLeft(2, '0');
+    final icon = _dirIcon(dir);
+    final usePair = customPair ?? _pair;
+    final useTf = customTf ?? _tf;
+    final shortTag = (tag != null && tag.isNotEmpty && tag != '—') ? ' • $tag' : '';
+    final line = '$icon $conf% $usePair $useTf$shortTag $hh:$mm';
+
+    final updated = [line, ..._hist.where((x) => x != line)].take(5).toList();
+    setState(() {
+      _hist = updated;
+    });
     final p = await SharedPreferences.getInstance();
-    await p.setStringList('bin_hist', _history);
+    await p.setStringList('bin_hist', updated);
   }
 
-  void _onResult(Map m) {
-    final dir = (m['dir'] ?? 'WAIT').toString();
-    final conf = (m['conf'] as num?)?.toInt() ?? 0;
-    if (dir == 'STATE') {
-      if (mounted) setState(() => _floatOn = (conf == 1));
-      return;
+  int _periodSec() {
+    switch (_tf) {
+      case '5s':
+        return 5;
+      case '15s':
+        return 15;
+      case '30s':
+        return 30;
+      case '1m':
+        return 60;
+      case '2m':
+        return 120;
+      case '3m':
+        return 180;
+      case '5m':
+        return 300;
+      case '15m':
+        return 900;
+      default:
+        return 60;
     }
-    final reason = (m['reason'] ?? '').toString();
-    if (reason.startsWith('fail:')) return; // fail history তে যাবে না
-    final pair = (m['pair'] ?? _pair).toString();
-    final time = (m['time'] ?? _time).toString();
-    final now = DateTime.now();
-    final hh = now.hour.toString().padLeft(2, '0');
-    final mm = now.minute.toString().padLeft(2, '0');
-    if (!mounted) return;
-    setState(() {
-      _dir = dir;
-      _conf = conf;
-      _reason = reason.isEmpty ? '—' : reason;
-      _history.insert(0,
-          '${dir == 'UP' ? '⬆️' : dir == 'DOWN' ? '⬇️' : '⏸️'} $conf% $pair $time $hh:$mm');
-      if (_history.length > 5) _history = _history.sublist(0, 5);
-    });
-    _saveHist();
-  }
-
-  void _applyResult(String dir, int conf, String reason) {
-    final now = DateTime.now();
-    final hh = now.hour.toString().padLeft(2, '0');
-    final mm = now.minute.toString().padLeft(2, '0');
-    if (!mounted) return;
-    setState(() {
-      _dir = dir;
-      _conf = conf;
-      _reason = reason.isEmpty ? '—' : reason;
-      _history.insert(0,
-          '${dir == 'UP' ? '⬆️' : dir == 'DOWN' ? '⬇️' : '⏸️'} $conf% $_pair $_time $hh:$mm');
-      if (_history.length > 5) _history = _history.sublist(0, 5);
-    });
-    _saveHist();
   }
 
   int get _rem {
-    final p = _periodSec(_time);
-    final epoch = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    return p - (epoch % p);
+    final p = _periodSec();
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    return p - (nowSec % p);
   }
 
-  Future<void> _keysDialog() async {
-    final c = TextEditingController(text: _keys.join('\n'));
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E1E),
-        title: const Text('Gemini Keys', style: TextStyle(color: kGold)),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: TextField(
-            controller: c,
-            maxLines: 8,
-            style: const TextStyle(color: Colors.white, fontSize: 12),
-            decoration: const InputDecoration(
-              hintText: 'proti line e ekta key paste koro',
-              hintStyle: TextStyle(color: Colors.white24),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
-          TextButton(onPressed: () => Navigator.pop(context, true),
-              child: const Text('Save', style: TextStyle(color: kGold))),
-        ],
-      ),
-    );
-    if (ok == true) {
-      final list = c.text
-          .split(RegExp(r'[\n,;\s]+'))
-          .where((s) => s.trim().length > 20)
-          .toList();
-      final p = await SharedPreferences.getInstance();
-      await p.setStringList('bin_keys', list);
-      setState(() => _keys = list);
+  String _fmtRem(int s) {
+    final m = (s ~/ 60).toString().padLeft(2, '0');
+    final sec = (s % 60).toString().padLeft(2, '0');
+    return '$m:$sec';
+  }
+
+  String get _entryWindowHint {
+    final r = _rem;
+    final p = _periodSec();
+    if (p >= 60) {
+      if (r <= 12 || r >= p - 5) {
+        return '🟢 PERFECT NEXT CANDLE ENTRY';
+      } else if (r <= 25) {
+        return '🟡 GET READY FOR NEXT CANDLE';
+      } else {
+        return '⏳ RUNNING CANDLE (${r}s)';
+      }
+    } else {
+      return r <= 3 ? '🟢 ENTER ON NEXT OPEN' : '⚡ FAST SCALP MODE';
     }
   }
 
-  // ═══ MANUAL UPLOAD (guaranteed path) ═══
+  double get _recommendedStake {
+    if (_mmMode == '1-Step MTG' && _lastTradeLost) {
+      final mult = (100.0 + _payoutPct) / math.max(_payoutPct, 50.0);
+      return double.parse((_baseStake * mult).toStringAsFixed(2));
+    } else if (_mmMode == 'Compounding' && _winStreak > 0) {
+      final step = math.min(_winStreak, 3);
+      double amt = _baseStake;
+      for (int i = 0; i < step; i++) {
+        amt += amt * (_payoutPct / 100.0);
+      }
+      return double.parse(amt.toStringAsFixed(2));
+    }
+    return _baseStake;
+  }
+
+  Future<dynamic> _onScreenshotEvent(MethodCall call) async {
+    if (call.method == 'onScreenshot' && _floatOn && !_busy) {
+      final map = (call.arguments as Map?) ?? {};
+      final path = (map['path'] ?? '').toString();
+      if (path.isNotEmpty && path != _lastSsPath) {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (now - _lastAnalyzeMs > 2500) {
+          _lastSsPath = path;
+          await _analyzeFilePath(path, fromAuto: true);
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<dynamic> _onResult(MethodCall call) async {
+    if (call.method == 'onBinaryResult') {
+      final map = (call.arguments as Map?) ?? {};
+      final dir = (map['dir'] ?? 'WAIT').toString();
+      final conf = int.tryParse((map['conf'] ?? '0').toString()) ?? 0;
+      final reason = (map['reason'] ?? '').toString();
+      final pair = (map['pair'] ?? _pair).toString();
+      final time = (map['time'] ?? _tf).toString();
+
+      if (dir == 'STATE') {
+        if (mounted) {
+          setState(() {
+            _floatOn = conf == 1;
+          });
+        }
+        return null;
+      }
+
+      if (conf == 0 && (reason.contains('sob key fail') || reason.contains('parse fail'))) {
+        if (!_busy && _keys.isNotEmpty) {
+          await _analyzeLatestScreenshot(silentFallback: true);
+          return null;
+        }
+      }
+
+      _applyResult(
+        dir: dir,
+        conf: conf,
+        reason: reason,
+        pair: pair,
+        time: time,
+        pattern: (map['pattern'] ?? _pattern).toString(),
+        structure: (map['structure'] ?? _structure).toString(),
+        smcZone: (map['smc'] ?? _smcZone).toString(),
+        entryGuide: (map['entry'] ?? _entryGuide).toString(),
+        riskLevel: (map['risk'] ?? _riskLevel).toString(),
+        otcTrap: map['trap'] == true,
+        trendScore: int.tryParse((map['trend_score'] ?? '0').toString()),
+        patternScore: int.tryParse((map['pattern_score'] ?? '0').toString()),
+        snrScore: int.tryParse((map['snr_score'] ?? '0').toString()),
+        momentumScore: int.tryParse((map['momentum_score'] ?? '0').toString()),
+      );
+    }
+    return null;
+  }
+
+  void _applyResult({
+    required String dir,
+    required int conf,
+    required String reason,
+    String? pair,
+    String? time,
+    String? pattern,
+    String? structure,
+    String? smcZone,
+    String? entryGuide,
+    String? riskLevel,
+    bool otcTrap = false,
+    int? trendScore,
+    int? patternScore,
+    int? snrScore,
+    int? momentumScore,
+    int? latencyMs,
+  }) {
+    final cleanDir = dir.toUpperCase().trim();
+    final finalDir = (cleanDir == 'UP' || cleanDir == 'CALL' || cleanDir == 'BUY')
+        ? 'UP'
+        : (cleanDir == 'DOWN' || cleanDir == 'PUT' || cleanDir == 'SELL')
+            ? 'DOWN'
+            : 'WAIT';
+
+    if (!mounted) return;
+    setState(() {
+      _dir = finalDir;
+      _conf = conf.clamp(0, 99);
+      _reason = reason.isNotEmpty ? reason : 'Analysis complete';
+      _pattern = (pattern != null && pattern.isNotEmpty) ? pattern : 'Price Action';
+      _structure = (structure != null && structure.isNotEmpty) ? structure : 'SNR Check';
+      _smcZone = (smcZone != null && smcZone.isNotEmpty) ? smcZone : 'Zone Neutral';
+      _entryGuide = (entryGuide != null && entryGuide.isNotEmpty)
+          ? entryGuide
+          : (finalDir == 'WAIT' ? 'Avoid Entry • Wait for Setup' : 'Next Candle Open • 1-Step MTG');
+      _riskLevel = (riskLevel != null && riskLevel.isNotEmpty)
+          ? riskLevel
+          : (conf >= 80 ? 'Low Risk' : conf >= 70 ? 'Medium Risk' : 'High Risk');
+      _otcTrap = otcTrap;
+      _trendScore = (trendScore != null && trendScore > 0)
+          ? trendScore.clamp(0, 99)
+          : (conf > 0 ? (conf - 3).clamp(40, 98) : 0);
+      _patternScore = (patternScore != null && patternScore > 0)
+          ? patternScore.clamp(0, 99)
+          : (conf > 0 ? (conf + 2).clamp(40, 98) : 0);
+      _snrScore = (snrScore != null && snrScore > 0)
+          ? snrScore.clamp(0, 99)
+          : (conf > 0 ? conf.clamp(40, 98) : 0);
+      _momentumScore = (momentumScore != null && momentumScore > 0)
+          ? momentumScore.clamp(0, 99)
+          : (conf > 0 ? (conf - 1).clamp(40, 98) : 0);
+      if (latencyMs != null) _latencyMs = latencyMs;
+    });
+
+    _saveHist(finalDir, _conf, customPair: pair, customTf: time, tag: _pattern);
+  }
+
   Future<void> _pickAndAnalyze() async {
     if (_busy) return;
     if (_keys.isEmpty) {
       await _keysDialog();
       if (_keys.isEmpty) return;
     }
-    setState(() => _busy = true);
+
     try {
-      final res = await galleryChannel
-          .invokeMethod<List<Object?>>('pickFiles', {'max': 1});
-      final list = (res ?? []).map((e) => e.toString()).toList();
-      if (list.isEmpty) {
-        setState(() => _busy = false);
-        return;
-      }
-      var bytes = await File(list.first).readAsBytes();
-      try {
-        final comp = await galleryChannel
-            .invokeMethod<Uint8List>('compress', {'bytes': bytes, 'maxKB': 700});
-        if (comp != null && comp.isNotEmpty) bytes = comp;
-      } catch (_) {}
-      final b64 = base64Encode(bytes);
-      final r = await _geminiVision(b64);
-      final reason = (r['reason'] ?? '').toString();
-      if (reason.startsWith('fail:')) {
-        // FIX: fail hole card এ exact error, history তে নয়
-        if (mounted) {
-          setState(() {
-            _dir = '—';
-            _conf = 0;
-            _reason = reason;
-          });
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text(reason),
-              backgroundColor: const Color(0xFF2A2A2A),
-              duration: const Duration(seconds: 6)));
-        }
-      } else {
-        _applyResult(
-            (r['dir'] ?? 'WAIT').toString(),
-            (r['conf'] as num?)?.toInt() ?? 0,
-            reason);
-      }
+      final res = await _gal.invokeMethod<List>('pickFiles', {'max': 1});
+      if (res == null || res.isEmpty) return;
+      final path = res.first.toString();
+      if (path.isEmpty) return;
+      await _analyzeFilePath(path);
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Fail: $e'), backgroundColor: const Color(0xFF2A2A2A)));
-      }
+      _toast('File choose error: $e');
     }
-    if (mounted) setState(() => _busy = false);
   }
 
-  // ── FIX: multi-model + exact error ──
+  Future<void> _analyzeLatestScreenshot({bool silentFallback = false}) async {
+    if (_busy) return;
+    if (_keys.isEmpty) {
+      if (!silentFallback) await _keysDialog();
+      if (_keys.isEmpty) return;
+    }
+
+    try {
+      final res = await _gal.invokeMethod<List>('listImages', {'limit': 1});
+      if (res == null || res.isEmpty) {
+        if (!silentFallback) _toast('Gallery-te kono screenshot pawa jayni');
+        return;
+      }
+      final first = res.first;
+      if (first is Map) {
+        final path = (first['path'] ?? '').toString();
+        if (path.isNotEmpty) {
+          await _analyzeFilePath(path, fromAuto: silentFallback);
+        }
+      }
+    } catch (e) {
+      if (!silentFallback) _toast('Latest SS load error: $e');
+    }
+  }
+
+  Future<void> _analyzeFilePath(String path, {bool fromAuto = false}) async {
+    if (_busy) return;
+    final file = File(path);
+    if (!await file.exists()) {
+      if (!fromAuto) _toast('Screenshot file pawa jayni');
+      return;
+    }
+
+    final startMs = DateTime.now().millisecondsSinceEpoch;
+    _lastAnalyzeMs = startMs;
+
+    setState(() {
+      _busy = true;
+      _reason = '⚡ Fast AI Pro Price Action + SMC + SNR analyze korche...';
+    });
+
+    try {
+      final rawBytes = await file.readAsBytes();
+      Uint8List sendBytes = rawBytes;
+
+      try {
+        final comp = await _gal.invokeMethod<Uint8List>('compress', {
+          'bytes': rawBytes,
+          'maxKB': 180,
+        });
+        if (comp != null && comp.isNotEmpty) {
+          sendBytes = comp;
+        }
+      } catch (_) {}
+
+      final b64 = base64Encode(sendBytes);
+      final parsed = await _geminiVision(b64);
+      final elapsed = DateTime.now().millisecondsSinceEpoch - startMs;
+
+      final dir = (parsed['dir'] ?? 'WAIT').toString();
+      final conf = int.tryParse((parsed['conf'] ?? '0').toString()) ?? 0;
+      final reason = (parsed['reason'] ?? 'Analysis complete').toString();
+
+      _applyResult(
+        dir: dir,
+        conf: conf,
+        reason: reason,
+        pattern: (parsed['pattern'] ?? 'Price Action').toString(),
+        structure: (parsed['structure'] ?? 'SNR Level').toString(),
+        smcZone: (parsed['smc'] ?? 'Order Block / FVG').toString(),
+        entryGuide: (parsed['entry'] ?? 'Next Candle Open').toString(),
+        riskLevel: (parsed['risk'] ?? 'Normal').toString(),
+        otcTrap: parsed['trap'] == true,
+        trendScore: int.tryParse((parsed['trend_score'] ?? '0').toString()),
+        patternScore: int.tryParse((parsed['pattern_score'] ?? '0').toString()),
+        snrScore: int.tryParse((parsed['snr_score'] ?? '0').toString()),
+        momentumScore: int.tryParse((parsed['momentum_score'] ?? '0').toString()),
+        latencyMs: elapsed,
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _dir = 'WAIT';
+          _conf = 0;
+          _reason = 'Analysis error: $e';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
   Future<Map<String, dynamic>> _geminiVision(String b64) async {
-    final prompt = 'You are a professional binary options trader. Look at this '
-        'trading chart screenshot carefully (candles, trend, support/resistance). '
-        'Predict the NEXT candle direction for $_pair on $_time timeframe. '
-        'Reply ONLY with JSON like: {"dir":"UP","conf":72,"reason":"short Banglish reason"} '
-        'dir must be UP or DOWN or WAIT. If chart is unclear or not a trading chart, use WAIT.';
-    String lastErr = '';
-    for (final key in _keys) {
-      for (final model in kGeminiModels) {
+    final isOtc = _pair.contains('(OTC)');
+    final marketType = isOtc ? 'Pocket Option OTC algorithmic market' : 'Live Interbank market';
+    final prompt = 'You are an elite institutional Binary Options & Pocket Option Price Action Master Trader.\n'
+        'Analyze this trading chart screenshot for pair $_pair on $_tf timeframe ($marketType).\n\n'
+        'Perform a complete 6-Pillar Binary Trading Course Analysis on the visible candles and indicators:\n'
+        '1. CANDLESTICK PSYCHOLOGY & PATTERNS: Check last 1-5 candles for Hammer, Inverted Hammer, Shooting Star, Bullish/Bearish Engulfing, Morning/Evening Star, Tweezer Top/Bottom, Three White Soldiers, Three Black Crows, Marubozu, Doji (Dragonfly/Gravestone), Upper/Lower Wick Rejection, and Momentum Exhaustion.\n'
+        '2. MARKET STRUCTURE & TREND: Identify Uptrend (HH/HL), Downtrend (LH/LL), Ranging/Consolidation, Break of Structure (BOS), or Change of Character (CHoCH).\n'
+        '3. SUPPORT & RESISTANCE (SNR) + SMART MONEY CONCEPTS (SMC): Locate Major Horizontal SNR, Flip Zones (SBR/RBS), Round Numbers, Order Blocks (Bullish/Bearish OB), Fair Value Gaps (FVG / Imbalance), and Liquidity Sweeps (Stop Hunt / Fakeout).\n'
+        '4. CLASSIC CHART PATTERNS: Check for Double Top (M), Double Bottom (W), Head & Shoulders, Ascending/Descending Triangle, Wedge, or Flag/Pennant.\n'
+        '5. INDICATOR CONFLUENCE: If RSI, Bollinger Bands, Stochastic, MACD, or Moving Averages (EMA/SMA) are visible on the screenshot, check Overbought/Oversold, Band Bounce/Squeeze, or Crossover confluence.\n'
+        '6. POCKET OPTION OTC TRAP FILTER: Detect algorithmic OTC manipulation spikes, flat micro-doji chains, or 50/50 choppy conditions. If confidence is below 66% or chart is unclear/not a trading chart, set dir to "WAIT".\n\n'
+        'Predict the IMMEDIATE NEXT 1 CANDLE direction for $_pair ($_tf).\n'
+        'Reply ONLY with a valid JSON object matching this exact schema (no markdown fences):\n'
+        '{\n'
+        '  "dir": "UP" or "DOWN" or "WAIT",\n'
+        '  "conf": 82,\n'
+        '  "pattern": "Short candle pattern name (e.g. Bullish Engulfing + Wick Rejection)",\n'
+        '  "structure": "Trend & SNR summary (e.g. Uptrend HH/HL • Support Bounce)",\n'
+        '  "smc": "SMC / Indicator confluence (e.g. Bullish OB + FVG Fill • RSI Oversold)",\n'
+        '  "entry": "Entry & MTG advice (e.g. Next Candle Open • 1-Step MTG Safe)",\n'
+        '  "risk": "Low Risk" or "Medium Risk" or "High Risk - Avoid",\n'
+        '  "trap": false,\n'
+        '  "trend_score": 84,\n'
+        '  "pattern_score": 86,\n'
+        '  "snr_score": 80,\n'
+        '  "momentum_score": 78,\n'
+        '  "reason": "Concise Banglish explanation (why UP/DOWN/WAIT based on candle rejection, SNR, and trend)"\n'
+        '}';
+
+    String lastError = 'sob key fail — net/key check koro';
+
+    for (final rawKey in _keys) {
+      final key = rawKey.trim();
+      if (key.isEmpty) continue;
+
+      for (final model in _models) {
+        HttpClient? client;
         try {
-          final c = HttpClient()..connectionTimeout = const Duration(seconds: 15);
-          final req = await c.postUrl(Uri.parse(
-              'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$key'));
-          req.headers.set('Content-Type', 'application/json');
-          req.write(jsonEncode({
+          client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+          final uri = Uri.parse(
+            'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$key',
+          );
+          final req = await client.postUrl(uri).timeout(const Duration(seconds: 10));
+          req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
+
+          final bodyMap = {
             'contents': [
               {
                 'parts': [
                   {'text': prompt},
                   {
-                    'inline_data': {'mime_type': 'image/jpeg', 'data': b64}
+                    'inline_data': {
+                      'mime_type': 'image/jpeg',
+                      'data': b64,
+                    }
                   }
                 ]
               }
-            ]
-          }));
-          final res = await req.close().timeout(const Duration(seconds: 30));
-          final s = await res.transform(utf8.decoder).join();
-          c.close();
-          if (res.statusCode == 200) {
-            final j = jsonDecode(s);
-            final parts = j['candidates'][0]['content']['parts'] as List;
-            String text = '';
-            for (final p in parts) {
-              text += (p['text'] ?? '').toString();
+            ],
+            'generationConfig': {
+              'temperature': 0.15,
+              'maxOutputTokens': 550,
+              'responseMimeType': 'application/json',
             }
-            final a = text.indexOf('{');
-            final z = text.lastIndexOf('}');
-            if (a >= 0 && z > a) {
-              return Map<String, dynamic>.from(
-                  jsonDecode(text.substring(a, z + 1)));
-            }
-            return {'dir': 'WAIT', 'conf': 0, 'reason': 'parse fail'};
-          } else {
-            lastErr = 'fail: HTTP ${res.statusCode} — key invalid/quota/model block';
+          };
+
+          req.add(utf8.encode(jsonEncode(bodyMap)));
+          final resp = await req.close().timeout(const Duration(seconds: 16));
+          final respText = await resp.transform(utf8.decoder).join();
+
+          if (resp.statusCode != 200) {
+            lastError = 'HTTP ${resp.statusCode} ($model)';
+            continue;
           }
-        } catch (e) {
-          lastErr = 'fail: net — ${e.toString().split('\n').first}';
+
+          final root = jsonDecode(respText) as Map<String, dynamic>;
+          final candidates = root['candidates'] as List?;
+          if (candidates == null || candidates.isEmpty) {
+            lastError = 'Empty AI response ($model)';
+            continue;
+          }
+
+          final content = (candidates.first as Map)['content'] as Map?;
+          final parts = content?['parts'] as List?;
+          if (parts == null || parts.isEmpty) continue;
+
+          final buffer = StringBuffer();
+          for (final p in parts) {
+            if (p is Map && p['text'] != null) {
+              buffer.write(p['text'].toString());
+            }
+          }
+
+          final rawOut = buffer.toString().trim();
+          final parsed = _extractJsonMap(rawOut);
+          if (parsed != null) {
+            return parsed;
+          } else {
+            lastError = 'JSON parse error ($model)';
+          }
+        } catch (_) {
+          lastError = 'Net/Timeout error';
+        } finally {
+          client?.close(force: true);
         }
       }
     }
+
     return {
       'dir': 'WAIT',
       'conf': 0,
-      'reason': lastErr.isEmpty ? 'fail: key nei — key boshao' : lastErr
+      'pattern': 'API / Key Check',
+      'structure': 'No Signal',
+      'smc': 'Check Internet / Gemini API Key',
+      'entry': 'Tap Key Box below to verify API key',
+      'risk': 'No Trade',
+      'trap': false,
+      'reason': lastError,
     };
   }
 
-  Future<void> _toggleFloat() async {
-    if (_keys.isEmpty) {
-      await _keysDialog();
-      if (_keys.isEmpty) return;
-    }
-    final on = !_floatOn;
+  Map<String, dynamic>? _extractJsonMap(String raw) {
     try {
-      if (on) {
-        await binaryChannel.invokeMethod('startFloat', {'keys': _keys});
-      } else {
-        await binaryChannel.invokeMethod('stopFloat', null);
+      final start = raw.indexOf('{');
+      final end = raw.lastIndexOf('}');
+      if (start != -1 && end > start) {
+        final jsonSlice = raw.substring(start, end + 1);
+        final decoded = jsonDecode(jsonSlice);
+        if (decoded is Map<String, dynamic>) {
+          return decoded;
+        }
       }
-      final p = await SharedPreferences.getInstance();
-      await p.setBool('bin_float', on);
-      setState(() => _floatOn = on);
     } catch (_) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Overlay permission din age'),
-          backgroundColor: Color(0xFF2A2A2A)));
+      final dirMatch = RegExp(
+        r'"dir"\s*:\s*"(UP|DOWN|WAIT|CALL|PUT)"',
+        caseSensitive: false,
+      ).firstMatch(raw);
+      final confMatch = RegExp(r'"conf"\s*:\s*(\d+)').firstMatch(raw);
+      final reasonMatch = RegExp(r'"reason"\s*:\s*"([^"]+)"').firstMatch(raw);
+      final patMatch = RegExp(r'"pattern"\s*:\s*"([^"]+)"').firstMatch(raw);
+      if (dirMatch != null) {
+        return {
+          'dir': dirMatch.group(1)!.toUpperCase(),
+          'conf': int.tryParse(confMatch?.group(1) ?? '70') ?? 70,
+          'pattern': patMatch?.group(1) ?? 'Price Action Setup',
+          'reason': reasonMatch?.group(1) ?? 'Price action confluence detected',
+        };
+      }
+    }
+    return null;
+  }
+
+  Future<void> _toggleFloat(bool val) async {
+    if (val) {
+      if (_keys.isEmpty) {
+        await _keysDialog();
+        if (_keys.isEmpty) return;
+      }
+      try {
+        final can = (await _gal.invokeMethod<bool>('canOverlay')) ?? false;
+        if (!can) {
+          await _gal.invokeMethod('openOverlaySettings');
+          return;
+        }
+        await _bin.invokeMethod('startFloat', {
+          'keys': _keys,
+          'pair': _pair,
+          'time': _tf,
+        });
+        setState(() => _floatOn = true);
+      } catch (e) {
+        _toast('Auto SS start error: $e');
+      }
+    } else {
+      try {
+        await _bin.invokeMethod('stopFloat');
+      } catch (_) {}
+      setState(() => _floatOn = false);
+    }
+    final p = await SharedPreferences.getInstance();
+    await p.setBool('bin_float', _floatOn);
+  }
+
+  Future<void> _syncPairTimeWithService() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString('bin_pair', _pair);
+    await p.setString('bin_time', _tf);
+    if (_floatOn) {
+      try {
+        await _bin.invokeMethod('startFloat', {
+          'keys': _keys,
+          'pair': _pair,
+          'time': _tf,
+        });
+      } catch (_) {}
     }
   }
 
-  Color _dirColor() {
-    if (_dir == 'UP') return const Color(0xFF0F9D58);
-    if (_dir == 'DOWN') return const Color(0xFFD93025);
-    return Colors.white38;
+  Future<void> _recordOutcome(bool isWin) async {
+    setState(() {
+      if (isWin) {
+        _wins++;
+        _lastTradeLost = false;
+        _winStreak++;
+      } else {
+        _losses++;
+        _lastTradeLost = true;
+        _winStreak = 0;
+      }
+    });
+    final p = await SharedPreferences.getInstance();
+    await p.setInt('bin_wins', _wins);
+    await p.setInt('bin_losses', _losses);
   }
 
-  IconData _dirIcon() {
-    if (_dir == 'UP') return Icons.arrow_upward_rounded;
-    if (_dir == 'DOWN') return Icons.arrow_downward_rounded;
-    return Icons.remove_rounded;
+  Future<void> _resetStats() async {
+    setState(() {
+      _wins = 0;
+      _losses = 0;
+      _lastTradeLost = false;
+      _winStreak = 0;
+    });
+    final p = await SharedPreferences.getInstance();
+    await p.setInt('bin_wins', 0);
+    await p.setInt('bin_losses', 0);
+  }
+
+  Future<void> _keysDialog() async {
+    final ctrl = TextEditingController(text: _keys.join('\n'));
+    final saved = await showDialog<List<String>>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161826),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          '🔑 Gemini API Keys (1 per line)',
+          style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Multiple key dile 1ta busy hole auto porer key diye fast kaj korbe (gemini-2.5-flash + fallback):',
+              style: TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: ctrl,
+              maxLines: 5,
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              decoration: InputDecoration(
+                hintText: 'AIzaSy...\nAIzaSy...',
+                hintStyle: const TextStyle(color: Colors.white38),
+                filled: true,
+                fillColor: const Color(0xFF0E101A),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: Color(0xFF3E4259)),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFC6A962),
+              foregroundColor: Colors.black,
+            ),
+            onPressed: () {
+              final list = ctrl.text
+                  .split(RegExp(r'[\r\n,]+'))
+                  .map((s) => s.trim())
+                  .where((s) => s.isNotEmpty)
+                  .toList();
+              Navigator.pop(ctx, list);
+            },
+            child: const Text('Save Keys', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    if (saved != null) {
+      setState(() => _keys = saved);
+      final p = await SharedPreferences.getInstance();
+      await p.setStringList('bin_keys', saved);
+      if (_floatOn) {
+        await _syncPairTimeWithService();
+      }
+    }
+  }
+
+  void _toast(String msg) {
+    try {
+      _gal.invokeMethod('toast', {'text': msg});
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+    }
+  }
+
+  Color _dirColor(String d) {
+    if (d == 'UP') return const Color(0xFF00E676);
+    if (d == 'DOWN') return const Color(0xFFFF5252);
+    return const Color(0xFFFFB300);
+  }
+
+  String _dirIcon(String d) {
+    if (d == 'UP') return '⬆️';
+    if (d == 'DOWN') return '⬇️';
+    return '⏸️';
+  }
+
+  String _dirLabel(String d) {
+    if (d == 'UP') return 'CALL / UP';
+    if (d == 'DOWN') return 'PUT / DOWN';
+    if (d == '—') return '— —';
+    return 'WAIT';
   }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: kBg,
-      child: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(14),
-          children: [
-            Row(children: [
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1A1A2E),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: kGold.withOpacity(0.4)),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                      value: _pair,
-                      isExpanded: true,
-                      dropdownColor: const Color(0xFF1A1A2E),
-                      style: const TextStyle(color: Colors.white, fontSize: 13),
-                      items: kBinaryPairs
-                          .map((p) => DropdownMenuItem(value: p, child: Text(p)))
-                          .toList(),
-                      onChanged: (v) async {
-                        if (v == null) return;
-                        setState(() => _pair = v);
-                        final p = await SharedPreferences.getInstance();
-                        await p.setString('bin_pair', v);
-                      },
+    final activePairs = _filteredPairs;
+    final currentPairInList = activePairs.contains(_pair) ? _pair : activePairs.first;
+    final sigColor = _dirColor(_dir);
+    final totalTrades = _wins + _losses;
+    final winRate = totalTrades > 0 ? ((_wins * 100) / totalTrades).round() : 0;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0D0D12),
+      body: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 1. Quick Market Filter Chips (ALL / OTC / LIVE / CRYPTO)
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (final f in ['ALL', 'OTC', 'LIVE', 'CRYPTO'])
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: ChoiceChip(
+                          label: Text(
+                            f == 'OTC'
+                                ? '🔥 OTC Pairs'
+                                : f == 'LIVE'
+                                    ? '🌐 Live Forex'
+                                    : f == 'CRYPTO'
+                                        ? '₿ Crypto'
+                                        : 'All (${_allPairs.length})',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: _marketFilter == f ? Colors.black : Colors.white70,
+                            ),
+                          ),
+                          selected: _marketFilter == f,
+                          selectedColor: const Color(0xFFC6A962),
+                          backgroundColor: const Color(0xFF171824),
+                          visualDensity: VisualDensity.compact,
+                          onSelected: (_) {
+                            setState(() {
+                              _marketFilter = f;
+                              if (!_filteredPairs.contains(_pair)) {
+                                _pair = _filteredPairs.first;
+                              }
+                            });
+                            _syncPairTimeWithService();
+                          },
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              // 2. Pair & Timeframe Selector Row
+              Row(
+                children: [
+                  Expanded(
+                    flex: 7,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF151624),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFF2E324B)),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: currentPairInList,
+                          dropdownColor: const Color(0xFF191B2C),
+                          isExpanded: true,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          items: activePairs
+                              .map((p) => DropdownMenuItem(
+                                    value: p,
+                                    child: Text(p, overflow: TextOverflow.ellipsis),
+                                  ))
+                              .toList(),
+                          onChanged: (v) {
+                            if (v == null) return;
+                            setState(() => _pair = v);
+                            _syncPairTimeWithService();
+                          },
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1A1A2E),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: kGold.withOpacity(0.4)),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    value: _time,
-                    dropdownColor: const Color(0xFF1A1A2E),
-                    style: const TextStyle(color: Colors.white, fontSize: 13),
-                    items: kBinaryTimes
-                        .map((t) => DropdownMenuItem(value: t, child: Text(t)))
-                        .toList(),
-                    onChanged: (v) async {
-                      if (v == null) return;
-                      setState(() => _time = v);
-                      final p = await SharedPreferences.getInstance();
-                      await p.setString('bin_time', v);
-                    },
-                  ),
-                ),
-              ),
-            ]),
-            const SizedBox(height: 12),
-
-            Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1A1A2E),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: _dirColor().withOpacity(0.6), width: 1.5),
-              ),
-              child: Column(children: [
-                Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Icon(_dirIcon(), color: _dirColor(), size: 44),
-                  const SizedBox(width: 10),
-                  Text(_dir,
-                      style: TextStyle(
-                          color: _dirColor(),
-                          fontSize: 34,
-                          fontWeight: FontWeight.w900)),
-                  const SizedBox(width: 14),
-                  Text('|  $_conf%',
-                      style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w700)),
-                  const SizedBox(width: 14),
-                  Text('|  ${_fmtRem(_rem)} baki',
-                      style: const TextStyle(
-                          color: kGold,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700)),
-                ]),
-                const SizedBox(height: 8),
-                Text('$_pair  •  $_time',
-                    style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                const SizedBox(height: 6),
-                Text(_reason,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white38, fontSize: 11)),
-              ]),
-            ),
-            const SizedBox(height: 12),
-
-            SizedBox(
-              width: double.infinity,
-              height: 54,
-              child: ElevatedButton.icon(
-                onPressed: _busy ? null : _pickAndAnalyze,
-                icon: const Icon(Icons.folder_open_rounded, size: 22),
-                label: Text(
-                    _busy ? 'Analysis cholche...' : 'Analyze Now — ss choose koro',
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: kGold.withOpacity(0.25),
-                  foregroundColor: kGold,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-
-            Container(
-              decoration: BoxDecoration(
-                color: const Color(0xFF1A1A2E),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: SwitchListTile(
-                title: const Text('AUTO SS ANALYSIS 🎯 (bonus)',
-                    style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
-                subtitle: const Text(
-                    'ON korle: ss nile auto cheshta korbe (na hole uporer button use koro)',
-                    style: TextStyle(color: Colors.white38, fontSize: 11)),
-                value: _floatOn,
-                activeColor: kGold,
-                onChanged: (_) => _toggleFloat(),
-              ),
-            ),
-            const SizedBox(height: 8),
-
-            InkWell(
-              onTap: _keysDialog,
-              child: Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1A1A2E),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(children: [
-                  Icon(_keys.isEmpty ? Icons.warning_amber_rounded : Icons.key_rounded,
-                      color: _keys.isEmpty ? Colors.orange : kGold, size: 18),
                   const SizedBox(width: 8),
-                  Text(_keys.isEmpty
-                          ? 'Key nei — tap kore Gemini key boshao'
-                          : '${_keys.length} ta key ache — tap kore edit koro',
-                      style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                ]),
-              ),
-            ),
-            const SizedBox(height: 14),
-
-            const Text('শেষ ৫ signal:',
-                style: TextStyle(color: kGold, fontSize: 13, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 6),
-            if (_history.isEmpty)
-              const Text('ekhon o kono signal nei',
-                  style: TextStyle(color: Colors.white24, fontSize: 11))
-            else
-              ..._history.map((h) => Container(
-                    margin: const EdgeInsets.only(bottom: 4),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF252525),
-                      borderRadius: BorderRadius.circular(8),
+                  Expanded(
+                    flex: 3,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF151624),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFF2E324B)),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: _tf,
+                          dropdownColor: const Color(0xFF191B2C),
+                          isExpanded: true,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          items: _timeframes
+                              .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                              .toList(),
+                          onChanged: (v) {
+                            if (v == null) return;
+                            setState(() => _tf = v);
+                            _syncPairTimeWithService();
+                          },
+                        ),
+                      ),
                     ),
-                    child: Text(h,
-                        style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                  )),
-          ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+
+              // 3. Main Pro Signal Card
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF17192D), Color(0xFF111322)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: _dir == '—' ? const Color(0xFF393E5E) : sigColor.withOpacity(0.75),
+                    width: 1.4,
+                  ),
+                  boxShadow: [
+                    if (_dir != '—')
+                      BoxShadow(
+                        color: sigColor.withOpacity(0.14),
+                        blurRadius: 14,
+                        spreadRadius: 1,
+                      ),
+                  ],
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          _entryWindowHint,
+                          style: const TextStyle(
+                            color: Color(0xFFC6A962),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        if (_latencyMs > 0)
+                          Text(
+                            '⚡ ${(_latencyMs / 1000).toStringAsFixed(1)}s AI',
+                            style: const TextStyle(color: Colors.white54, fontSize: 11),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            _dir == '—' ? '—  —' : '${_dirIcon(_dir)} ${_dirLabel(_dir)}',
+                            style: TextStyle(
+                              color: _dir == '—' ? Colors.white54 : sigColor,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                          const Text(
+                            '  |  ',
+                            style: TextStyle(color: Colors.white24, fontSize: 20),
+                          ),
+                          Text(
+                            '$_conf%',
+                            style: TextStyle(
+                              color: _conf >= 75 ? const Color(0xFF00E676) : Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const Text(
+                            '  |  ',
+                            style: TextStyle(color: Colors.white24, fontSize: 20),
+                          ),
+                          Text(
+                            '${_fmtRem(_rem)} baki',
+                            style: const TextStyle(
+                              color: Color(0xFFFFD54F),
+                              fontSize: 19,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+
+                    Text(
+                      '$_pair • $_tf  |  Next Stake: \$${_recommendedStake.toStringAsFixed(2)} ($_mmMode)',
+                      style: const TextStyle(color: Colors.white70, fontSize: 12.5),
+                    ),
+
+                    if (_otcTrap) ...[
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF4A151B),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.redAccent),
+                        ),
+                        child: const Text(
+                          '⚠️ OTC Manipulation / Choppy Trap Detected — Trade Skip Koro!',
+                          style: TextStyle(
+                            color: Color(0xFFFF8A80),
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+
+                    const SizedBox(height: 8),
+                    Text(
+                      _reason,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12.5,
+                        height: 1.35,
+                      ),
+                    ),
+
+                    if (_conf > 0 || _dir != '—') ...[
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        alignment: WrapAlignment.center,
+                        children: [
+                          _infoBadge('🕯️ Pattern', _pattern, const Color(0xFF263238)),
+                          _infoBadge('📐 Structure', _structure, const Color(0xFF1E2746)),
+                          _infoBadge('🏦 SMC / Zone', _smcZone, const Color(0xFF2B2240)),
+                          _infoBadge('🎯 Entry', _entryGuide, const Color(0xFF1B352E)),
+                          _infoBadge('🛡️ Risk', _riskLevel, const Color(0xFF3A2A1D)),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          _scoreMiniBar('Trend', _trendScore),
+                          const SizedBox(width: 6),
+                          _scoreMiniBar('Pattern', _patternScore),
+                          const SizedBox(width: 6),
+                          _scoreMiniBar('SNR/SMC', _snrScore),
+                          const SizedBox(width: 6),
+                          _scoreMiniBar('Momentum', _momentumScore),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              // 4. Primary Action Buttons: File Picker + 1-Tap Latest Screenshot
+              Row(
+                children: [
+                  Expanded(
+                    flex: 7,
+                    child: SizedBox(
+                      height: 48,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF4B4637),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            side: const BorderSide(color: Color(0xFFC6A962), width: 0.9),
+                          ),
+                        ),
+                        onPressed: _busy ? null : _pickAndAnalyze,
+                        icon: _busy
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Icon(Icons.folder_open, color: Color(0xFFFFD54F), size: 20),
+                        label: Text(
+                          _busy ? 'Analyzing Chart...' : 'Analyze Now — ss choose koro',
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    flex: 3,
+                    child: SizedBox(
+                      height: 48,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF1E243B),
+                          foregroundColor: const Color(0xFF00E676),
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            side: const BorderSide(color: Color(0xFF00E676), width: 0.8),
+                          ),
+                        ),
+                        onPressed: _busy ? null : () => _analyzeLatestScreenshot(silentFallback: false),
+                        child: const Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.bolt, size: 18, color: Color(0xFF00E676)),
+                            Text(
+                              'Latest SS',
+                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+
+              // 5. AUTO SS ANALYSIS Toggle Card
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF15172B),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF282D4F)),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'AUTO SS ANALYSIS 🎯 (bonus)',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 13.5,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            _floatOn
+                                ? '🟢 ACTIVE: Screenshot nilei auto AI analysis + floating signal dekhabe'
+                                : 'ON korle: ss nile auto cheshta korbe (na hole uporer button use koro)',
+                            style: const TextStyle(color: Colors.white60, fontSize: 11.5),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Switch(
+                      value: _floatOn,
+                      activeColor: const Color(0xFFC6A962),
+                      onChanged: _toggleFloat,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              // 6. Session Win/Loss & Money Management Bar
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF141624),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF262A40)),
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          '📊 Win Rate: $winRate% (${_wins}W / ${_losses}L)',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        Row(
+                          children: [
+                            InkWell(
+                              onTap: () => _recordOutcome(true),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF113826),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: const Text(
+                                  '✅ WIN',
+                                  style: TextStyle(
+                                    color: Color(0xFF00E676),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            InkWell(
+                              onTap: () => _recordOutcome(false),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF3E161B),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: const Text(
+                                  '❌ LOSS',
+                                  style: TextStyle(
+                                    color: Color(0xFFFF5252),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            InkWell(
+                              onTap: () => setState(() => _showMmCalc = !_showMmCalc),
+                              child: Icon(
+                                _showMmCalc ? Icons.expand_less : Icons.calculate_outlined,
+                                color: const Color(0xFFC6A962),
+                                size: 20,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    if (_showMmCalc) ...[
+                      const Divider(color: Colors.white12, height: 14),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          for (final m in ['Flat', '1-Step MTG', 'Compounding'])
+                            ChoiceChip(
+                              label: Text(m, style: const TextStyle(fontSize: 11)),
+                              selected: _mmMode == m,
+                              selectedColor: const Color(0xFFC6A962),
+                              onSelected: (_) => setState(() => _mmMode = m),
+                            ),
+                          TextButton(
+                            onPressed: _resetStats,
+                            child: const Text(
+                              'Reset W/L',
+                              style: TextStyle(color: Colors.white54, fontSize: 11),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              // 7. API Key Management Bar
+              InkWell(
+                onTap: _keysDialog,
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF15172B),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFF282D4F)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.vpn_key, color: Color(0xFFC6A962), size: 17),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _keys.isEmpty
+                              ? 'Key nei — tap kore Gemini key boshao'
+                              : '${_keys.length} ta key ache — tap kore edit koro',
+                          style: const TextStyle(color: Colors.white70, fontSize: 12.5),
+                        ),
+                      ),
+                      const Icon(Icons.edit, color: Colors.white38, size: 15),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // 8. Last 5 Signals History
+              const Text(
+                'শেষ ৫ signal:',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 6),
+              if (_hist.isEmpty)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF181920),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Text(
+                    'ekhon o kono signal nei',
+                    style: TextStyle(color: Colors.white54, fontSize: 12),
+                  ),
+                )
+              else
+                ..._hist.map(
+                  (h) => Container(
+                    margin: const EdgeInsets.only(bottom: 5),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1B1C22),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    child: Text(
+                      h,
+                      style: const TextStyle(color: Colors.white70, fontSize: 12.5),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
   }
-}
 
-// ===== END OF FILE binary_screen.dart =====
+  Widget _infoBadge(String label, String val, Color bg) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Text(
+        '$label: $val',
+        style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
+  Widget _scoreMiniBar(String title, int score) {
+    final c = score >= 75
+        ? const Color(0xFF00E676)
+        : score >= 60
+            ? const Color(0xFFFFD54F)
+            : const Color(0xFFFF5252);
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(title, style: const TextStyle(color: Colors.white60, fontSize: 9.5)),
+              Text(
+                '$score%',
+                style: TextStyle(color: c, fontSize: 9.5, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 3),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value: (score.clamp(0, 100)) / 100.0,
+              minHeight: 4,
+              backgroundColor: Colors.white12,
+              valueColor: AlwaysStoppedAnimation<Color>(c),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
