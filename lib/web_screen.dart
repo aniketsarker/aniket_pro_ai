@@ -591,7 +591,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         }
       })
       ..setNavigationDelegate(NavigationDelegate(
-        onProgress: (p) { _progressN.value = p / 100; },
+        onProgress: (p) {
+          _progressN.value = p / 100;
+          if (p >= 40) {
+            try { _controller.runJavaScript(_netlifyHideJs()); } catch (_) {}
+          }
+        },
         onPageStarted: (_) {
           _progressN.value = 0;
           if (_firstLoad) setState(() => _isLoading = true);
@@ -612,41 +617,95 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       ..loadRequest(Uri.parse(kUrl));
   }
 
+  // ── UPGRADED NETLIFY BADGE KILLER (Pierces Shadow DOM + Fixed Pill + MutationObserver) ──
   String _netlifyHideJs() => '''
 (function(){
+  var cssRules = 'iframe[src*="netlify"],iframe[title*="Netlify"],[id*="netlify"],[class*="netlify"],a[href*="netlify"],netlify-badge,div[data-netlify],aside[data-netlify]{display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important;width:0!important;height:0!important;z-index:-999999!important;}';
   if(!window.__nlCss){
     window.__nlCss=1;
-    var st=document.createElement('style');
-    st.textContent='iframe[src*="netlify"],[id*="netlify"],[class*="netlify"],a[href*="netlify"]{display:none!important;}';
-    (document.head||document.documentElement).appendChild(st);
+    try{
+      var st=document.createElement('style');
+      st.textContent=cssRules;
+      (document.head||document.documentElement).appendChild(st);
+    }catch(e){}
   }
-  if(window.__nlHideDone)return;
-  var tries=0;
-  var iv=setInterval(function(){
-    tries++;
-    if(tries>100){clearInterval(iv);return;}
-    var nodes=document.querySelectorAll('iframe,a,div,span,button');
-    for(var i=0;i<nodes.length;i++){
-      var el=nodes[i];
-      var src=(el.src||'')+(el.href||'');
+
+  function nukeNode(el){
+    if(!el)return;
+    try{
+      el.style.setProperty('display','none','important');
+      el.style.setProperty('visibility','hidden','important');
+      el.style.setProperty('opacity','0','important');
+      el.style.setProperty('pointer-events','none','important');
+      el.style.setProperty('width','0px','important');
+      el.style.setProperty('height','0px','important');
+      el.remove();
+    }catch(e){}
+  }
+
+  function scanRoot(root){
+    if(!root)return;
+    var all=[];
+    try{all=root.querySelectorAll('*');}catch(e){}
+    for(var i=0;i<all.length;i++){
+      var el=all[i];
+      if(!el)continue;
+      var tag=(el.tagName||'').toUpperCase();
+      if(tag==='HTML'||tag==='BODY'||tag==='HEAD'||tag==='SCRIPT'||tag==='STYLE'||tag==='NAV')continue;
+
+      // 1. Check Shadow DOM recursively!
+      if(el.shadowRoot){
+        try{
+          var sTxt=(el.shadowRoot.innerHTML||'')+' '+(el.shadowRoot.textContent||'');
+          if(sTxt.toLowerCase().indexOf('netlify')>=0){
+            nukeNode(el);
+            continue;
+          }
+          scanRoot(el.shadowRoot);
+        }catch(e){}
+      }
+
+      // 2. Check attributes & text
+      var href=(el.getAttribute&&el.getAttribute('href'))||'';
+      var src=(el.getAttribute&&el.getAttribute('src'))||'';
+      var title=(el.getAttribute&&el.getAttribute('title'))||'';
       var idc=(el.id||'')+' '+(typeof el.className==='string'?el.className:'');
-      var txt=(el.innerText||'');
-      var low=(src+idc+txt).toLowerCase();
-      if(low.indexOf('netlify')>=0 && txt.length<80){
-        try{el.click();}catch(e){}
-        try{el.style.display='none';el.remove();}catch(e){}
+      var txt=(el.innerText||el.textContent||'').trim();
+      var low=(href+' '+src+' '+title+' '+idc+' '+tag).toLowerCase();
+
+      if(low.indexOf('netlify')>=0){
+        var fixedHost=el.closest&&el.closest('div[style*="fixed"],aside,footer,a')||el;
+        if(fixedHost && fixedHost.tagName!=='BODY' && !fixedHost.querySelector('nav')){
+          nukeNode(fixedHost);
+        } else {
+          nukeNode(el);
+        }
+        continue;
+      }
+
+      if(txt==='Powered by Netlify' || txt==='Hide this badge' || (txt.toLowerCase().indexOf('powered by netlify')>=0 && txt.length<60)){
+        var parentBox=el;
+        for(var up=0;up<5&&parentBox&&parentBox.parentElement;up++){
+          var p=parentBox.parentElement;
+          if(p.tagName==='BODY'||p.tagName==='HTML'||p.querySelector('nav'))break;
+          var cs=window.getComputedStyle(p);
+          parentBox=p;
+          if(cs&&cs.position==='fixed')break;
+        }
+        nukeNode(parentBox);
       }
     }
-    var hide=document.querySelectorAll('a,button,div,span');
-    for(var j=0;j<hide.length;j++){
-      if((hide[j].innerText||'').trim()==='Hide this badge'){
-        try{hide[j].click();}catch(e){}
-        window.__nlHideDone=true;
-        clearInterval(iv);
-        return;
-      }
-    }
-  },400);
+  }
+
+  scanRoot(document);
+  if(!window.__nlObserver){
+    window.__nlObserver=1;
+    setInterval(function(){scanRoot(document);},500);
+    try{
+      var mo=new MutationObserver(function(){scanRoot(document);});
+      mo.observe(document.documentElement,{childList:true,subtree:true});
+    }catch(e){}
+  }
 })();
 ''';
 
@@ -1024,5 +1083,3 @@ class _CamCaptureScreenState extends State<CamCaptureScreen> {
     );
   }
 }
-
-// ===== END OF FILE web_screen.dart =====
