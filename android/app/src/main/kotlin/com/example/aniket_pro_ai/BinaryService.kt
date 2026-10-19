@@ -41,7 +41,6 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
@@ -88,7 +87,6 @@ class BinaryService : Service() {
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var isBubbleExpanded: Boolean = false
 
-    // Legacy fields kept null-safe for clean lifecycle
     private var floatView: View? = null
     private var resultView: LinearLayout? = null
     private var countView: TextView? = null
@@ -353,7 +351,6 @@ class BinaryService : Service() {
         return bestFile
     }
 
-    // ── Timeframe step in minutes/seconds & Upcoming Candle Timestamps ──
     private fun timeframeStepSeconds(tf: String): Int {
         return when (tf.lowercase().trim()) {
             "5s" -> 5
@@ -372,7 +369,6 @@ class BinaryService : Service() {
         val stepSec = timeframeStepSeconds(tf)
         val nowMs = System.currentTimeMillis()
         val stepMs = stepSec * 1000L
-        // Next candle open boundary
         val nextBoundaryMs = ((nowMs / stepMs) + 1L) * stepMs
         val fmt = if (stepSec < 60) {
             SimpleDateFormat("HH:mm:ss", Locale.getDefault())
@@ -460,7 +456,6 @@ class BinaryService : Service() {
         return out
     }
 
-    // ── Smart Expandable Bubble Widget (shows Logo + Direct Signal + Candle Time right inside Bubble) ──
     private fun showFloat() {
         if (bubbleRoot != null) {
             updateBubbleAppearance()
@@ -483,7 +478,6 @@ class BinaryService : Service() {
             }
         }
 
-        // Left side: Logo + Mini Signal Tag underneath when collapsed
         val logoCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
@@ -517,7 +511,6 @@ class BinaryService : Service() {
             ).apply { topMargin = 3 }
         )
 
-        // Right side (Inside the Bubble!): Expandable Signal & Candle Time Panel
         val detailPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -623,7 +616,6 @@ class BinaryService : Service() {
                         main.removeCallbacks(longPressRunnable)
                         if (!moved && !longPressTriggered && event.actionMasked == MotionEvent.ACTION_UP) {
                             if (isBubbleExpanded) {
-                                // Tap when expanded -> collapse back to compact logo (or tap logo to re-analyze)
                                 if (v == detailPanel) {
                                     collapseBubbleToMini()
                                 } else {
@@ -718,7 +710,6 @@ class BinaryService : Service() {
         } catch (_: Exception) {}
     }
 
-    // ── ShotWatcher থেকে ss এলেই সাথে সাথে analysis ──
     fun onScreenshotReceived(id: Long, path: String) {
         if (!captureOn) return
         if (id <= lastId && path == lastAnalyzedPath) return
@@ -750,7 +741,6 @@ class BinaryService : Service() {
                     return@Thread
                 }
 
-                // Show "Analyzing..." right inside the Bubble!
                 main.post { showBubbleLoadingState() }
 
                 val upcomingTimes = computeUpcomingCandleTimes(time)
@@ -787,11 +777,9 @@ class BinaryService : Service() {
                     rawReason
                 }
 
-                // Update mini tag for collapsed bubble (e.g. "⬆️ 22:35")
                 val shortIcon = if (dir == "UP") "⬆️" else if (dir == "DOWN") "⬇️" else "⏸️"
                 lastSignalShort = "$shortIcon $targetTime"
 
-                // Show full signal + candle times directly inside the Bubble!
                 main.post {
                     showSignalInsideBubble(
                         dir = dir,
@@ -905,19 +893,16 @@ class BinaryService : Service() {
                 setStroke(3, strokeColor)
             }
 
-            // Line 1: Direction + Confidence + Exact Target Candle Time!
             bubbleTitleText?.apply {
                 text = "$icon ($conf%)  •  🕒 $targetTime"
                 setTextColor(strokeColor)
             }
 
-            // Line 2: Multi-Candle Time Schedule (e.g., 22:35 ⬆️ | 22:36 ⬆️ | 22:37 ⬆️)
             bubbleTimeScheduleText?.apply {
                 text = if (trap) "⚠️ OTC TRAP!  •  🕯️ $candlePlan" else "🕯️ Candle Time: $candlePlan"
                 setTextColor(if (trap) 0xFFFF8A80.toInt() else 0xFFFFD54F.toInt())
             }
 
-            // Line 3: Pair + Timeframe + Short Banglish Reason
             bubblePairReasonText?.apply {
                 text = "$pair ($time) — $reason"
                 setTextColor(0xFFEEEEEE.toInt())
@@ -926,7 +911,6 @@ class BinaryService : Service() {
             val root = bubbleRoot
             val p = bubbleParams
             if (root != null && p != null) {
-                // Ensure expanded bubble stays nicely within screen bounds
                 val screenW = resources.displayMetrics.widthPixels
                 if (p.x > screenW / 2) {
                     p.x = 16
@@ -934,8 +918,6 @@ class BinaryService : Service() {
                 wm?.updateViewLayout(root, p)
             }
 
-            // Keep expanded for 18 seconds so trader can read all candle times comfortably,
-            // then collapse to compact App Logo (which still shows "⬆️ 22:35" tag below logo!)
             main.postDelayed(collapseRunnable, 18000L)
         } catch (_: Exception) {}
     }
