@@ -105,12 +105,12 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
     '15m',
   ];
 
-  // Fast Gemini Vision Models with Automatic Fallback
+  // Active 2026 Gemini Vision Models (removed retired 1.5-flash that caused HTTP 404)
   static const List<String> _models = [
     'gemini-2.5-flash',
-    'gemini-2.0-flash',
     'gemini-2.5-flash-lite',
-    'gemini-1.5-flash',
+    'gemini-flash-latest',
+    'gemini-2.0-flash',
   ];
 
   String _pair = 'EUR/USD (OTC)';
@@ -596,7 +596,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
         return null;
       }
 
-      if (conf == 0 && (reason.contains('sob key fail') || reason.contains('parse fail'))) {
+      if (conf == 0 && (reason.contains('sob key fail') || reason.contains('parse fail') || reason.contains('HTTP'))) {
         if (!_busy && _keys.isNotEmpty) {
           await _analyzeLatestScreenshot(silentFallback: true);
           return null;
@@ -850,101 +850,45 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
         '4. CLASSIC CHART PATTERNS: Double Top (M), Double Bottom (W), Head & Shoulders, Triangle, Wedge, Flag.\n'
         '5. INDICATOR CONFLUENCE: RSI, Bollinger Bands, Stochastic, MACD, EMA.\n'
         '6. POCKET OPTION OTC TRAP FILTER & EXACT CANDLE TIMING: Predict the exact direction (UP or DOWN) for each upcoming candle ($t1, $t2, and $t3), and specify which exact candle time ($t1, $t2, or $t3) is the primary target candle in "target_time".\n\n'
-        'Reply ONLY with a valid JSON object matching this exact schema:\n'
-        '{\n'
-        '  "dir": "UP" or "DOWN" or "WAIT",\n'
-        '  "conf": 85,\n'
-        '  "detected_pair": "$_pair",\n'
-        '  "target_time": "$t1",\n'
-        '  "candle_plan": "$t1 ⬆️ UP | $t2 ⬆️ UP | $t3 ⬆️ UP",\n'
-        '  "pattern": "Short candle pattern name (e.g. Bullish Engulfing + Wick Rejection)",\n'
-        '  "structure": "Trend & SNR summary (e.g. Uptrend HH/HL • Support Bounce)",\n'
-        '  "smc": "SMC / Indicator confluence (e.g. Bullish OB + FVG Fill)",\n'
-        '  "entry": "$t1 Candle Open • 1-Step MTG ($t2)",\n'
-        '  "risk": "Low Risk" or "Medium Risk" or "High Risk - Avoid",\n'
-        '  "trap": false,\n'
-        '  "trend_score": 86,\n'
-        '  "pattern_score": 88,\n'
-        '  "snr_score": 84,\n'
-        '  "momentum_score": 80,\n'
-        '  "reason": "Concise Banglish explanation mentioning exact candle time ($t1 / $t2 / $t3) and why it will go UP or DOWN"\n'
-        '}';
+        'Reply ONLY with a single raw JSON object (no markdown fences) matching this exact structure:\n'
+        '{"dir":"UP","conf":85,"detected_pair":"$_pair","target_time":"$t1","candle_plan":"$t1 ⬆️ UP | $t2 ⬆️ UP | $t3 ⬆️ UP","pattern":"Bullish Engulfing + Support","structure":"Uptrend HH/HL • Support Bounce","smc":"Bullish OB + FVG Fill","entry":"$t1 Candle Open • 1-Step MTG ($t2)","risk":"Low Risk","trap":false,"trend_score":86,"pattern_score":88,"snr_score":84,"momentum_score":80,"reason":"Short Banglish explanation mentioning exact candle time ($t1 / $t2) and why it will go UP or DOWN"}';
 
-    String lastError = 'sob key fail — net/key check koro';
+    String firstMeaningfulError = '';
 
     for (final rawKey in _keys) {
       final key = rawKey.trim();
       if (key.isEmpty) continue;
 
-      for (final model in _models) {
-        HttpClient? client;
-        try {
-          client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
-          final uri = Uri.parse(
-            'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$key',
-          );
-          final req = await client.postUrl(uri).timeout(const Duration(seconds: 10));
-          req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
+      // Support Groq API Keys (gsk_...) automatically if entered
+      if (key.startsWith('gsk_')) {
+        final groqRes = await _callGroqVision(key, prompt, b64);
+        if (groqRes != null) return groqRes;
+        continue;
+      }
 
-          final bodyMap = {
-            'contents': [
-              {
-                'parts': [
-                  {'text': prompt},
-                  {
-                    'inline_data': {
-                      'mime_type': 'image/jpeg',
-                      'data': b64,
-                    }
-                  }
-                ]
-              }
-            ],
-            'generationConfig': {
-              'temperature': 0.15,
-              'maxOutputTokens': 550,
-              'responseMimeType': 'application/json',
-            }
-          };
+      // Build candidate model list + auto-discovered models for this key
+      final List<String> candidateModels = List<String>.from(_models);
 
-          req.add(utf8.encode(jsonEncode(bodyMap)));
-          final resp = await req.close().timeout(const Duration(seconds: 16));
-          final respText = await resp.transform(utf8.decoder).join();
+      for (int i = 0; i < candidateModels.length; i++) {
+        final model = candidateModels[i];
+        final res = await _trySingleGeminiModel(key, model, prompt, b64);
+        if (res != null && res['__ok'] == true) {
+          res.remove('__ok');
+          return res;
+        }
+        final err = (res?['__err'] ?? '').toString();
+        if (err.isNotEmpty && firstMeaningfulError.isEmpty && !err.contains('404')) {
+          firstMeaningfulError = err;
+        }
 
-          if (resp.statusCode != 200) {
-            lastError = 'HTTP ${resp.statusCode} ($model)';
-            continue;
-          }
-
-          final root = jsonDecode(respText) as Map<String, dynamic>;
-          final candidates = root['candidates'] as List?;
-          if (candidates == null || candidates.isEmpty) {
-            lastError = 'Empty AI response ($model)';
-            continue;
-          }
-
-          final content = (candidates.first as Map)['content'] as Map?;
-          final parts = content?['parts'] as List?;
-          if (parts == null || parts.isEmpty) continue;
-
-          final buffer = StringBuffer();
-          for (final p in parts) {
-            if (p is Map && p['text'] != null) {
-              buffer.write(p['text'].toString());
+        // If the first two static models returned 404, auto-discover available flash/pro models from the API!
+        if (i == 1) {
+          final discovered = await _discoverAvailableGeminiModels(key);
+          for (final dm in discovered) {
+            if (!candidateModels.contains(dm)) {
+              candidateModels.add(dm);
             }
           }
-
-          final rawOut = buffer.toString().trim();
-          final parsed = _extractJsonMap(rawOut);
-          if (parsed != null) {
-            return parsed;
-          } else {
-            lastError = 'JSON parse error ($model)';
-          }
-        } catch (_) {
-          lastError = 'Net/Timeout error';
-        } finally {
-          client?.close(force: true);
         }
       }
     }
@@ -960,37 +904,222 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
       'entry': 'Tap Key Box below to verify API key',
       'risk': 'No Trade',
       'trap': false,
-      'reason': lastError,
+      'reason': firstMeaningfulError.isNotEmpty
+          ? firstMeaningfulError
+          : 'API Key ba Model error — Key box-e giye notun Gemini API key boshao',
     };
   }
 
-  Map<String, dynamic>? _extractJsonMap(String raw) {
+  Future<Map<String, dynamic>?> _trySingleGeminiModel(
+    String key,
+    String model,
+    String prompt,
+    String b64,
+  ) async {
+    HttpClient? client;
     try {
-      final start = raw.indexOf('{');
-      final end = raw.lastIndexOf('}');
+      client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+      final uri = Uri.parse(
+        'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$key',
+      );
+      final req = await client.postUrl(uri).timeout(const Duration(seconds: 10));
+      req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
+
+      // IMPORTANT FIX: Do NOT set a low maxOutputTokens (like 550) on gemini-2.5-flash,
+      // because 2.5-flash uses thinking tokens which previously exhausted 550 tokens and truncated the JSON!
+      // Leaving generationConfig minimal (only temperature: 0.2) gives the full 8192 token output budget
+      // and avoids 400 errors across all Gemini model versions!
+      final bodyMap = {
+        'contents': [
+          {
+            'parts': [
+              {'text': prompt},
+              {
+                'inline_data': {
+                  'mime_type': 'image/jpeg',
+                  'data': b64,
+                }
+              }
+            ]
+          }
+        ],
+        'generationConfig': {
+          'temperature': 0.2,
+        }
+      };
+
+      req.add(utf8.encode(jsonEncode(bodyMap)));
+      final resp = await req.close().timeout(const Duration(seconds: 22));
+      final respText = await resp.transform(utf8.decoder).join();
+
+      if (resp.statusCode != 200) {
+        String apiMsg = 'HTTP ${resp.statusCode} ($model)';
+        try {
+          final errJson = jsonDecode(respText);
+          final msg = errJson['error']?['message']?.toString() ?? '';
+          if (msg.isNotEmpty) {
+            apiMsg = 'HTTP ${resp.statusCode}: ${msg.length > 70 ? msg.substring(0, 70) : msg}';
+          }
+        } catch (_) {}
+        return {'__ok': false, '__err': apiMsg};
+      }
+
+      final root = jsonDecode(respText) as Map<String, dynamic>;
+      final candidates = root['candidates'] as List?;
+      if (candidates == null || candidates.isEmpty) {
+        return {'__ok': false, '__err': 'Empty response ($model)'};
+      }
+
+      final content = (candidates.first as Map)['content'] as Map?;
+      final parts = content?['parts'] as List?;
+      if (parts == null || parts.isEmpty) {
+        return {'__ok': false, '__err': 'No content parts ($model)'};
+      }
+
+      // Skip internal thinking parts ("thought": true) on Gemini 2.5 models
+      final buffer = StringBuffer();
+      for (final p in parts) {
+        if (p is Map) {
+          if (p['thought'] == true) continue;
+          if (p['text'] != null) {
+            buffer.write(p['text'].toString());
+          }
+        }
+      }
+
+      final rawOut = buffer.toString().trim();
+      final parsed = _extractJsonMap(rawOut);
+      if (parsed != null) {
+        parsed['__ok'] = true;
+        return parsed;
+      }
+      return {'__ok': false, '__err': 'Parse error ($model)'};
+    } catch (e) {
+      return {'__ok': false, '__err': 'Net timeout ($model)'};
+    } finally {
+      client?.close(force: true);
+    }
+  }
+
+  Future<List<String>> _discoverAvailableGeminiModels(String key) async {
+    HttpClient? client;
+    try {
+      client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+      final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models?key=$key');
+      final req = await client.getUrl(uri).timeout(const Duration(seconds: 6));
+      final resp = await req.close().timeout(const Duration(seconds: 8));
+      if (resp.statusCode != 200) return [];
+      final txt = await resp.transform(utf8.decoder).join();
+      final root = jsonDecode(txt) as Map<String, dynamic>;
+      final models = root['models'] as List? ?? [];
+      final List<String> flashModels = [];
+      for (final m in models) {
+        if (m is Map) {
+          final name = (m['name'] ?? '').toString().replaceFirst('models/', '');
+          final methods = (m['supportedGenerationMethods'] as List?)?.map((e) => e.toString()).toList() ?? [];
+          if (methods.contains('generateContent') &&
+              name.contains('gemini') &&
+              !name.contains('embedding') &&
+              !name.contains('tts') &&
+              !name.contains('image')) {
+            if (name.contains('flash')) {
+              flashModels.insert(0, name);
+            } else {
+              flashModels.add(name);
+            }
+          }
+        }
+      }
+      return flashModels.take(4).toList();
+    } catch (_) {
+      return [];
+    } finally {
+      client?.close(force: true);
+    }
+  }
+
+  Future<Map<String, dynamic>?> _callGroqVision(String key, String prompt, String b64) async {
+    const groqModels = [
+      'meta-llama/llama-4-scout-17b-16e-instruct',
+      'llama-3.2-90b-vision-preview',
+      'llama-3.2-11b-vision-preview',
+    ];
+    for (final gm in groqModels) {
+      HttpClient? client;
+      try {
+        client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+        final uri = Uri.parse('https://api.groq.com/openai/v1/chat/completions');
+        final req = await client.postUrl(uri);
+        req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
+        req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $key');
+        final bodyMap = {
+          'model': gm,
+          'temperature': 0.15,
+          'max_tokens': 800,
+          'messages': [
+            {
+              'role': 'user',
+              'content': [
+                {'type': 'text', 'text': prompt},
+                {
+                  'type': 'image_url',
+                  'image_url': {'url': 'data:image/jpeg;base64,$b64'}
+                }
+              ]
+            }
+          ]
+        };
+        req.add(utf8.encode(jsonEncode(bodyMap)));
+        final resp = await req.close().timeout(const Duration(seconds: 18));
+        if (resp.statusCode != 200) continue;
+        final txt = await resp.transform(utf8.decoder).join();
+        final root = jsonDecode(txt) as Map<String, dynamic>;
+        final choices = root['choices'] as List?;
+        if (choices == null || choices.isEmpty) continue;
+        final content = ((choices.first as Map)['message'] as Map?)?['content']?.toString() ?? '';
+        final parsed = _extractJsonMap(content);
+        if (parsed != null) return parsed;
+      } catch (_) {
+      } finally {
+        client?.close(force: true);
+      }
+    }
+    return null;
+  }
+
+  Map<String, dynamic>? _extractJsonMap(String raw) {
+    final cleaned = raw.replaceAll('```json', '').replaceAll('```', '').trim();
+    try {
+      final start = cleaned.indexOf('{');
+      final end = cleaned.lastIndexOf('}');
       if (start != -1 && end > start) {
-        final jsonSlice = raw.substring(start, end + 1);
+        final jsonSlice = cleaned.substring(start, end + 1);
         final decoded = jsonDecode(jsonSlice);
         if (decoded is Map<String, dynamic>) {
           return decoded;
         }
       }
-    } catch (_) {
-      final dirMatch = RegExp(
-        r'"dir"\s*:\s*"(UP|DOWN|WAIT|CALL|PUT)"',
-        caseSensitive: false,
-      ).firstMatch(raw);
-      final confMatch = RegExp(r'"conf"\s*:\s*(\d+)').firstMatch(raw);
-      final reasonMatch = RegExp(r'"reason"\s*:\s*"([^"]+)"').firstMatch(raw);
-      final patMatch = RegExp(r'"pattern"\s*:\s*"([^"]+)"').firstMatch(raw);
-      if (dirMatch != null) {
-        return {
-          'dir': dirMatch.group(1)!.toUpperCase(),
-          'conf': int.tryParse(confMatch?.group(1) ?? '70') ?? 70,
-          'pattern': patMatch?.group(1) ?? 'Price Action Setup',
-          'reason': reasonMatch?.group(1) ?? 'Price action confluence detected',
-        };
-      }
+    } catch (_) {}
+
+    // Resilient regex fallback even if JSON string was partially cut off
+    final dirMatch = RegExp(
+      r'"dir"\s*:\s*"(UP|DOWN|WAIT|CALL|PUT|BUY|SELL)"',
+      caseSensitive: false,
+    ).firstMatch(cleaned);
+    final confMatch = RegExp(r'"conf"\s*:\s*(\d+)').firstMatch(cleaned);
+    final reasonMatch = RegExp(r'"reason"\s*:\s*"([^"]*)').firstMatch(cleaned);
+    final patMatch = RegExp(r'"pattern"\s*:\s*"([^"]*)').firstMatch(cleaned);
+    final targetMatch = RegExp(r'"target_time"\s*:\s*"([^"]*)').firstMatch(cleaned);
+    final planMatch = RegExp(r'"candle_plan"\s*:\s*"([^"]*)').firstMatch(cleaned);
+    if (dirMatch != null) {
+      return {
+        'dir': dirMatch.group(1)!.toUpperCase(),
+        'conf': int.tryParse(confMatch?.group(1) ?? '78') ?? 78,
+        'target_time': targetMatch?.group(1) ?? '',
+        'candle_plan': planMatch?.group(1) ?? '',
+        'pattern': patMatch?.group(1) ?? 'Price Action Setup',
+        'reason': reasonMatch?.group(1) ?? 'Price action confluence detected',
+      };
     }
     return null;
   }
@@ -1086,7 +1215,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Multiple key dile 1ta busy hole auto porer key diye fast kaj korbe (gemini-2.5-flash + fallback):',
+              'Multiple key dile 1ta busy hole auto porer key diye fast kaj korbe (Gemini AIza... ba Groq gsk_... key):',
               style: TextStyle(color: Colors.white70, fontSize: 12),
             ),
             const SizedBox(height: 10),
