@@ -7,17 +7,30 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.database.ContentObserver
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.BitmapShader
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.Shader
+import android.graphics.Typeface
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.MediaStore
 import android.util.Base64
 import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
 import android.view.WindowManager
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -27,18 +40,27 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.max
 
 // ═══════════════════════════════════════════════════════════════════
-//  BINARY SIGNAL SERVICE — PRO AUTO MODE (forex এর ShotWatcher reuse)
-//  capture ON থাকলে: screenshot হলেই সাথে সাথে ultra-fast AI analysis
+//  BINARY SIGNAL SERVICE — SMART IN-BUBBLE SIGNAL + CANDLE TIME HUD
+//  • অ্যাপে না ঢুকেই Pocket Option-এর ওপর ভাসমান বাবলের ভেতরেই সরাসরি:
+//    1) App Logo + UP / DOWN + Confidence %
+//    2) ঠিক কোন টাইমের ক্যান্ডেল UP/DOWN হবে (যেমন 22:35, 22:36, 22:37)
+//    3) স্ক্রিনশট থেকে অটো-ডিটেক্ট করা মার্কেট/পেয়ারের নাম
+//    দেখাবে!
 // ═══════════════════════════════════════════════════════════════════
 class BinaryService : Service() {
 
     companion object {
         var instance: BinaryService? = null
         var keys: List<String> = emptyList()
-        var pair: String = "EUR/USD"
+        var pair: String = "EUR/USD (OTC)"
         var time: String = "1m"
         var captureOn: Boolean = false
         var lastId: Long = 0
@@ -54,10 +76,44 @@ class BinaryService : Service() {
 
     private val main = Handler(Looper.getMainLooper())
     private var wm: WindowManager? = null
-    private var floatView: TextView? = null
+
+    // Smart Expandable Bubble Views (Everything inside the Bubble itself!)
+    private var bubbleRoot: LinearLayout? = null
+    private var bubbleLogoView: ImageView? = null
+    private var bubbleMiniTag: TextView? = null
+    private var bubbleDetailPanel: LinearLayout? = null
+    private var bubbleTitleText: TextView? = null
+    private var bubbleTimeScheduleText: TextView? = null
+    private var bubblePairReasonText: TextView? = null
+    private var bubbleParams: WindowManager.LayoutParams? = null
+    private var isBubbleExpanded: Boolean = false
+
+    // Legacy fields kept null-safe for clean lifecycle
+    private var floatView: View? = null
     private var resultView: LinearLayout? = null
     private var countView: TextView? = null
+
     private var busy = false
+    private var lastAnalyzedPath: String = ""
+    private var lastAnalyzedTimeMs: Long = 0L
+    private var lastKnownFileMtime: Long = 0L
+    private var lastSignalShort: String = ""
+
+    private var mediaObserver: ContentObserver? = null
+    private val collapseRunnable = Runnable {
+        collapseBubbleToMini()
+    }
+
+    private val folderPollRunnable = object : Runnable {
+        override fun run() {
+            if (captureOn && !busy) {
+                checkRecentScreenshotInBackground()
+            }
+            if (instance != null) {
+                main.postDelayed(this, 1600L)
+            }
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -71,6 +127,9 @@ class BinaryService : Service() {
                 NotificationChannel("bin_chan", "Binary Signal", NotificationManager.IMPORTANCE_LOW)
             )
         }
+        lastKnownFileMtime = System.currentTimeMillis()
+        registerOwnScreenshotObserver()
+        main.postDelayed(folderPollRunnable, 1800L)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -79,14 +138,21 @@ class BinaryService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        intent?.getStringArrayListExtra("keys")?.let { keys = it }
-        intent?.getStringExtra("pair")?.let { pair = it }
-        intent?.getStringExtra("time")?.let { time = it }
+        intent?.getStringArrayListExtra("keys")?.let {
+            if (it.isNotEmpty()) keys = it
+        }
+        intent?.getStringExtra("pair")?.let {
+            if (it.isNotEmpty()) pair = it
+        }
+        intent?.getStringExtra("time")?.let {
+            if (it.isNotEmpty()) time = it
+        }
+        loadPrefsFallbackIfNeeded()
 
         val nb = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "bin_chan")
         else @Suppress("DEPRECATION") Notification.Builder(this)
         nb.setContentTitle("ANIKET PRO AI")
-            .setContentText("Binary capture ON — screenshot nilei analysis")
+            .setContentText("Smart Bubble ON ($pair • $time) — SS nile bubble-er bhetorei signal dekhabe")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setOngoing(true)
         var started = false
@@ -109,55 +175,533 @@ class BinaryService : Service() {
         }
 
         captureOn = true
+        lastKnownFileMtime = System.currentTimeMillis()
         showFloat()
-        main.post {
-            Toast.makeText(
-                this,
-                "🎯 Binary capture ON — ekhon screenshot nilei auto analysis hobe",
-                Toast.LENGTH_LONG
-            ).show()
+        updateBubbleAppearance()
+
+        if (action == "ANALYZE_ONCE") {
+            triggerLatestScreenshotAnalysis(manualTap = true)
+        } else {
+            main.post {
+                Toast.makeText(
+                    this,
+                    "🟢 Smart Logo Bubble ON — Pocket Option-e SS nile ba Bubble-e tap korle বাবলের ভেতরেই UP/DOWN ও Candle Time দেখাবে!",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         }
         return START_STICKY
     }
 
-    // ── floating 🎯 (tap = capture ON/OFF) ──
+    private fun loadPrefsFallbackIfNeeded() {
+        try {
+            val sp = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            if (pair.isEmpty()) {
+                pair = sp.getString("flutter.bin_pair", "EUR/USD (OTC)") ?: "EUR/USD (OTC)"
+            }
+            if (time.isEmpty()) {
+                time = sp.getString("flutter.bin_time", "1m") ?: "1m"
+            }
+            if (keys.isEmpty()) {
+                val rawKeys = sp.getString("flutter.bin_keys", null)
+                if (!rawKeys.isNullOrEmpty()) {
+                    val extracted = Regex("AIza[0-9A-Za-z_\\-]{25,}").findAll(rawKeys).map { it.value }.toList()
+                    if (extracted.isNotEmpty()) {
+                        keys = extracted
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun registerOwnScreenshotObserver() {
+        try {
+            val obs = object : ContentObserver(main) {
+                override fun onChange(selfChange: Boolean, uri: Uri?) {
+                    super.onChange(selfChange, uri)
+                    if (!captureOn) return
+                    main.postDelayed({
+                        if (captureOn && !busy) {
+                            checkRecentScreenshotInBackground()
+                        }
+                    }, 350L)
+                }
+            }
+            contentResolver.registerContentObserver(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                true,
+                obs
+            )
+            mediaObserver = obs
+        } catch (_: Exception) {}
+    }
+
+    private fun checkRecentScreenshotInBackground() {
+        Thread {
+            try {
+                val latest = findLatestScreenshotFile(maxAgeMs = 8000L)
+                if (latest != null && latest.exists() && latest.length() > 5000L) {
+                    val mtime = latest.lastModified()
+                    if (mtime > lastKnownFileMtime && latest.absolutePath != lastAnalyzedPath) {
+                        lastKnownFileMtime = mtime
+                        analyze(latest.absolutePath)
+                    }
+                }
+            } catch (_: Exception) {}
+        }.start()
+    }
+
+    private fun triggerLatestScreenshotAnalysis(manualTap: Boolean) {
+        if (busy) {
+            if (manualTap) {
+                main.post {
+                    Toast.makeText(this, "⏳ AI ekhon analyze korche...", Toast.LENGTH_SHORT).show()
+                }
+            }
+            return
+        }
+        Thread {
+            try {
+                val latest = findLatestScreenshotFile(maxAgeMs = 3600_000L)
+                if (latest != null && latest.exists()) {
+                    lastKnownFileMtime = max(lastKnownFileMtime, latest.lastModified())
+                    analyze(latest.absolutePath, forceManual = manualTap)
+                } else if (manualTap) {
+                    main.post {
+                        Toast.makeText(
+                            this,
+                            "📸 Kono screenshot pawa jayni — age Pocket Option-e screenshot nao!",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            } catch (e: Exception) {
+                if (manualTap) {
+                    main.post {
+                        Toast.makeText(this, "SS load error: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }.start()
+    }
+
+    private fun findLatestScreenshotFile(maxAgeMs: Long): File? {
+        val now = System.currentTimeMillis()
+        var bestFile: File? = null
+        var bestTime = 0L
+
+        try {
+            val proj = arrayOf(
+                MediaStore.Images.Media._ID,
+                MediaStore.Images.Media.DATA,
+                MediaStore.Images.Media.DATE_ADDED
+            )
+            contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                proj,
+                null,
+                null,
+                "${MediaStore.Images.Media.DATE_ADDED} DESC"
+            )?.use { c ->
+                val dataIdx = c.getColumnIndex(MediaStore.Images.Media.DATA)
+                var count = 0
+                while (c.moveToNext() && count < 8) {
+                    count++
+                    if (dataIdx >= 0) {
+                        val p = c.getString(dataIdx) ?: ""
+                        if (p.isNotEmpty()) {
+                            val f = File(p)
+                            if (f.exists() && f.length() > 4000L) {
+                                val mt = f.lastModified()
+                                if (now - mt <= maxAgeMs && mt > bestTime) {
+                                    bestTime = mt
+                                    bestFile = f
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        try {
+            val root = Environment.getExternalStorageDirectory()
+            val dirs = listOf(
+                File(root, "Pictures/Screenshots"),
+                File(root, "DCIM/Screenshots"),
+                File(root, "Screenshots")
+            )
+            for (d in dirs) {
+                if (d.exists() && d.isDirectory) {
+                    val files = d.listFiles() ?: continue
+                    for (f in files) {
+                        if (f.isFile && f.length() > 4000L) {
+                            val name = f.name.lowercase()
+                            if (name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png") || name.endsWith(".webp")) {
+                                val mt = f.lastModified()
+                                if (now - mt <= maxAgeMs && mt > bestTime) {
+                                    bestTime = mt
+                                    bestFile = f
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        return bestFile
+    }
+
+    // ── Timeframe step in minutes/seconds & Upcoming Candle Timestamps ──
+    private fun timeframeStepSeconds(tf: String): Int {
+        return when (tf.lowercase().trim()) {
+            "5s" -> 5
+            "15s" -> 15
+            "30s" -> 30
+            "1m" -> 60
+            "2m" -> 120
+            "3m" -> 180
+            "5m" -> 300
+            "15m" -> 900
+            else -> 60
+        }
+    }
+
+    private fun computeUpcomingCandleTimes(tf: String): List<String> {
+        val stepSec = timeframeStepSeconds(tf)
+        val nowMs = System.currentTimeMillis()
+        val stepMs = stepSec * 1000L
+        // Next candle open boundary
+        val nextBoundaryMs = ((nowMs / stepMs) + 1L) * stepMs
+        val fmt = if (stepSec < 60) {
+            SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+        } else {
+            SimpleDateFormat("HH:mm", Locale.getDefault())
+        }
+        return listOf(
+            fmt.format(Date(nextBoundaryMs)),
+            fmt.format(Date(nextBoundaryMs + stepMs)),
+            fmt.format(Date(nextBoundaryMs + stepMs * 2L))
+        )
+    }
+
+    private fun buildLogoBubbleBitmap(sizePx: Int, active: Boolean, analyzing: Boolean, signalDir: String = ""): Bitmap {
+        val out = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val cx = sizePx / 2f
+        val cy = sizePx / 2f
+        val radius = sizePx / 2f - 4f
+
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xF010121E.toInt()
+            style = Paint.Style.FILL
+        }
+        canvas.drawCircle(cx, cy, radius, bgPaint)
+
+        var rawLogo: Bitmap? = null
+        try {
+            assets.open("flutter_assets/assets/logo.png").use { stream ->
+                rawLogo = BitmapFactory.decodeStream(stream)
+            }
+        } catch (_: Exception) {}
+
+        if (rawLogo == null) {
+            try {
+                val drawable = packageManager.getApplicationIcon(packageName)
+                if (drawable is BitmapDrawable && drawable.bitmap != null) {
+                    rawLogo = drawable.bitmap
+                } else {
+                    val bmp = Bitmap.createBitmap(
+                        max(drawable.intrinsicWidth, 96),
+                        max(drawable.intrinsicHeight, 96),
+                        Bitmap.Config.ARGB_8888
+                    )
+                    val c = Canvas(bmp)
+                    drawable.setBounds(0, 0, c.width, c.height)
+                    drawable.draw(c)
+                    rawLogo = bmp
+                }
+            } catch (_: Exception) {}
+        }
+
+        rawLogo?.let { src ->
+            val innerSize = (sizePx - 14).coerceAtLeast(32)
+            val scaled = Bitmap.createScaledBitmap(src, innerSize, innerSize, true)
+            val shaderBmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+            val sc = Canvas(shaderBmp)
+            sc.drawBitmap(scaled, 7f, 7f, null)
+            val shaderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = BitmapShader(shaderBmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            }
+            canvas.drawCircle(cx, cy, radius - 5f, shaderPaint)
+        }
+
+        val ringColor = when {
+            analyzing -> 0xFFFFD54F.toInt()
+            signalDir == "UP" -> 0xFF00E676.toInt()
+            signalDir == "DOWN" -> 0xFFFF5252.toInt()
+            active -> 0xFFC6A962.toInt()
+            else -> 0xFF777777.toInt()
+        }
+        val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = ringColor
+            style = Paint.Style.STROKE
+            strokeWidth = 6f
+        }
+        canvas.drawCircle(cx, cy, radius - 2f, ringPaint)
+
+        val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = if (active) 0xFF00E676.toInt() else 0xFF888888.toInt()
+            style = Paint.Style.FILL
+        }
+        canvas.drawCircle(sizePx - 15f, sizePx - 15f, 8.5f, dotPaint)
+
+        return out
+    }
+
+    // ── Smart Expandable Bubble Widget (shows Logo + Direct Signal + Candle Time right inside Bubble) ──
     private fun showFloat() {
-        if (floatView != null) return
+        if (bubbleRoot != null) {
+            updateBubbleAppearance()
+            return
+        }
         if (!android.provider.Settings.canDrawOverlays(this)) {
             Toast.makeText(this, "Overlay permission din", Toast.LENGTH_LONG).show()
             return
         }
-        val v = TextView(this)
-        v.text = "🎯"
-        v.textSize = 20f
-        v.gravity = Gravity.CENTER
-        val bg = GradientDrawable()
-        bg.setColor(0xE6F5E6C8.toInt())
-        bg.cornerRadius = 60f
-        v.background = bg
-        v.setPadding(26, 26, 26, 26)
+
+        val density = resources.displayMetrics.density
+        val logoSizePx = (56 * density).toInt().coerceAtLeast(110)
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(0x00000000)
+                cornerRadius = 80f
+            }
+        }
+
+        // Left side: Logo + Mini Signal Tag underneath when collapsed
+        val logoCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+
+        val iv = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setImageBitmap(buildLogoBubbleBitmap(logoSizePx, captureOn, busy))
+        }
+
+        val miniTag = TextView(this).apply {
+            text = "AUTO"
+            textSize = 9.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(0xFFFFFFFF.toInt())
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                setColor(0xE6141626.toInt())
+                cornerRadius = 20f
+                setStroke(2, 0xFFC6A962.toInt())
+            }
+            setPadding(12, 3, 12, 3)
+        }
+
+        logoCol.addView(iv, LinearLayout.LayoutParams(logoSizePx, logoSizePx))
+        logoCol.addView(
+            miniTag,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 3 }
+        )
+
+        // Right side (Inside the Bubble!): Expandable Signal & Candle Time Panel
+        val detailPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            background = GradientDrawable().apply {
+                setColor(0xF5101322.toInt())
+                cornerRadius = 32f
+                setStroke(3, 0xFFC6A962.toInt())
+            }
+            setPadding(26, 16, 28, 16)
+        }
+
+        val titleTv = TextView(this).apply {
+            text = "⬆️ UP 85% • 🕒 22:35"
+            textSize = 15.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(0xFF00E676.toInt())
+        }
+
+        val scheduleTv = TextView(this).apply {
+            text = "🕯️ 22:35 ⬆️ | 22:36 ⬆️ | 22:37 ⬆️"
+            textSize = 11.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(0xFFFFD54F.toInt())
+        }
+
+        val reasonTv = TextView(this).apply {
+            text = "$pair • $time"
+            textSize = 11f
+            setTextColor(0xFFDDDDDD.toInt())
+            maxLines = 2
+        }
+
+        detailPanel.addView(titleTv)
+        detailPanel.addView(scheduleTv)
+        detailPanel.addView(reasonTv)
+
+        root.addView(logoCol)
+        root.addView(
+            detailPanel,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginStart = 10 }
+        )
+
         val p = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            if (Build.VERSION.SDK_INT >= 26)
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else
+                @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         )
-        p.gravity = Gravity.END or Gravity.CENTER_VERTICAL
-        v.setOnClickListener { toggleCapture() }
+        p.gravity = Gravity.TOP or Gravity.START
+        val screenW = resources.displayMetrics.widthPixels
+        val screenH = resources.displayMetrics.heightPixels
+        p.x = (screenW - logoSizePx - (16 * density).toInt()).coerceAtLeast(8)
+        p.y = (screenH * 0.28f).toInt()
+
+        val touchListener = object : View.OnTouchListener {
+            private var startX = 0
+            private var startY = 0
+            private var touchX = 0f
+            private var touchY = 0f
+            private var moved = false
+            private var longPressTriggered = false
+            private val longPressRunnable = Runnable {
+                if (!moved) {
+                    longPressTriggered = true
+                    toggleCapture()
+                }
+            }
+
+            override fun onTouch(v: View, event: MotionEvent): Boolean {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        startX = p.x
+                        startY = p.y
+                        touchX = event.rawX
+                        touchY = event.rawY
+                        moved = false
+                        longPressTriggered = false
+                        main.postDelayed(longPressRunnable, 650L)
+                        return true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = (event.rawX - touchX).toInt()
+                        val dy = (event.rawY - touchY).toInt()
+                        if (abs(dx) > 10 || abs(dy) > 10) {
+                            moved = true
+                            main.removeCallbacks(longPressRunnable)
+                            p.x = (startX + dx).coerceIn(0, max(0, screenW - logoSizePx))
+                            p.y = (startY + dy).coerceIn(0, max(0, screenH - logoSizePx))
+                            try {
+                                wm?.updateViewLayout(root, p)
+                            } catch (_: Exception) {}
+                        }
+                        return true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        main.removeCallbacks(longPressRunnable)
+                        if (!moved && !longPressTriggered && event.actionMasked == MotionEvent.ACTION_UP) {
+                            if (isBubbleExpanded) {
+                                // Tap when expanded -> collapse back to compact logo (or tap logo to re-analyze)
+                                if (v == detailPanel) {
+                                    collapseBubbleToMini()
+                                } else {
+                                    triggerLatestScreenshotAnalysis(manualTap = true)
+                                }
+                            } else {
+                                if (!captureOn) {
+                                    captureOn = true
+                                    updateBubbleAppearance()
+                                }
+                                triggerLatestScreenshotAnalysis(manualTap = true)
+                            }
+                        }
+                        return true
+                    }
+                }
+                return false
+            }
+        }
+
+        root.setOnTouchListener(touchListener)
+        logoCol.setOnTouchListener(touchListener)
+        detailPanel.setOnTouchListener(touchListener)
+
         try {
-            wm?.addView(v, p)
-            floatView = v
+            wm?.addView(root, p)
+            bubbleRoot = root
+            bubbleLogoView = iv
+            bubbleMiniTag = miniTag
+            bubbleDetailPanel = detailPanel
+            bubbleTitleText = titleTv
+            bubbleTimeScheduleText = scheduleTv
+            bubblePairReasonText = reasonTv
+            bubbleParams = p
+            floatView = root
         } catch (_: Exception) {}
+    }
+
+    private fun updateBubbleAppearance(signalDir: String = "") {
+        main.post {
+            try {
+                val iv = bubbleLogoView ?: return@post
+                val density = resources.displayMetrics.density
+                val logoSizePx = (56 * density).toInt().coerceAtLeast(110)
+                iv.setImageBitmap(buildLogoBubbleBitmap(logoSizePx, captureOn, busy, signalDir))
+                bubbleMiniTag?.text = when {
+                    busy -> "⚡ AI.."
+                    lastSignalShort.isNotEmpty() -> lastSignalShort
+                    captureOn -> "🟢 ON"
+                    else -> "⏸️ OFF"
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun collapseBubbleToMini() {
+        main.post {
+            try {
+                isBubbleExpanded = false
+                bubbleDetailPanel?.visibility = View.GONE
+                val root = bubbleRoot
+                val p = bubbleParams
+                if (root != null && p != null) {
+                    wm?.updateViewLayout(root, p)
+                }
+            } catch (_: Exception) {}
+        }
     }
 
     private fun toggleCapture() {
         captureOn = !captureOn
+        if (!captureOn) lastSignalShort = ""
+        updateBubbleAppearance()
         main.post {
             Toast.makeText(
                 this,
-                if (captureOn) "🎯 Capture ON — ss nilei analysis"
-                else "🎯 Capture OFF — ss analysis hobe na",
+                if (captureOn) "🟢 Auto Capture ON — Pocket Option-e SS nilei bubble-e signal dekhabe"
+                else "⏸️ Auto Capture OFF (Long-press or tap bubble to turn ON)",
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -174,30 +718,45 @@ class BinaryService : Service() {
         } catch (_: Exception) {}
     }
 
-    // ── ShotWatcher থেকে ss এলেই সাথে সাথে analysis (forex এর same path) ──
+    // ── ShotWatcher থেকে ss এলেই সাথে সাথে analysis ──
     fun onScreenshotReceived(id: Long, path: String) {
         if (!captureOn) return
-        if (id <= lastId) return
+        if (id <= lastId && path == lastAnalyzedPath) return
         lastId = id
         analyze(path)
     }
 
-    private fun analyze(path: String) {
+    private fun analyze(path: String, forceManual: Boolean = false) {
         if (busy) return
+        val now = System.currentTimeMillis()
+        if (!forceManual && path == lastAnalyzedPath && (now - lastAnalyzedTimeMs) < 3000L) {
+            return
+        }
         busy = true
+        lastAnalyzedPath = path
+        lastAnalyzedTimeMs = now
+        updateBubbleAppearance()
+
         Thread {
             try {
+                loadPrefsFallbackIfNeeded()
                 val f = File(path)
                 if (!f.exists()) {
                     main.post {
                         Toast.makeText(this, "SS file missing", Toast.LENGTH_SHORT).show()
                     }
                     busy = false
+                    updateBubbleAppearance()
                     return@Thread
                 }
-                main.post { showCount("⚡") }
+
+                // Show "Analyzing..." right inside the Bubble!
+                main.post { showBubbleLoadingState() }
+
+                val upcomingTimes = computeUpcomingCandleTimes(time)
                 val b64 = bytesToB64(f.readBytes())
-                val res = callGemini(b64)
+                val res = callGemini(b64, upcomingTimes)
+
                 val dir = res.optString("dir", "WAIT").uppercase().let {
                     if (it == "CALL" || it == "BUY") "UP"
                     else if (it == "PUT" || it == "SELL") "DOWN"
@@ -205,11 +764,21 @@ class BinaryService : Service() {
                     else "WAIT"
                 }
                 val conf = res.optInt("conf", 0)
-                val pattern = res.optString("pattern", "")
-                val structure = res.optString("structure", "")
-                val smc = res.optString("smc", "")
-                val entry = res.optString("entry", "")
-                val risk = res.optString("risk", "")
+                val detectedPair = res.optString("detected_pair", "").trim()
+                if (detectedPair.isNotEmpty() && detectedPair != "UNKNOWN" && detectedPair.contains("/")) {
+                    pair = detectedPair
+                }
+
+                val targetTime = res.optString("target_time", upcomingTimes[0]).ifEmpty { upcomingTimes[0] }
+                val candlePlan = res.optString(
+                    "candle_plan",
+                    "${upcomingTimes[0]}: ${if (dir == "UP") "⬆️ UP" else if (dir == "DOWN") "⬇️ DOWN" else "⏸️ WAIT"} | ${upcomingTimes[1]}: ${if (dir == "UP") "⬆️" else "⬇️"}"
+                )
+                val pattern = res.optString("pattern", "Price Action")
+                val structure = res.optString("structure", "SNR Level")
+                val smc = res.optString("smc", "Order Block / FVG")
+                val entry = res.optString("entry", "Candle $targetTime Open")
+                val risk = res.optString("risk", "Normal")
                 val trap = res.optBoolean("trap", false)
                 val rawReason = res.optString("reason", "")
                 val fullReason = if (pattern.isNotEmpty() && !rawReason.contains(pattern)) {
@@ -218,8 +787,22 @@ class BinaryService : Service() {
                     rawReason
                 }
 
-                main.post { hideCount() }
-                main.post { showResult(dir, conf, fullReason, entry, trap) }
+                // Update mini tag for collapsed bubble (e.g. "⬆️ 22:35")
+                val shortIcon = if (dir == "UP") "⬆️" else if (dir == "DOWN") "⬇️" else "⏸️"
+                lastSignalShort = "$shortIcon $targetTime"
+
+                // Show full signal + candle times directly inside the Bubble!
+                main.post {
+                    showSignalInsideBubble(
+                        dir = dir,
+                        conf = conf,
+                        targetTime = targetTime,
+                        candlePlan = candlePlan,
+                        reason = fullReason,
+                        trap = trap
+                    )
+                }
+
                 try {
                     onResult?.invoke(
                         mapOf<String, Any>(
@@ -228,6 +811,8 @@ class BinaryService : Service() {
                             "reason" to fullReason,
                             "pair" to pair,
                             "time" to time,
+                            "target_time" to targetTime,
+                            "candle_plan" to candlePlan,
                             "pattern" to pattern,
                             "structure" to structure,
                             "smc" to smc,
@@ -241,119 +826,118 @@ class BinaryService : Service() {
                         )
                     )
                 } catch (_: Exception) {}
+
                 if (conf > 0 || dir != "WAIT") {
-                    appendHistory(dir, conf)
+                    appendHistory(dir, conf, targetTime)
                 }
             } catch (e: Exception) {
                 main.post {
-                    hideCount()
                     Toast.makeText(this, "Analysis fail: ${e.message}", Toast.LENGTH_LONG).show()
                 }
+            } finally {
+                busy = false
+                updateBubbleAppearance()
             }
-            busy = false
         }.start()
     }
 
-    private fun showCount(t: String) {
-        main.post {
-            try {
-                if (countView == null) {
-                    val tv = TextView(this)
-                    tv.textSize = 50f
-                    tv.setTextColor(0xFFF5E6C8.toInt())
-                    tv.gravity = Gravity.CENTER
-                    val p = WindowManager.LayoutParams(
-                        WindowManager.LayoutParams.WRAP_CONTENT,
-                        WindowManager.LayoutParams.WRAP_CONTENT,
-                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                        PixelFormat.TRANSLUCENT
-                    )
-                    p.gravity = Gravity.CENTER
-                    wm?.addView(tv, p)
-                    countView = tv
-                }
-                countView?.text = t
-            } catch (_: Exception) {}
-        }
+    private fun showBubbleLoadingState() {
+        try {
+            main.removeCallbacks(collapseRunnable)
+            isBubbleExpanded = true
+            val panel = bubbleDetailPanel ?: return
+            panel.visibility = View.VISIBLE
+            panel.background = GradientDrawable().apply {
+                setColor(0xF2121526.toInt())
+                cornerRadius = 32f
+                setStroke(3, 0xFFFFD54F.toInt())
+            }
+            bubbleTitleText?.apply {
+                text = "⚡ AI Chart Analyze korche..."
+                setTextColor(0xFFFFD54F.toInt())
+            }
+            val nextTimes = computeUpcomingCandleTimes(time)
+            bubbleTimeScheduleText?.apply {
+                text = "🕒 Target Candles: ${nextTimes[0]} • ${nextTimes[1]} • ${nextTimes[2]}"
+                setTextColor(0xFFF5E6C8.toInt())
+            }
+            bubblePairReasonText?.apply {
+                text = "$pair • $time (2s wait koro)"
+                setTextColor(0xFFBBBBBB.toInt())
+            }
+            val root = bubbleRoot
+            val p = bubbleParams
+            if (root != null && p != null) {
+                wm?.updateViewLayout(root, p)
+            }
+        } catch (_: Exception) {}
     }
 
-    private fun hideCount() {
-        main.post {
-            try { countView?.let { wm?.removeView(it) } } catch (_: Exception) {}
-            countView = null
-        }
-    }
-
-    private fun showResult(
+    private fun showSignalInsideBubble(
         dir: String,
         conf: Int,
+        targetTime: String,
+        candlePlan: String,
         reason: String,
-        entry: String = "",
-        trap: Boolean = false
+        trap: Boolean
     ) {
-        main.post {
-            try {
-                resultView?.let { wm?.removeView(it) }
-                val box = LinearLayout(this)
-                box.orientation = LinearLayout.VERTICAL
-                box.gravity = Gravity.CENTER
-                val strokeColor = if (dir == "UP") 0xFF00E676.toInt()
-                else if (dir == "DOWN") 0xFFFF5252.toInt()
-                else 0xFFFFB300.toInt()
+        try {
+            main.removeCallbacks(collapseRunnable)
+            updateBubbleAppearance(signalDir = dir)
+            isBubbleExpanded = true
 
-                val bg = GradientDrawable()
-                bg.setColor(0xF2121218.toInt())
-                bg.cornerRadius = 40f
-                bg.setStroke(3, strokeColor)
-                box.background = bg
-                box.setPadding(50, 34, 50, 34)
+            val strokeColor = when (dir) {
+                "UP" -> 0xFF00E676.toInt()
+                "DOWN" -> 0xFFFF5252.toInt()
+                else -> 0xFFFFB300.toInt()
+            }
+            val icon = when (dir) {
+                "UP" -> "⬆️ CALL / UP"
+                "DOWN" -> "⬇️ PUT / DOWN"
+                else -> "⏸️ WAIT"
+            }
 
-                val t1 = TextView(this)
-                val icon = if (dir == "UP") "⬆️" else if (dir == "DOWN") "⬇️" else "⏸️"
-                t1.text = "$icon $dir  |  $conf%"
-                t1.textSize = 28f
-                t1.setTextColor(strokeColor)
+            val panel = bubbleDetailPanel ?: return
+            panel.visibility = View.VISIBLE
+            panel.background = GradientDrawable().apply {
+                setColor(0xF50E111F.toInt())
+                cornerRadius = 32f
+                setStroke(3, strokeColor)
+            }
 
-                val t2 = TextView(this)
-                val meta = buildString {
-                    append("$pair  •  $time")
-                    if (entry.isNotEmpty()) append("  •  $entry")
-                    if (trap) append("  •  ⚠️ OTC TRAP")
+            // Line 1: Direction + Confidence + Exact Target Candle Time!
+            bubbleTitleText?.apply {
+                text = "$icon ($conf%)  •  🕒 $targetTime"
+                setTextColor(strokeColor)
+            }
+
+            // Line 2: Multi-Candle Time Schedule (e.g., 22:35 ⬆️ | 22:36 ⬆️ | 22:37 ⬆️)
+            bubbleTimeScheduleText?.apply {
+                text = if (trap) "⚠️ OTC TRAP!  •  🕯️ $candlePlan" else "🕯️ Candle Time: $candlePlan"
+                setTextColor(if (trap) 0xFFFF8A80.toInt() else 0xFFFFD54F.toInt())
+            }
+
+            // Line 3: Pair + Timeframe + Short Banglish Reason
+            bubblePairReasonText?.apply {
+                text = "$pair ($time) — $reason"
+                setTextColor(0xFFEEEEEE.toInt())
+            }
+
+            val root = bubbleRoot
+            val p = bubbleParams
+            if (root != null && p != null) {
+                // Ensure expanded bubble stays nicely within screen bounds
+                val screenW = resources.displayMetrics.widthPixels
+                if (p.x > screenW / 2) {
+                    p.x = 16
                 }
-                t2.text = meta
-                t2.textSize = 13f
-                t2.setTextColor(0xFFF5E6C8.toInt())
+                wm?.updateViewLayout(root, p)
+            }
 
-                val t3 = TextView(this)
-                t3.text = reason
-                t3.textSize = 11.5f
-                t3.setTextColor(0xFFDDDDDD.toInt())
-
-                box.addView(t1)
-                box.addView(t2)
-                box.addView(t3)
-                box.setOnClickListener {
-                    try { wm?.removeView(box) } catch (_: Exception) {}
-                    resultView = null
-                }
-                val p = WindowManager.LayoutParams(
-                    WindowManager.LayoutParams.WRAP_CONTENT,
-                    WindowManager.LayoutParams.WRAP_CONTENT,
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                    PixelFormat.TRANSLUCENT
-                )
-                p.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                p.y = 140
-                wm?.addView(box, p)
-                resultView = box
-                main.postDelayed({
-                    try { wm?.removeView(box) } catch (_: Exception) {}
-                    if (resultView == box) resultView = null
-                }, 12000)
-            } catch (_: Exception) {}
-        }
+            // Keep expanded for 18 seconds so trader can read all candle times comfortably,
+            // then collapse to compact App Logo (which still shows "⬆️ 22:35" tag below logo!)
+            main.postDelayed(collapseRunnable, 18000L)
+        } catch (_: Exception) {}
     }
 
     private fun bytesToB64(src: ByteArray): String {
@@ -381,22 +965,41 @@ class BinaryService : Service() {
         }
     }
 
-    private fun callGemini(b64: String): JSONObject {
+    private fun callGemini(b64: String, upcomingTimes: List<String>): JSONObject {
+        if (keys.isEmpty()) {
+            loadPrefsFallbackIfNeeded()
+        }
+        if (keys.isEmpty()) {
+            return JSONObject()
+                .put("dir", "WAIT")
+                .put("conf", 0)
+                .put("target_time", upcomingTimes[0])
+                .put("candle_plan", "${upcomingTimes[0]}: ⏸️ WAIT")
+                .put("reason", "Gemini API key nei — app-e giye key save koro")
+        }
+
+        val nowStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        val t1 = upcomingTimes[0]
+        val t2 = upcomingTimes[1]
+        val t3 = upcomingTimes[2]
         val isOtc = pair.contains("OTC", ignoreCase = true)
         val marketMode = if (isOtc) "Pocket Option OTC algorithmic market" else "Live Interbank market"
+
         val prompt = "You are an elite institutional Binary Options & Pocket Option Price Action Master Trader. " +
-            "Analyze this trading chart screenshot for $pair on $time timeframe ($marketMode). " +
-            "Check all 6 Binary Trading Course Pillars: " +
-            "(1) Candlestick Psychology & Patterns (Hammer, Shooting Star, Bullish/Bearish Engulfing, Morning/Evening Star, Tweezer, Three Soldiers/Crows, Marubozu, Doji, Upper/Lower Wick Rejection, Exhaustion), " +
-            "(2) Market Structure & Trend (Uptrend HH/HL, Downtrend LH/LL, Ranging, BOS/CHoCH), " +
-            "(3) Support & Resistance SNR + Smart Money Concepts SMC (Horizontal SNR, Flip Zone SBR/RBS, Round Number, Order Block OB, Fair Value Gap FVG, Liquidity Sweep/Stop Hunt), " +
-            "(4) Classic Chart Patterns (Double Top M, Double Bottom W, Head & Shoulders, Triangle, Wedge, Flag), " +
-            "(5) Visible Indicators (RSI Overbought/Oversold, Bollinger Band Pierce/Squeeze, Stochastic, MACD, EMA bounce), " +
-            "(6) OTC Manipulation Trap Filter (avoid flat micro-doji chains or abnormal OTC spikes). " +
-            "Predict the IMMEDIATE NEXT 1 CANDLE direction for $pair on $time. " +
+            "Current analysis time is $nowStr. Selected pair is $pair on $time timeframe ($marketMode). " +
+            "The upcoming 3 candle open times are: Candle 1 = $t1, Candle 2 = $t2, Candle 3 = $t3. " +
+            "First, check if the asset/pair name (e.g. USD/BTC OTC, EUR/USD OTC) is visible on the screenshot; if so, put it in detected_pair, otherwise use \"$pair\". " +
+            "Analyze all 6 Binary Trading Course Pillars: " +
+            "(1) Candlestick Psychology & Patterns (Hammer, Shooting Star, Engulfing, Morning/Evening Star, Tweezer, Three Soldiers/Crows, Marubozu, Doji, Wick Rejection), " +
+            "(2) Market Structure & Trend (HH/HL, LH/LL, BOS/CHoCH), " +
+            "(3) Support & Resistance SNR + Smart Money Concepts SMC (Order Block OB, Fair Value Gap FVG, Liquidity Sweep), " +
+            "(4) Classic Chart Patterns (Double Top/Bottom, Head & Shoulders, Triangle, Wedge, Flag), " +
+            "(5) Visible Indicators (RSI, Bollinger Bands, Stochastic, MACD, EMA), " +
+            "(6) OTC Manipulation Trap Filter. " +
+            "Predict the exact candle direction for $t1, $t2, and $t3, and specify which exact candle time ($t1, $t2, or $t3) has the strongest high-probability entry in target_time. " +
             "Reply ONLY with valid JSON: " +
-            "{\"dir\":\"UP\",\"conf\":84,\"pattern\":\"Bullish Engulfing + Wick Rejection\",\"structure\":\"Uptrend HH/HL • Support Bounce\",\"smc\":\"Bullish OB + FVG Fill\",\"entry\":\"Next Candle Open • 1-Step MTG Safe\",\"risk\":\"Low Risk\",\"trap\":false,\"trend_score\":85,\"pattern_score\":88,\"snr_score\":82,\"momentum_score\":80,\"reason\":\"short Banglish reason\"} " +
-            "dir must be UP or DOWN or WAIT. If confidence < 66% or chart is unclear/not a trading chart, use WAIT."
+            "{\"dir\":\"UP\",\"conf\":85,\"detected_pair\":\"$pair\",\"target_time\":\"$t1\",\"candle_plan\":\"$t1 ⬆️ UP | $t2 ⬆️ UP | $t3 ⬆️ UP\",\"pattern\":\"Bullish Engulfing + Support\",\"structure\":\"Uptrend HH/HL\",\"smc\":\"Bullish OB + FVG\",\"entry\":\"$t1 Candle Open • 1-Step MTG ($t2)\",\"risk\":\"Low Risk\",\"trap\":false,\"trend_score\":86,\"pattern_score\":88,\"snr_score\":84,\"momentum_score\":82,\"reason\":\"short Banglish reason mentioning why $t1/$t2 candle will go UP or DOWN\"} " +
+            "dir must be UP or DOWN or WAIT."
 
         for (rawKey in keys) {
             val key = rawKey.trim()
@@ -426,7 +1029,7 @@ class BinaryService : Service() {
                         "generationConfig",
                         JSONObject()
                             .put("temperature", 0.15)
-                            .put("maxOutputTokens", 500)
+                            .put("maxOutputTokens", 550)
                             .put("responseMimeType", "application/json")
                     )
 
@@ -462,14 +1065,15 @@ class BinaryService : Service() {
         return JSONObject()
             .put("dir", "WAIT")
             .put("conf", 0)
+            .put("target_time", upcomingTimes[0])
+            .put("candle_plan", "${upcomingTimes[0]}: ⏸️ WAIT")
             .put("reason", "sob key fail — net/key check koro")
     }
 
-    private fun appendHistory(dir: String, conf: Int) {
+    private fun appendHistory(dir: String, conf: Int, targetTime: String) {
         try {
             val f = File(filesDir, "binary_history.txt")
-            val now = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
-            val line = "$dir $conf% $pair $time $now"
+            val line = "$dir $conf% $pair $time [🕒 $targetTime]"
             val old = if (f.exists()) f.readLines() else emptyList()
             val all = (listOf(line) + old).take(5)
             f.writeText(all.joinToString("\n"))
@@ -478,9 +1082,19 @@ class BinaryService : Service() {
 
     override fun onDestroy() {
         captureOn = false
-        try { floatView?.let { wm?.removeView(it) } } catch (_: Exception) {}
+        main.removeCallbacks(folderPollRunnable)
+        main.removeCallbacks(collapseRunnable)
+        try {
+            mediaObserver?.let { contentResolver.unregisterContentObserver(it) }
+        } catch (_: Exception) {}
+        mediaObserver = null
+        try { bubbleRoot?.let { wm?.removeView(it) } } catch (_: Exception) {}
         try { resultView?.let { wm?.removeView(it) } } catch (_: Exception) {}
         try { countView?.let { wm?.removeView(it) } } catch (_: Exception) {}
+        bubbleRoot = null
+        bubbleLogoView = null
+        bubbleMiniTag = null
+        bubbleDetailPanel = null
         floatView = null
         resultView = null
         countView = null
