@@ -17,7 +17,6 @@ class BinarySignalScreen extends StatefulWidget {
 class _BinarySignalScreenState extends State<BinarySignalScreen> {
   static const MethodChannel _bin = MethodChannel('aniket_pro_ai/binary');
   static const MethodChannel _gal = MethodChannel('aniket_pro_ai/gallery');
-  static const MethodChannel _ss = MethodChannel('aniket_pro_ai/screenshot');
 
   // Market Category Filter: ALL, OTC, LIVE, CRYPTO
   String _marketFilter = 'ALL';
@@ -120,7 +119,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
   bool _floatOn = false;
   bool _busy = false;
   int _lastAnalyzeMs = 0;
-  String _lastSsPath = '';
 
   // Current Signal & Exact Candle Time State
   String _dir = '—';
@@ -184,7 +182,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
   void initState() {
     super.initState();
     _bin.setMethodCallHandler(_onResult);
-    _ss.setMethodCallHandler(_onScreenshotEvent);
     _load();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
@@ -312,7 +309,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
     return '$m:$sec';
   }
 
-  // Computes the exact clock timestamps of the next 3 candles (e.g., 22:35, 22:36, 22:37)
   List<String> get _upcomingCandleTimes {
     final stepSec = _periodSec();
     final nowMs = DateTime.now().millisecondsSinceEpoch;
@@ -399,7 +395,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // Drag handle
                     Center(
                       child: Container(
                         width: 42,
@@ -421,7 +416,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
                     ),
                     const SizedBox(height: 8),
 
-                    // Search Input Box matching app Dark-Gold UI
                     TextField(
                       controller: searchCtrl,
                       autofocus: true,
@@ -455,7 +449,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
                     ),
                     const SizedBox(height: 8),
 
-                    // Category Filter Chips inside Search Modal
                     SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: Row(
@@ -490,7 +483,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
                     ),
                     const SizedBox(height: 6),
 
-                    // Allow adding custom pair if user typed a pair not in list
                     if (query.trim().length >= 3 &&
                         !_allPairs.any((p) => p.toLowerCase() == query.trim().toLowerCase()))
                       Padding(
@@ -514,7 +506,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
                         ),
                       ),
 
-                    // Filtered Pairs List
                     Expanded(
                       child: ListView.builder(
                         itemCount: filtered.length,
@@ -585,21 +576,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
       });
       await _syncPairTimeWithService();
     }
-  }
-
-  Future<dynamic> _onScreenshotEvent(MethodCall call) async {
-    if (call.method == 'onScreenshot' && _floatOn && !_busy) {
-      final map = (call.arguments as Map?) ?? {};
-      final path = (map['path'] ?? '').toString();
-      if (path.isNotEmpty && path != _lastSsPath) {
-        final now = DateTime.now().millisecondsSinceEpoch;
-        if (now - _lastAnalyzeMs > 2500) {
-          _lastSsPath = path;
-          await _analyzeFilePath(path, fromAuto: true);
-        }
-      }
-    }
-    return null;
   }
 
   Future<dynamic> _onResult(MethodCall call) async {
@@ -1387,7 +1363,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
                     ),
                     const SizedBox(height: 8),
 
-                    // Big Direction | Confidence % | Countdown Timer
                     FittedBox(
                       fit: BoxFit.scaleDown,
                       child: Row(
@@ -1431,7 +1406,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
                     ),
                     const SizedBox(height: 8),
 
-                    // Exact Target Candle Time & 3-Candle Schedule Box
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
