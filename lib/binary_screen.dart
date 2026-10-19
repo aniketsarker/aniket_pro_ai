@@ -22,7 +22,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
   // Market Category Filter: ALL, OTC, LIVE, CRYPTO
   String _marketFilter = 'ALL';
 
-  static const List<String> _allPairs = [
+  final List<String> _allPairs = [
     // Popular Pocket Option OTC Pairs
     'EUR/USD (OTC)',
     'GBP/USD (OTC)',
@@ -46,14 +46,19 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
     'USD/INR (OTC)',
     'USD/PKR (OTC)',
     'USD/BRL (OTC)',
+    'USD/MXN (OTC)',
+    'USD/TRY (OTC)',
     'AED/CNY (OTC)',
     'GOLD (OTC)',
-    // Crypto OTC & Live
+    'SILVER (OTC)',
+    // Crypto OTC & Live (including USD/BTC & BTC/USD)
+    'USD/BTC (OTC)',
     'BTC/USD (OTC)',
     'ETH/USD (OTC)',
-    'SOL/USD',
+    'USD/BTC',
     'BTC/USD',
     'ETH/USD',
+    'SOL/USD',
     'BNB/USD',
     'XRP/USD',
     'ADA/USD',
@@ -117,10 +122,12 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
   int _lastAnalyzeMs = 0;
   String _lastSsPath = '';
 
-  // Current Signal State
+  // Current Signal & Exact Candle Time State
   String _dir = '—';
   int _conf = 0;
   String _reason = 'Screenshot nao → Analyze Now → ss choose koro';
+  String _targetTime = '—';
+  String _candlePlan = '—';
   String _pattern = '—';
   String _structure = '—';
   String _smcZone = '—';
@@ -148,38 +155,27 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
   List<String> _hist = [];
   Timer? _timer;
 
-  List<String> get _filteredPairs {
-    if (_marketFilter == 'OTC') {
+  bool _isCryptoPair(String p) {
+    final u = p.toUpperCase();
+    return u.contains('BTC') ||
+        u.contains('ETH') ||
+        u.contains('SOL') ||
+        u.contains('BNB') ||
+        u.contains('XRP') ||
+        u.contains('ADA') ||
+        u.contains('LTC') ||
+        u.contains('TRX') ||
+        u.contains('DOT') ||
+        u.contains('BCH');
+  }
+
+  List<String> _getPairsByCategory(String cat) {
+    if (cat == 'OTC') {
       return _allPairs.where((p) => p.contains('(OTC)')).toList();
-    } else if (_marketFilter == 'LIVE') {
-      return _allPairs
-          .where((p) =>
-              !p.contains('(OTC)') &&
-              !p.startsWith('BTC') &&
-              !p.startsWith('ETH') &&
-              !p.startsWith('SOL') &&
-              !p.startsWith('BNB') &&
-              !p.startsWith('XRP') &&
-              !p.startsWith('ADA') &&
-              !p.startsWith('LTC') &&
-              !p.startsWith('TRX') &&
-              !p.startsWith('DOT') &&
-              !p.startsWith('BCH'))
-          .toList();
-    } else if (_marketFilter == 'CRYPTO') {
-      return _allPairs
-          .where((p) =>
-              p.startsWith('BTC') ||
-              p.startsWith('ETH') ||
-              p.startsWith('SOL') ||
-              p.startsWith('BNB') ||
-              p.startsWith('XRP') ||
-              p.startsWith('ADA') ||
-              p.startsWith('LTC') ||
-              p.startsWith('TRX') ||
-              p.startsWith('DOT') ||
-              p.startsWith('BCH'))
-          .toList();
+    } else if (cat == 'LIVE') {
+      return _allPairs.where((p) => !p.contains('(OTC)') && !_isCryptoPair(p)).toList();
+    } else if (cat == 'CRYPTO') {
+      return _allPairs.where(_isCryptoPair).toList();
     }
     return _allPairs;
   }
@@ -219,6 +215,10 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
     final savedLosses = p.getInt('bin_losses') ?? 0;
     final savedStake = p.getDouble('bin_stake') ?? 1.0;
 
+    if (savedPair.isNotEmpty && !_allPairs.contains(savedPair)) {
+      _allPairs.insert(0, savedPair);
+    }
+
     bool alive = false;
     try {
       alive = (await _bin.invokeMethod<bool>('floatAlive')) ?? false;
@@ -237,7 +237,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
 
     if (!mounted) return;
     setState(() {
-      _pair = _allPairs.contains(savedPair) ? savedPair : 'EUR/USD (OTC)';
+      _pair = savedPair.isNotEmpty ? savedPair : 'EUR/USD (OTC)';
       _tf = _timeframes.contains(savedTf) ? savedTf : '1m';
       _keys = savedKeys;
       _floatOn = alive;
@@ -256,17 +256,18 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
     int conf, {
     String? customPair,
     String? customTf,
+    String? targetCandleTime,
     String? tag,
   }) async {
     if (conf <= 0 && dir == 'WAIT') return;
-    final now = DateTime.now();
-    final hh = now.hour.toString().padLeft(2, '0');
-    final mm = now.minute.toString().padLeft(2, '0');
     final icon = _dirIcon(dir);
     final usePair = customPair ?? _pair;
     final useTf = customTf ?? _tf;
+    final useTime = (targetCandleTime != null && targetCandleTime.isNotEmpty && targetCandleTime != '—')
+        ? targetCandleTime
+        : _upcomingCandleTimes.first;
     final shortTag = (tag != null && tag.isNotEmpty && tag != '—') ? ' • $tag' : '';
-    final line = '$icon $conf% $usePair $useTf$shortTag $hh:$mm';
+    final line = '$icon $conf% $usePair ($useTf) 🕒 Candle: $useTime$shortTag';
 
     final updated = [line, ..._hist.where((x) => x != line)].take(5).toList();
     setState(() {
@@ -311,19 +312,41 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
     return '$m:$sec';
   }
 
+  // Computes the exact clock timestamps of the next 3 candles (e.g., 22:35, 22:36, 22:37)
+  List<String> get _upcomingCandleTimes {
+    final stepSec = _periodSec();
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final stepMs = stepSec * 1000;
+    final nextBoundaryMs = ((nowMs ~/ stepMs) + 1) * stepMs;
+    final List<String> out = [];
+    for (int i = 0; i < 3; i++) {
+      final dt = DateTime.fromMillisecondsSinceEpoch(nextBoundaryMs + i * stepMs);
+      final hh = dt.hour.toString().padLeft(2, '0');
+      final mm = dt.minute.toString().padLeft(2, '0');
+      if (stepSec < 60) {
+        final ss = dt.second.toString().padLeft(2, '0');
+        out.add('$hh:$mm:$ss');
+      } else {
+        out.add('$hh:$mm');
+      }
+    }
+    return out;
+  }
+
   String get _entryWindowHint {
     final r = _rem;
     final p = _periodSec();
+    final nextCandle = _upcomingCandleTimes.first;
     if (p >= 60) {
       if (r <= 12 || r >= p - 5) {
-        return '🟢 PERFECT NEXT CANDLE ENTRY';
+        return '🟢 ENTER FOR $nextCandle CANDLE';
       } else if (r <= 25) {
-        return '🟡 GET READY FOR NEXT CANDLE';
+        return '🟡 READY FOR $nextCandle CANDLE';
       } else {
-        return '⏳ RUNNING CANDLE (${r}s)';
+        return '⏳ NEXT CANDLE AT $nextCandle (${r}s)';
       }
     } else {
-      return r <= 3 ? '🟢 ENTER ON NEXT OPEN' : '⚡ FAST SCALP MODE';
+      return '⚡ NEXT SCALP CANDLE: $nextCandle';
     }
   }
 
@@ -340,6 +363,228 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
       return double.parse(amt.toStringAsFixed(2));
     }
     return _baseStake;
+  }
+
+  // ── UI-Matched Searchable Market / Pair Picker Modal ──
+  Future<void> _openPairSearchSheet() async {
+    String query = '';
+    String modalCat = _marketFilter;
+    final searchCtrl = TextEditingController();
+
+    final chosen = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF121422),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            final baseList = _getPairsByCategory(modalCat);
+            final q = query.trim().toLowerCase();
+            final filtered = q.isEmpty
+                ? baseList
+                : _allPairs.where((p) => p.toLowerCase().contains(q)).toList();
+
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 14,
+                right: 14,
+                top: 12,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+              ),
+              child: SizedBox(
+                height: MediaQuery.of(ctx).size.height * 0.68,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Drag handle
+                    Center(
+                      child: Container(
+                        width: 42,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.white24,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      '🔍 Search & Select Market Pair',
+                      style: TextStyle(
+                        color: Color(0xFFC6A962),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+
+                    // Search Input Box matching app Dark-Gold UI
+                    TextField(
+                      controller: searchCtrl,
+                      autofocus: true,
+                      style: const TextStyle(color: Colors.white, fontSize: 14),
+                      decoration: InputDecoration(
+                        hintText: 'Pair nam lekho... (e.g. USD/BTC, EUR, BDT, GOLD)',
+                        hintStyle: const TextStyle(color: Colors.white38, fontSize: 12.5),
+                        prefixIcon: const Icon(Icons.search, color: Color(0xFFC6A962), size: 20),
+                        suffixIcon: query.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.clear, color: Colors.white54, size: 18),
+                                onPressed: () {
+                                  searchCtrl.clear();
+                                  setModalState(() => query = '');
+                                },
+                              )
+                            : null,
+                        filled: true,
+                        fillColor: const Color(0xFF191C2E),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: Color(0xFFC6A962), width: 1.0),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: Color(0xFFFFD54F), width: 1.5),
+                        ),
+                      ),
+                      onChanged: (v) => setModalState(() => query = v),
+                    ),
+                    const SizedBox(height: 8),
+
+                    // Category Filter Chips inside Search Modal
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          for (final c in ['ALL', 'OTC', 'LIVE', 'CRYPTO'])
+                            Padding(
+                              padding: const EdgeInsets.only(right: 6),
+                              child: ChoiceChip(
+                                label: Text(
+                                  c == 'OTC'
+                                      ? '🔥 OTC'
+                                      : c == 'LIVE'
+                                          ? '🌐 Live'
+                                          : c == 'CRYPTO'
+                                              ? '₿ Crypto'
+                                              : 'All',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: modalCat == c ? Colors.black : Colors.white70,
+                                  ),
+                                ),
+                                selected: modalCat == c,
+                                selectedColor: const Color(0xFFC6A962),
+                                backgroundColor: const Color(0xFF1A1C2C),
+                                visualDensity: VisualDensity.compact,
+                                onSelected: (_) => setModalState(() => modalCat = c),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+
+                    // Allow adding custom pair if user typed a pair not in list
+                    if (query.trim().length >= 3 &&
+                        !_allPairs.any((p) => p.toLowerCase() == query.trim().toLowerCase()))
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: ListTile(
+                          tileColor: const Color(0xFF232742),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            side: const BorderSide(color: Color(0xFFC6A962)),
+                          ),
+                          leading: const Icon(Icons.add_circle, color: Color(0xFF00E676)),
+                          title: Text(
+                            'Use Custom Pair: "${query.trim().toUpperCase()}"',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                          onTap: () => Navigator.pop(ctx, query.trim().toUpperCase()),
+                        ),
+                      ),
+
+                    // Filtered Pairs List
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: filtered.length,
+                        itemBuilder: (_, idx) {
+                          final item = filtered[idx];
+                          final isSelected = item == _pair;
+                          final isOtc = item.contains('(OTC)');
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 5),
+                            decoration: BoxDecoration(
+                              color: isSelected ? const Color(0xFF282B44) : const Color(0xFF171928),
+                              borderRadius: BorderRadius.circular(9),
+                              border: Border.all(
+                                color: isSelected ? const Color(0xFFC6A962) : Colors.white10,
+                              ),
+                            ),
+                            child: ListTile(
+                              dense: true,
+                              title: Text(
+                                item,
+                                style: TextStyle(
+                                  color: isSelected ? const Color(0xFFFFD54F) : Colors.white,
+                                  fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                                  fontSize: 13.5,
+                                ),
+                              ),
+                              trailing: isOtc
+                                  ? Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF3B2E1E),
+                                        borderRadius: BorderRadius.circular(5),
+                                      ),
+                                      child: const Text(
+                                        'OTC',
+                                        style: TextStyle(
+                                          color: Color(0xFFFFD54F),
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    )
+                                  : const Text(
+                                      'LIVE',
+                                      style: TextStyle(color: Colors.white38, fontSize: 10),
+                                    ),
+                              onTap: () => Navigator.pop(ctx, item),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    if (chosen != null && chosen.isNotEmpty) {
+      setState(() {
+        if (!_allPairs.contains(chosen)) {
+          _allPairs.insert(0, chosen);
+        }
+        _pair = chosen;
+      });
+      await _syncPairTimeWithService();
+    }
   }
 
   Future<dynamic> _onScreenshotEvent(MethodCall call) async {
@@ -388,6 +633,8 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
         reason: reason,
         pair: pair,
         time: time,
+        targetTime: (map['target_time'] ?? '').toString(),
+        candlePlan: (map['candle_plan'] ?? '').toString(),
         pattern: (map['pattern'] ?? _pattern).toString(),
         structure: (map['structure'] ?? _structure).toString(),
         smcZone: (map['smc'] ?? _smcZone).toString(),
@@ -409,6 +656,8 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
     required String reason,
     String? pair,
     String? time,
+    String? targetTime,
+    String? candlePlan,
     String? pattern,
     String? structure,
     String? smcZone,
@@ -428,17 +677,35 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
             ? 'DOWN'
             : 'WAIT';
 
+    final upcoming = _upcomingCandleTimes;
+    final resolvedTargetTime =
+        (targetTime != null && targetTime.isNotEmpty) ? targetTime : upcoming.first;
+    final shortArrow = finalDir == 'UP' ? '⬆️ UP' : finalDir == 'DOWN' ? '⬇️ DOWN' : '⏸️ WAIT';
+    final resolvedPlan = (candlePlan != null && candlePlan.isNotEmpty)
+        ? candlePlan
+        : '${upcoming[0]} $shortArrow | ${upcoming[1]} $shortArrow | ${upcoming[2]} $shortArrow';
+
     if (!mounted) return;
     setState(() {
+      if (pair != null && pair.isNotEmpty && pair.contains('/')) {
+        if (!_allPairs.contains(pair)) {
+          _allPairs.insert(0, pair);
+        }
+        _pair = pair;
+      }
       _dir = finalDir;
       _conf = conf.clamp(0, 99);
       _reason = reason.isNotEmpty ? reason : 'Analysis complete';
+      _targetTime = resolvedTargetTime;
+      _candlePlan = resolvedPlan;
       _pattern = (pattern != null && pattern.isNotEmpty) ? pattern : 'Price Action';
       _structure = (structure != null && structure.isNotEmpty) ? structure : 'SNR Check';
       _smcZone = (smcZone != null && smcZone.isNotEmpty) ? smcZone : 'Zone Neutral';
       _entryGuide = (entryGuide != null && entryGuide.isNotEmpty)
           ? entryGuide
-          : (finalDir == 'WAIT' ? 'Avoid Entry • Wait for Setup' : 'Next Candle Open • 1-Step MTG');
+          : (finalDir == 'WAIT'
+              ? 'Avoid Entry • Wait for Setup'
+              : 'Candle $resolvedTargetTime Open • 1-Step MTG (${upcoming[1]})');
       _riskLevel = (riskLevel != null && riskLevel.isNotEmpty)
           ? riskLevel
           : (conf >= 80 ? 'Low Risk' : conf >= 70 ? 'Medium Risk' : 'High Risk');
@@ -458,7 +725,14 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
       if (latencyMs != null) _latencyMs = latencyMs;
     });
 
-    _saveHist(finalDir, _conf, customPair: pair, customTf: time, tag: _pattern);
+    _saveHist(
+      finalDir,
+      _conf,
+      customPair: _pair,
+      customTf: time,
+      targetCandleTime: resolvedTargetTime,
+      tag: _pattern,
+    );
   }
 
   Future<void> _pickAndAnalyze() async {
@@ -517,7 +791,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
 
     setState(() {
       _busy = true;
-      _reason = '⚡ Fast AI Pro Price Action + SMC + SNR analyze korche...';
+      _reason = '⚡ Fast AI Pro Price Action + Candle Time Schedule analyze korche...';
     });
 
     try {
@@ -541,15 +815,19 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
       final dir = (parsed['dir'] ?? 'WAIT').toString();
       final conf = int.tryParse((parsed['conf'] ?? '0').toString()) ?? 0;
       final reason = (parsed['reason'] ?? 'Analysis complete').toString();
+      final detPair = (parsed['detected_pair'] ?? '').toString().trim();
 
       _applyResult(
         dir: dir,
         conf: conf,
         reason: reason,
+        pair: (detPair.isNotEmpty && detPair != 'UNKNOWN' && detPair.contains('/')) ? detPair : _pair,
+        targetTime: (parsed['target_time'] ?? '').toString(),
+        candlePlan: (parsed['candle_plan'] ?? '').toString(),
         pattern: (parsed['pattern'] ?? 'Price Action').toString(),
         structure: (parsed['structure'] ?? 'SNR Level').toString(),
         smcZone: (parsed['smc'] ?? 'Order Block / FVG').toString(),
-        entryGuide: (parsed['entry'] ?? 'Next Candle Open').toString(),
+        entryGuide: (parsed['entry'] ?? '').toString(),
         riskLevel: (parsed['risk'] ?? 'Normal').toString(),
         otcTrap: parsed['trap'] == true,
         trendScore: int.tryParse((parsed['trend_score'] ?? '0').toString()),
@@ -576,33 +854,44 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
   }
 
   Future<Map<String, dynamic>> _geminiVision(String b64) async {
+    final now = DateTime.now();
+    final nowStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    final times = _upcomingCandleTimes;
+    final t1 = times[0];
+    final t2 = times[1];
+    final t3 = times[2];
+
     final isOtc = _pair.contains('(OTC)');
     final marketType = isOtc ? 'Pocket Option OTC algorithmic market' : 'Live Interbank market';
     final prompt = 'You are an elite institutional Binary Options & Pocket Option Price Action Master Trader.\n'
-        'Analyze this trading chart screenshot for pair $_pair on $_tf timeframe ($marketType).\n\n'
-        'Perform a complete 6-Pillar Binary Trading Course Analysis on the visible candles and indicators:\n'
-        '1. CANDLESTICK PSYCHOLOGY & PATTERNS: Check last 1-5 candles for Hammer, Inverted Hammer, Shooting Star, Bullish/Bearish Engulfing, Morning/Evening Star, Tweezer Top/Bottom, Three White Soldiers, Three Black Crows, Marubozu, Doji (Dragonfly/Gravestone), Upper/Lower Wick Rejection, and Momentum Exhaustion.\n'
-        '2. MARKET STRUCTURE & TREND: Identify Uptrend (HH/HL), Downtrend (LH/LL), Ranging/Consolidation, Break of Structure (BOS), or Change of Character (CHoCH).\n'
-        '3. SUPPORT & RESISTANCE (SNR) + SMART MONEY CONCEPTS (SMC): Locate Major Horizontal SNR, Flip Zones (SBR/RBS), Round Numbers, Order Blocks (Bullish/Bearish OB), Fair Value Gaps (FVG / Imbalance), and Liquidity Sweeps (Stop Hunt / Fakeout).\n'
-        '4. CLASSIC CHART PATTERNS: Check for Double Top (M), Double Bottom (W), Head & Shoulders, Ascending/Descending Triangle, Wedge, or Flag/Pennant.\n'
-        '5. INDICATOR CONFLUENCE: If RSI, Bollinger Bands, Stochastic, MACD, or Moving Averages (EMA/SMA) are visible on the screenshot, check Overbought/Oversold, Band Bounce/Squeeze, or Crossover confluence.\n'
-        '6. POCKET OPTION OTC TRAP FILTER: Detect algorithmic OTC manipulation spikes, flat micro-doji chains, or 50/50 choppy conditions. If confidence is below 66% or chart is unclear/not a trading chart, set dir to "WAIT".\n\n'
-        'Predict the IMMEDIATE NEXT 1 CANDLE direction for $_pair ($_tf).\n'
-        'Reply ONLY with a valid JSON object matching this exact schema (no markdown fences):\n'
+        'Current time is $nowStr. Selected pair is $_pair on $_tf timeframe ($marketType).\n'
+        'The upcoming 3 candle open times are: Candle 1 = $t1, Candle 2 = $t2, Candle 3 = $t3.\n'
+        'If a different pair name (e.g. USD/BTC (OTC), EUR/JPY (OTC)) is clearly visible on the screenshot, put it in "detected_pair", otherwise use "$_pair".\n\n'
+        'Perform a complete 6-Pillar Binary Trading Course Analysis:\n'
+        '1. CANDLESTICK PSYCHOLOGY & PATTERNS: Hammer, Shooting Star, Bullish/Bearish Engulfing, Morning/Evening Star, Tweezer Top/Bottom, Three Soldiers/Crows, Marubozu, Doji, Upper/Lower Wick Rejection, Exhaustion.\n'
+        '2. MARKET STRUCTURE & TREND: Uptrend (HH/HL), Downtrend (LH/LL), Ranging, BOS, CHoCH.\n'
+        '3. SUPPORT & RESISTANCE (SNR) + SMART MONEY CONCEPTS (SMC): Horizontal SNR, Flip Zones (SBR/RBS), Round Numbers, Order Blocks (OB), Fair Value Gaps (FVG), Liquidity Sweeps.\n'
+        '4. CLASSIC CHART PATTERNS: Double Top (M), Double Bottom (W), Head & Shoulders, Triangle, Wedge, Flag.\n'
+        '5. INDICATOR CONFLUENCE: RSI, Bollinger Bands, Stochastic, MACD, EMA.\n'
+        '6. POCKET OPTION OTC TRAP FILTER & EXACT CANDLE TIMING: Predict the exact direction (UP or DOWN) for each upcoming candle ($t1, $t2, and $t3), and specify which exact candle time ($t1, $t2, or $t3) is the primary target candle in "target_time".\n\n'
+        'Reply ONLY with a valid JSON object matching this exact schema:\n'
         '{\n'
         '  "dir": "UP" or "DOWN" or "WAIT",\n'
-        '  "conf": 82,\n'
+        '  "conf": 85,\n'
+        '  "detected_pair": "$_pair",\n'
+        '  "target_time": "$t1",\n'
+        '  "candle_plan": "$t1 ⬆️ UP | $t2 ⬆️ UP | $t3 ⬆️ UP",\n'
         '  "pattern": "Short candle pattern name (e.g. Bullish Engulfing + Wick Rejection)",\n'
         '  "structure": "Trend & SNR summary (e.g. Uptrend HH/HL • Support Bounce)",\n'
-        '  "smc": "SMC / Indicator confluence (e.g. Bullish OB + FVG Fill • RSI Oversold)",\n'
-        '  "entry": "Entry & MTG advice (e.g. Next Candle Open • 1-Step MTG Safe)",\n'
+        '  "smc": "SMC / Indicator confluence (e.g. Bullish OB + FVG Fill)",\n'
+        '  "entry": "$t1 Candle Open • 1-Step MTG ($t2)",\n'
         '  "risk": "Low Risk" or "Medium Risk" or "High Risk - Avoid",\n'
         '  "trap": false,\n'
-        '  "trend_score": 84,\n'
-        '  "pattern_score": 86,\n'
-        '  "snr_score": 80,\n'
-        '  "momentum_score": 78,\n'
-        '  "reason": "Concise Banglish explanation (why UP/DOWN/WAIT based on candle rejection, SNR, and trend)"\n'
+        '  "trend_score": 86,\n'
+        '  "pattern_score": 88,\n'
+        '  "snr_score": 84,\n'
+        '  "momentum_score": 80,\n'
+        '  "reason": "Concise Banglish explanation mentioning exact candle time ($t1 / $t2 / $t3) and why it will go UP or DOWN"\n'
         '}';
 
     String lastError = 'sob key fail — net/key check koro';
@@ -687,6 +976,8 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
     return {
       'dir': 'WAIT',
       'conf': 0,
+      'target_time': t1,
+      'candle_plan': '$t1 ⏸️ WAIT',
       'pattern': 'API / Key Check',
       'structure': 'No Signal',
       'smc': 'Check Internet / Gemini API Key',
@@ -905,11 +1196,10 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final activePairs = _filteredPairs;
-    final currentPairInList = activePairs.contains(_pair) ? _pair : activePairs.first;
     final sigColor = _dirColor(_dir);
     final totalTrades = _wins + _losses;
     final winRate = totalTrades > 0 ? ((_wins * 100) / totalTrades).round() : 0;
+    final nextTimes = _upcomingCandleTimes;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D12),
@@ -950,8 +1240,9 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
                           onSelected: (_) {
                             setState(() {
                               _marketFilter = f;
-                              if (!_filteredPairs.contains(_pair)) {
-                                _pair = _filteredPairs.first;
+                              final catList = _getPairsByCategory(f);
+                              if (catList.isNotEmpty && !catList.contains(_pair)) {
+                                _pair = catList.first;
                               }
                             });
                             _syncPairTimeWithService();
@@ -963,39 +1254,53 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
               ),
               const SizedBox(height: 8),
 
-              // 2. Pair & Timeframe Selector Row
+              // 2. Searchable Market Pair Box + Timeframe Selector Row
               Row(
                 children: [
                   Expanded(
                     flex: 7,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF151624),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: const Color(0xFF2E324B)),
-                      ),
-                      child: DropdownButtonHideUnderline(
-                        child: DropdownButton<String>(
-                          value: currentPairInList,
-                          dropdownColor: const Color(0xFF191B2C),
-                          isExpanded: true,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          items: activePairs
-                              .map((p) => DropdownMenuItem(
-                                    value: p,
-                                    child: Text(p, overflow: TextOverflow.ellipsis),
-                                  ))
-                              .toList(),
-                          onChanged: (v) {
-                            if (v == null) return;
-                            setState(() => _pair = v);
-                            _syncPairTimeWithService();
-                          },
+                    child: InkWell(
+                      onTap: _openPairSearchSheet,
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        height: 48,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF151624),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFFC6A962), width: 0.9),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.search, color: Color(0xFFC6A962), size: 19),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _pair,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF23263A),
+                                borderRadius: BorderRadius.circular(5),
+                              ),
+                              child: const Text(
+                                'Search',
+                                style: TextStyle(
+                                  color: Color(0xFFFFD54F),
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -1004,6 +1309,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
                   Expanded(
                     flex: 3,
                     child: Container(
+                      height: 48,
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       decoration: BoxDecoration(
                         color: const Color(0xFF151624),
@@ -1036,7 +1342,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
               ),
               const SizedBox(height: 10),
 
-              // 3. Main Pro Signal Card
+              // 3. Main Pro Signal Card (with Exact Target Candle Time & Multi-Candle Schedule)
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
@@ -1081,6 +1387,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
                     ),
                     const SizedBox(height: 8),
 
+                    // Big Direction | Confidence % | Countdown Timer
                     FittedBox(
                       fit: BoxFit.scaleDown,
                       child: Row(
@@ -1122,11 +1429,49 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
                         ],
                       ),
                     ),
+                    const SizedBox(height: 8),
+
+                    // Exact Target Candle Time & 3-Candle Schedule Box
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0E101D),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFF2D3250)),
+                      ),
+                      child: Column(
+                        children: [
+                          Text(
+                            _dir == '—'
+                                ? '🕒 Upcoming Candles: ${nextTimes[0]} • ${nextTimes[1]} • ${nextTimes[2]}'
+                                : '🎯 Target Candle Time: $_targetTime (${_dirLabel(_dir)})',
+                            style: TextStyle(
+                              color: _dir == '—' ? const Color(0xFFFFD54F) : sigColor,
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          if (_candlePlan != '—') ...[
+                            const SizedBox(height: 3),
+                            Text(
+                              '🕯️ Schedule: $_candlePlan',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: Color(0xFFFFD54F),
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                     const SizedBox(height: 6),
 
                     Text(
                       '$_pair • $_tf  |  Next Stake: \$${_recommendedStake.toStringAsFixed(2)} ($_mmMode)',
-                      style: const TextStyle(color: Colors.white70, fontSize: 12.5),
+                      style: const TextStyle(color: Colors.white70, fontSize: 12),
                     ),
 
                     if (_otcTrap) ...[
@@ -1256,7 +1601,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
               ),
               const SizedBox(height: 10),
 
-              // 5. AUTO SS ANALYSIS Toggle Card
+              // 5. AUTO SS ANALYSIS Toggle Card (Smart In-Bubble UP/DOWN + Candle Time HUD)
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
@@ -1266,24 +1611,38 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> {
                 ),
                 child: Row(
                   children: [
+                    ClipOval(
+                      child: Image.asset(
+                        'assets/logo.png',
+                        width: 36,
+                        height: 36,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => const Icon(
+                          Icons.stars_rounded,
+                          color: Color(0xFFC6A962),
+                          size: 32,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
-                            'AUTO SS ANALYSIS 🎯 (bonus)',
+                            'SMART BUBBLE SIGNAL 🎯 (In-Bubble UP/DOWN)',
                             style: TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.w800,
-                              fontSize: 13.5,
+                              fontSize: 13,
                             ),
                           ),
                           const SizedBox(height: 3),
                           Text(
                             _floatOn
-                                ? '🟢 ACTIVE: Screenshot nilei auto AI analysis + floating signal dekhabe'
-                                : 'ON korle: ss nile auto cheshta korbe (na hole uporer button use koro)',
-                            style: const TextStyle(color: Colors.white60, fontSize: 11.5),
+                                ? '🟢 ACTIVE: অ্যাপে ঢোকা লাগবে না—Pocket Option-এ SS নিলে বাবলের ভেতরেই UP/DOWN ও ক্যান্ডেলের টাইম (যেমন ${nextTimes[0]}, ${nextTimes[1]}) দেখাবে!'
+                                : 'ON korle: App Logo Bubble ভাসবে এবং বাবলের ভেতরেই UP/DOWN ও ক্যান্ডেলের সঠিক টাইম বলে দেবে',
+                            style: const TextStyle(color: Colors.white60, fontSize: 11.2),
                           ),
                         ],
                       ),
