@@ -67,16 +67,15 @@ class BinaryService : Service() {
 
         private val MODELS = listOf(
             "gemini-2.5-flash",
-            "gemini-2.0-flash",
             "gemini-2.5-flash-lite",
-            "gemini-1.5-flash"
+            "gemini-flash-latest",
+            "gemini-2.0-flash"
         )
     }
 
     private val main = Handler(Looper.getMainLooper())
     private var wm: WindowManager? = null
 
-    // Smart Expandable Bubble Views (Everything inside the Bubble itself!)
     private var bubbleRoot: LinearLayout? = null
     private var bubbleLogoView: ImageView? = null
     private var bubbleMiniTag: TextView? = null
@@ -203,7 +202,10 @@ class BinaryService : Service() {
             if (keys.isEmpty()) {
                 val rawKeys = sp.getString("flutter.bin_keys", null)
                 if (!rawKeys.isNullOrEmpty()) {
-                    val extracted = Regex("AIza[0-9A-Za-z_\\-]{25,}").findAll(rawKeys).map { it.value }.toList()
+                    val extracted = Regex("(AIza[0-9A-Za-z_\\-]{25,}|gsk_[0-9A-Za-z_\\-]{25,})")
+                        .findAll(rawKeys)
+                        .map { it.value }
+                        .toList()
                     if (extracted.isNotEmpty()) {
                         keys = extracted
                     }
@@ -569,8 +571,8 @@ class BinaryService : Service() {
         p.gravity = Gravity.TOP or Gravity.START
         val screenW = resources.displayMetrics.widthPixels
         val screenH = resources.displayMetrics.heightPixels
-        p.x = (screenW - logoSizePx - (16 * density).toInt()).coerceAtLeast(8)
-        p.y = (screenH * 0.28f).toInt()
+        p.x = (screenW - logoSizePx - (14 * density).toInt()).coerceAtLeast(8)
+        p.y = (screenH * 0.42f).toInt()
 
         val touchListener = object : View.OnTouchListener {
             private var startX = 0
@@ -979,9 +981,11 @@ class BinaryService : Service() {
             "(5) Visible Indicators (RSI, Bollinger Bands, Stochastic, MACD, EMA), " +
             "(6) OTC Manipulation Trap Filter. " +
             "Predict the exact candle direction for $t1, $t2, and $t3, and specify which exact candle time ($t1, $t2, or $t3) has the strongest high-probability entry in target_time. " +
-            "Reply ONLY with valid JSON: " +
+            "Reply ONLY with valid raw JSON (no markdown fences): " +
             "{\"dir\":\"UP\",\"conf\":85,\"detected_pair\":\"$pair\",\"target_time\":\"$t1\",\"candle_plan\":\"$t1 ⬆️ UP | $t2 ⬆️ UP | $t3 ⬆️ UP\",\"pattern\":\"Bullish Engulfing + Support\",\"structure\":\"Uptrend HH/HL\",\"smc\":\"Bullish OB + FVG\",\"entry\":\"$t1 Candle Open • 1-Step MTG ($t2)\",\"risk\":\"Low Risk\",\"trap\":false,\"trend_score\":86,\"pattern_score\":88,\"snr_score\":84,\"momentum_score\":82,\"reason\":\"short Banglish reason mentioning why $t1/$t2 candle will go UP or DOWN\"} " +
             "dir must be UP or DOWN or WAIT."
+
+        var firstRealErr = ""
 
         for (rawKey in keys) {
             val key = rawKey.trim()
@@ -992,11 +996,13 @@ class BinaryService : Service() {
                     val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$key")
                     c = url.openConnection() as HttpURLConnection
                     c.requestMethod = "POST"
-                    c.connectTimeout = 8000
-                    c.readTimeout = 16000
+                    c.connectTimeout = 10000
+                    c.readTimeout = 22000
                     c.doOutput = true
                     c.setRequestProperty("Content-Type", "application/json; charset=utf-8")
 
+                    // IMPORTANT FIX: Do NOT restrict maxOutputTokens to 500, because gemini-2.5-flash
+                    // uses thinking tokens which previously truncated the JSON output!
                     val body = JSONObject()
                     val parts = JSONArray()
                     parts.put(JSONObject().put("text", prompt))
@@ -1007,13 +1013,7 @@ class BinaryService : Service() {
                         )
                     )
                     body.put("contents", JSONArray().put(JSONObject().put("parts", parts)))
-                    body.put(
-                        "generationConfig",
-                        JSONObject()
-                            .put("temperature", 0.15)
-                            .put("maxOutputTokens", 550)
-                            .put("responseMimeType", "application/json")
-                    )
+                    body.put("generationConfig", JSONObject().put("temperature", 0.2))
 
                     c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
                     val code = c.responseCode
@@ -1025,18 +1025,25 @@ class BinaryService : Service() {
                             ?.optJSONObject(0)
                             ?.optJSONObject("content")
                             ?.optJSONArray("parts")
-                        var text = ""
+                        val sb = StringBuilder()
                         if (parts2 != null) {
                             for (i in 0 until parts2.length()) {
-                                text += parts2.optJSONObject(i)?.optString("text", "") ?: ""
+                                val pObj = parts2.optJSONObject(i) ?: continue
+                                // Skip internal thinking blocks on Gemini 2.5 models
+                                if (pObj.optBoolean("thought", false)) continue
+                                sb.append(pObj.optString("text", ""))
                             }
                         }
+                        val text = sb.toString().replace("```json", "").replace("```", "").trim()
                         val a = text.indexOf('{')
                         val z = text.lastIndexOf('}')
                         if (a >= 0 && z > a) {
                             return JSONObject(text.substring(a, z + 1))
                         }
                     } else {
+                        if (firstRealErr.isEmpty() && code != 404) {
+                            firstRealErr = "HTTP $code ($model)"
+                        }
                         c.disconnect()
                     }
                 } catch (_: Exception) {
@@ -1049,7 +1056,7 @@ class BinaryService : Service() {
             .put("conf", 0)
             .put("target_time", upcomingTimes[0])
             .put("candle_plan", "${upcomingTimes[0]}: ⏸️ WAIT")
-            .put("reason", "sob key fail — net/key check koro")
+            .put("reason", if (firstRealErr.isNotEmpty()) firstRealErr else "sob key fail — net/key check koro")
     }
 
     private fun appendHistory(dir: String, conf: Int, targetTime: String) {
