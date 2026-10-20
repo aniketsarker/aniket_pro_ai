@@ -1,4 +1,4 @@
-name: Build ANIKET X
+name: Build ANIKET X APK
 
 on:
   workflow_dispatch:
