@@ -3,16 +3,14 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  FULL BINARY TRADING DICTIONARY (SMC • ICT • PRICE ACTION • PATTERNS • TRAPS • MTG)
-//  • Used both as an interactive searchable Dictionary for the trader AND
-//    as the institutional knowledge base for the AI & Multi-Candle Vision Engine!
+//  FULL BINARY TRADING DICTIONARY (CANDLESTICK PSYCHOLOGY • SMC • ICT •
+//  CHART PATTERNS • TRAPS • MTG • NO-TRADE DISCIPLINE)
 // ═══════════════════════════════════════════════════════════════════════════
 class BinaryDictEntry {
   final String category; // PA, SMC, ICT, PATTERN, TRAP, MTG
@@ -31,263 +29,246 @@ class BinaryDictEntry {
 }
 
 const List<BinaryDictEntry> kBinaryTradingDictionary = [
-  // ── 1. PRICE ACTION (PA) & CANDLESTICK PSYCHOLOGY ──
+  // ── 1. CANDLESTICK PSYCHOLOGY & PRICE ACTION (PA) ──
   BinaryDictEntry(
     category: 'PA',
-    term: 'Bullish Pinbar / Hammer Rejection',
-    signalBias: 'UP',
-    meaningBanglish:
-        'Support ba Demand zone-e lamba lower wick (60%+ লেজ) ও ছোট বডি। মানে সেলাররা নিচে নামাতে চেয়েও ব্যর্থ হয়েছে, বায়াররা স্ট্রংলি মার্কেট উপরে ঠেলছে।',
-    proEntryRule: 'পরের ক্যান্ডেল ওপেন হলেই (1 min por) Direct UP ট্রেড। উইক খুব বড় হলে ৫০% রিট্রেসমেন্টে সেফ এন্ট্রি।',
-  ),
-  BinaryDictEntry(
-    category: 'PA',
-    term: 'Bearish Pinbar / Shooting Star',
-    signalBias: 'DOWN',
-    meaningBanglish:
-        'Resistance বা Supply zone-এ লম্বা upper wick এবং নিচে ছোট বডি। বায়াররা উপরে গিয়ে ট্র্যাপে পড়েছে এবং সেলাররা কন্ট্রোল নিয়েছে।',
-    proEntryRule: 'পরের ক্যান্ডেলে (1 min por) Direct DOWN ট্রেড। কোনো কারণে ডোজি হলে 1-Step MTG রেডি রাখবে।',
-  ),
-  BinaryDictEntry(
-    category: 'PA',
-    term: 'Bullish Engulfing (2-Candle Power)',
-    signalBias: 'UP',
-    meaningBanglish:
-        'একটি লাল (Bearish) ক্যান্ডেলকে পরের সবুজ (Bullish) ক্যান্ডেল সম্পূর্ণ ঢেকে বা গিলে ফেলে। এটি শক্তিশালী মোমেন্টাম শিফটের সিগন্যাল।',
-    proEntryRule: 'Support, Order Block বা FVG জোনে তৈরি হলে পরের ক্যান্ডেল (1 min por) Direct UP।',
-  ),
-  BinaryDictEntry(
-    category: 'PA',
-    term: 'Bearish Engulfing (2-Candle Drop)',
-    signalBias: 'DOWN',
-    meaningBanglish:
-        'একটি সবুজ ক্যান্ডেলকে পরের বড় লাল ক্যান্ডেল পুরোপুরি ঢেকে ফেলে। রেজিস্ট্যান্স বা সাপ্লাই জোনে এটি স্ট্রং সেল সিগন্যাল।',
-    proEntryRule: 'পরের ক্যান্ডেল ওপেনেই (1 min por) Direct DOWN ট্রেড।',
-  ),
-  BinaryDictEntry(
-    category: 'PA',
-    term: 'Morning Star (3-Candle Reversal)',
-    signalBias: 'UP',
-    meaningBanglish:
-        'ডাউনট্রেন্ডের শেষে ১টি বড় লাল ক্যান্ডেল + ১টি ছোট ডোজি/স্পিনিং টপ + ১টি স্ট্রং সবুজ ক্যান্ডেল যা প্রথম ক্যান্ডেলের ৫০% এর উপরে ক্লোজ হয়।',
-    proEntryRule: '৪র্থ ক্যান্ডেলে (1 min por) হাই-কনফিডেন্স UP ট্রেড (Direct Shot, সাধারণত MTG লাগে না)।',
-  ),
-  BinaryDictEntry(
-    category: 'PA',
-    term: 'Evening Star (3-Candle Top Reversal)',
-    signalBias: 'DOWN',
-    meaningBanglish:
-        'আপট্রেন্ডের শেষে ১টি বড় সবুজ ক্যান্ডেল + ১টি ছোট ইনডিসিশন ক্যান্ডেল + ১টি স্ট্রং লাল ক্যান্ডেল। টপ রিভার্সালের অন্যতম সেরা সেটআপ।',
-    proEntryRule: 'পরের ক্যান্ডেলে (1 min por) Direct DOWN ট্রেড।',
-  ),
-  BinaryDictEntry(
-    category: 'PA',
-    term: 'Tweezer Bottom & Tweezer Top',
+    term: 'Wick Rejection Psychology (Buyer vs Seller Pressure)',
     signalBias: 'REVERSAL',
     meaningBanglish:
-        'পাশাপাশি দুটি ক্যান্ডেল ঠিক একই প্রাইস লেভেল (সমমানের হাই বা লো) থেকে রিজেকশন খেলে তাকে Tweezer বলে।',
-    proEntryRule: 'SNR লেভেলে Tweezer Bottom হলে UP এবং Tweezer Top হলে DOWN (Direct বা 1-Step MTG)।',
+        'ক্যান্ডেলের বডি দেখায় কারা ক্লোজ করেছে, কিন্তু লম্বা উইক (লেজ) দেখায় কারা ভেতরে যুদ্ধ জিতেছে! উপরে লম্বা উইক মানে বায়াররা উপরে ধরে রাখতে পারেনি (Seller Rejection); নিচে লম্বা উইক মানে সেলাররা নিচে ধরে রাখতে পারেনি (Buyer Rejection)।',
+    proEntryRule: 'শুধুমাত্র মেজর SNR, Order Block বা Trendline-এ লম্বা উইক রিজেকশন হলে পরের ক্যান্ডেলে বিপরীত দিকে ট্রেড নেবে। মাঝখানে (Mid-Zone) হলে WAIT করবে।',
   ),
   BinaryDictEntry(
     category: 'PA',
-    term: 'Marubozu Impulse vs Exhaustion Candle',
+    term: 'Candle Body Shrinking (Momentum Loss / Exhaustion)',
     signalBias: 'REVERSAL',
     meaningBanglish:
-        'উইক ছাড়া বিশাল বডির ক্যান্ডেল। ব্রেকআউটের শুরুতে হলে Continuation, কিন্তু ট্রেন্ডের শেষে বা SNR লেভেলে হঠাৎ বিশাল ক্যান্ডেল হলে সেটি Exhaustion (ক্লান্তি)।',
-    proEntryRule: 'SNR-এ বিশাল Exhaustion ক্যান্ডেল দেখলে ট্রেন্ডের দিকে ট্রেড না নিয়ে ১ মিনিট পর বিপরীত দিকে (Reversal) বা ২ মিনিট পর ট্রেড নেবে।',
+        'পরপর ৩টি সবুজ বা লাল ক্যান্ডেলের বডি যদি ক্রমশ বড় থেকে ছোট হতে থাকে (যেমন ১মটা বড়, ২য়টা মাঝারি, ৩য়টা ছোট/উইকওয়ালা), তার মানে ওই ট্রেন্ডের শক্তি শেষ হয়ে গেছে!',
+    proEntryRule: 'শক্তি কমে যাওয়া (Shrinking) ক্যান্ডেল দেখে কখনোই ট্রেন্ডের দিকে ট্রেড নেবে না! রেজিস্ট্যান্স/সাপোর্ট ছুঁলে রিভার্সাল নেবে নতুবা WAIT করবে।',
   ),
   BinaryDictEntry(
     category: 'PA',
-    term: 'Inside Bar / Mother Bar Fakey',
+    term: 'Bullish Pinbar / Hammer & Dragonfly Doji',
+    signalBias: 'UP',
+    meaningBanglish:
+        'ডাউনট্রেন্ডের শেষে সাপোর্ট বা Bullish Order Block-এ নিচে ৬৫%+ লম্বা উইক এবং উপরে ছোট বডি। সেলারদের সব অর্ডার বায়াররা শুষে (Absorb) নিয়েছে।',
+    proEntryRule: 'সাপোর্ট লেভেলে ক্লোজ হলে পরের ক্যান্ডেলে (1 min por) Direct UP ট্রেড।',
+  ),
+  BinaryDictEntry(
+    category: 'PA',
+    term: 'Bearish Pinbar / Shooting Star & Gravestone Doji',
+    signalBias: 'DOWN',
+    meaningBanglish:
+        'আপট্রেন্ডের শেষে রেজিস্ট্যান্স বা Bearish Order Block-এ উপরে ৬৫%+ লম্বা উইক এবং নিচে ছোট বডি। বায়াররা উপরে ট্র্যাপে পড়েছে।',
+    proEntryRule: 'রেজিস্ট্যান্স লেভেলে ক্লোজ হলে পরের ক্যান্ডেলে (1 min por) Direct DOWN ট্রেড।',
+  ),
+  BinaryDictEntry(
+    category: 'PA',
+    term: 'Bullish & Bearish Engulfing + Piercing / Dark Cloud',
     signalBias: 'REVERSAL',
     meaningBanglish:
-        'বড় ক্যান্ডেলের (Mother Bar) ভেতরে ১–২টি ছোট ক্যান্ডেল আটকে থাকা। একদিকে ফেক ব্রেকআউট দিয়ে উল্টো দিকে ছুটলে তাকে Fakey Setup বলে।',
-    proEntryRule: 'ব্রেকআউট ক্যান্ডেল ক্লোজ হওয়ার পর বা Fakey রিজেকশনে পরের ক্যান্ডেলে ট্রেড।',
+        'আগের ক্যান্ডেলের পুরো বডিকে পরের বিপরীত রঙের ক্যান্ডেল সম্পূর্ণ গিলে ফেলা (Engulfing) বা ৫০%+ ভেতরে ঢুকে ক্লোজ হওয়া (Piercing Line / Dark Cloud Cover)।',
+    proEntryRule: 'কী-লেভেলে (SNR / OB / FVG) তৈরি হলে পরের ক্যান্ডেলে স্ট্রং এন্ট্রি। চার্টের মাঝখানে তৈরি হলে ট্রেড SKIP (WAIT) করবে।',
+  ),
+  BinaryDictEntry(
+    category: 'PA',
+    term: 'Morning Star & Evening Star (3-Candle Institutional Shift)',
+    signalBias: 'REVERSAL',
+    meaningBanglish:
+        '১টি স্ট্রং ক্যান্ডেল + ১টি ছোট Doji/Spinning Top (থামা ও যুদ্ধ) + ১টি শক্তিশালী বিপরীত ক্যান্ডেল। এটি ৩ ক্যান্ডেলের সবচেয়ে নির্ভরযোগ্য সাইকোলজিক্যাল রিভার্সাল।',
+    proEntryRule: '৩য় ক্যান্ডেল ক্লোজ হওয়ার সাথে সাথে পরের ক্যান্ডেলে Direct ট্রেড (সাধারণত MTG লাগে না)।',
+  ),
+  BinaryDictEntry(
+    category: 'PA',
+    term: 'Tweezer Top & Tweezer Bottom (Algorithmic Defense)',
+    signalBias: 'REVERSAL',
+    meaningBanglish:
+        'পরপর ২টি ক্যান্ডেল ঠিক একই পিপ/প্রাইস লেভেলে বাধা পেয়ে ফিরে আসা। মানে ওই নির্দিষ্ট প্রাইসে ইনস্টিটিউশনাল লিমিট অর্ডার বসে আছে।',
+    proEntryRule: 'SNR বা Order Block-এ Tweezer দেখলে পরের ক্যান্ডেলে রিভার্সাল ট্রেড।',
+  ),
+  BinaryDictEntry(
+    category: 'PA',
+    term: 'Inside Bar (Mother Bar + Harami) & Fakey Setup',
+    signalBias: 'REVERSAL',
+    meaningBanglish:
+        'একটি বড় ক্যান্ডেলের (Mother Bar) হাই ও লো-এর ভেতরে পরের ক্যান্ডেল বন্দী থাকা। যখন একদিকে ফেক ব্রেকআউট দিয়ে আবার ভেতরে ঢুকে যায়, তাকে Fakey বলে।',
+    proEntryRule: 'Mother Bar-এর ভেতরে থাকা অবস্থায় কোনো ট্রেড নেবে না (WAIT)। ব্রেকআউট বা Fakey সুইপ শেষ হলে ট্রেড নেবে।',
+  ),
+  BinaryDictEntry(
+    category: 'PA',
+    term: 'Marubozu Impulse vs Climax Exhaustion Candle',
+    signalBias: 'WAIT',
+    meaningBanglish:
+        'একটি অস্বাভাবিক বিশাল ক্যান্ডেল যদি কনসলিডেশন ভেঙে শুরুতে তৈরি হয় তবে সেটি Impulse; কিন্তু টানা ৩–৪টি ক্যান্ডেলের পর হঠাৎ বিশাল ক্যান্ডেল হলে সেটি Exhaustion Climax!',
+    proEntryRule: 'Exhaustion ক্যান্ডেলের পর কখনোই একই দিকে ট্রেড নেবে না—হয় রিভার্সাল দেখবে অথবা ১ ক্যান্ডেল WAIT করবে।',
   ),
 
   // ── 2. SMART MONEY CONCEPTS (SMC) ──
   BinaryDictEntry(
     category: 'SMC',
-    term: 'BOS (Break of Structure)',
+    term: 'BOS (Break of Structure) vs Fake Breakout',
     signalBias: 'UP',
     meaningBanglish:
-        'ট্রেন্ডের দিকে আগের Swing High (আপট্রেন্ডে) বা Swing Low (ডাউনট্রেন্ডে) বডি দিয়ে ব্রেক করা। মানে স্মার্ট মানি ট্রেন্ড কন্টিনিউ করছে।',
-    proEntryRule: 'BOS হওয়ার পর প্রাইস যখন পুলব্যাক করে FVG বা Order Block-এ আসে, তখন ট্রেন্ডের দিকে ট্রেড।',
+        'আসল BOS হতে হলে সুইং হাই বা সুইং লো-কে ক্যান্ডেলের সলিড বডি দিয়ে ব্রেক করে ক্লোজ হতে হবে। শুধু উইক (লেজ) গিয়ে ফিরে এলে সেটি BOS নয়, সেটি Liquidity Sweep!',
+    proEntryRule: 'বডি দিয়ে BOS হলে পুলব্যাকে FVG/OB থেকে ট্রেন্ডের দিকে ট্রেড; আর শুধু উইক গেলে বিপরীত দিকে রিভার্সাল ট্রেড!',
   ),
   BinaryDictEntry(
     category: 'SMC',
-    term: 'CHoCH (Change of Character)',
+    term: 'CHoCH (Change of Character — Trend Reversal)',
     signalBias: 'REVERSAL',
     meaningBanglish:
-        'ট্রেন্ড ঘোরার প্রথম সিগন্যাল! ডাউনট্রেন্ডে সর্বশেষ Lower High ব্রেক করলে Bullish CHoCH, আর আপট্রেন্ডে সর্বশেষ Higher Low ব্রেক করলে Bearish CHoCH।',
-    proEntryRule: 'CHoCH হওয়ার পর ১–২ ক্যান্ডেল পুলব্যাক শেষে নতুন ট্রেন্ডের দিকে এন্ট্রি।',
+        'মার্কেট যখন প্রথমবার তার সর্বশেষ Internal Higher Low (আপট্রেন্ডে) বা Lower High (ডাউনট্রেন্ডে) বডি দিয়ে ভেঙে ফেলে, তখন মার্কেটের চরিত্র (ট্রেন্ড) বদলে যায়।',
+    proEntryRule: 'CHoCH হওয়ার পর প্রাইস যখন রিট্রেস করে নতুন Order Block বা FVG ছোঁয়, তখন নতুন ট্রেন্ডের দিকে স্নাইপার এন্ট্রি।',
   ),
   BinaryDictEntry(
     category: 'SMC',
-    term: 'Order Block (Bullish OB & Bearish OB)',
+    term: 'Unmitigated Order Block (Bullish OB & Bearish OB)',
     signalBias: 'REVERSAL',
     meaningBanglish:
-        'বিশাল ইমপালস বা BOS মুভ শুরু হওয়ার ঠিক আগের বিপরীত রঙের শেষ ক্যান্ডেলটি হলো ইনস্টিটিউশনাল Order Block। এখানে ব্যাংকের পেন্ডিং অর্ডার থাকে।',
-    proEntryRule: 'প্রাইস প্রথমবার Unmitigated Order Block টাচ করে উইক রিজেকশন দিলেই পরের ক্যান্ডেল রিভার্সাল (1-Step MTG ব্যাকআপ রাখবে)।',
+        'যে Order Block-এ প্রাইস এখনো একবারও ফিরে আসেনি (Fresh / Unmitigated)। প্রাইস প্রথমবার সেখানে এলে ৮৫–৯০% সময় রিজেকশন দেয়।',
+    proEntryRule: 'প্রাইস Fresh Order Block-এ ঢুকে উইক রিজেকশন বা পিনবার দিলেই পরের ক্যান্ডেলে এন্ট্রি (1-Step MTG ব্যাকআপ রাখবে)।',
   ),
   BinaryDictEntry(
     category: 'SMC',
-    term: 'FVG (Fair Value Gap / Imbalance)',
+    term: 'FVG (Fair Value Gap) & 50% CE (Consequent Encroachment)',
     signalBias: 'REVERSAL',
     meaningBanglish:
-        '৩টি ক্যান্ডেলের মধ্যে ১ম ও ৩য় ক্যান্ডেলের উইকের মাঝখানে যে খালি গ্যাপ থাকে (২য় ক্যান্ডেল বড় হওয়ার কারণে)। মার্কেট চুম্বকের মতো এই গ্যাপ পূরণ (Fill) করতে আসে।',
-    proEntryRule: 'প্রাইস FVG-এর ৫০% (Consequent Encroachment) পূরণ করে রিজেকশন দিলে সাথে সাথে ট্রেড।',
+        'ইমপালস মুভের সময় তৈরি হওয়া ৩-ক্যান্ডেলের গ্যাপ। এই গ্যাপের ঠিক মাঝখান (50% CE লেভেল) সবচেয়ে শক্তিশালী বাউন্স পয়েন্ট।',
+    proEntryRule: 'প্রাইস FVG-এর ৫০% ছুঁয়ে রিজেকশন দিলে পরের ক্যান্ডেলে ট্রেন্ডের দিকে এন্ট্রি।',
   ),
   BinaryDictEntry(
     category: 'SMC',
-    term: 'Breaker Block & Mitigation Block',
+    term: 'Breaker Block & Flip Zone (SBR / RBS)',
     signalBias: 'REVERSAL',
     meaningBanglish:
-        'কোনো Order Block যখন স্ট্রংলি ব্রেক হয়ে যায়, তখন তার পোলারিটি চেঞ্জ হয়ে বিপরীত দিকের শক্তিশালী সাপোর্ট/রেজিস্ট্যান্স (Breaker Block) হিসেবে কাজ করে।',
-    proEntryRule: 'প্রাইস পুনরায় Breaker Block রিটেস্ট করলে ১ মিনিট পর বা পুলব্যাক শেষে ২ মিনিট পর এন্ট্রি।',
-  ),
-  BinaryDictEntry(
-    category: 'SMC',
-    term: 'EQH / EQL (Equal Highs & Equal Lows)',
-    signalBias: 'TRAP',
-    meaningBanglish:
-        'ডাবল টপ বা ডাবল বটমের সমান লেভেল যেখানে রিটেল ট্রেডারদের স্টপ-লস ও ব্রেকআউট অর্ডার জমা থাকে (Liquidity Pool)।',
-    proEntryRule: 'সমান হাই/লো দেখলেই সাথে সাথে ট্রেড নেবে না—আগে সুইপ (Liquidity Grab) হতে দাও, তারপর রিভার্সাল নাও!',
+        'লিকুইডিটি নেওয়ার পর কোনো শক্তিশালী সাপোর্ট বা Order Block ভেঙে গেলে সেটি পরবর্তীতে রেজিস্ট্যান্স (SBR / Bearish Breaker) হয়ে যায়, এবং রেজিস্ট্যান্স ভাঙলে সাপোর্ট (RBS / Bullish Breaker) হয়ে যায়।',
+    proEntryRule: 'প্রথমবার রিটেস্টে ক্যান্ডেল রিজেকশন দেখলেই পরের ক্যান্ডেলে এন্ট্রি।',
   ),
 
   // ── 3. ICT (INNER CIRCLE TRADER) CONCEPTS ──
   BinaryDictEntry(
     category: 'ICT',
-    term: 'BSL / SSL Liquidity Sweep (Stop-Hunt)',
+    term: 'BSL & SSL Liquidity Sweep (Turtle Soup / Stop-Hunt)',
     signalBias: 'REVERSAL',
     meaningBanglish:
-        'Buy-Side Liquidity (আগের হাইয়ের উপরে) বা Sell-Side Liquidity (আগের লোয়ের নিচে) উইক দিয়ে সুইপ করে ভেতরে ক্লোজ হওয়া। এটি ICT-এর সবচেয়ে পাওয়ারফুল স্নাইপার সেটআপ!',
-    proEntryRule: 'সুইপ ক্যান্ডেল ভেতরে ক্লোজ হলেই পরের ক্যান্ডেলে (1 min por) Direct বিপরীত দিকে ট্রেড (No MTG Needed)।',
+        'আগের ১ বা একাধিক Swing High (Equal Highs - BSL) বা Swing Low (Equal Lows - SSL)-এর বাইরে গিয়ে রিটেল ট্রেডারদের স্টপলস ও ব্রেকআউট ট্রেড খেয়ে ক্যান্ডেল আবার রেঞ্জের ভেতরে ক্লোজ হওয়া।',
+    proEntryRule: 'সুইপ ক্যান্ডেল ভেতরে ক্লোজ হওয়ার সাথে সাথে পরের ক্যান্ডেলে (1 min por) বিপরীত দিকে Direct Shot ট্রেড!',
   ),
   BinaryDictEntry(
     category: 'ICT',
-    term: 'Inducement (IDM) Trap',
+    term: 'Inducement (IDM) — The Smart Money Bait',
     signalBias: 'TRAP',
     meaningBanglish:
-        'আসল Order Block-এর একটু আগে তৈরি হওয়া ছোট মাইনর সাপোর্ট/রেজিস্ট্যান্স যা রিটেল ট্রেডারদের ভুল এন্ট্রিতে ফাঁসানোর জন্য তৈরি হয়।',
-    proEntryRule: 'IDM লেভেলে এন্ট্রি না নিয়ে অপেক্ষা করো (2 min por)—প্রাইস IDM খেয়ে আসল Order Block ছুঁলে তখন এন্ট্রি নাও।',
-  ),
-  BinaryDictEntry(
-    category: 'ICT',
-    term: 'Displacement & Institutional Order Flow',
-    signalBias: 'UP',
-    meaningBanglish:
-        'বড় বডির পরপর ২–৩টি ক্যান্ডেল যা FVG তৈরি করে এবং আগের স্ট্রাকচার ভাঙে—এর মানে স্মার্ট মানি মার্কেটে এন্ট্রি নিয়েছে।',
-    proEntryRule: 'Displacement-এর বিপরীতে কখনো ট্রেড নেবে না; ছোট রিট্রেসমেন্ট হলে ফ্লো-এর দিকে এন্ট্রি।',
+        'আসল Order Block-এর একটু সামনে থাকা প্রথম মাইনর পুলব্যাক হাই বা লো। স্মার্ট মানি প্রথমে এই IDM ভেঙে রিটেলদের ফাঁসায়, তারপর আসল Order Block থেকে ঘোরে।',
+    proEntryRule: 'IDM না ভাঙা পর্যন্ত কোনো Order Block-এ ট্রেড নেবে না (WAIT)। IDM সুইপ হওয়ার পর আসল OB-তে এন্ট্রি নেবে।',
   ),
   BinaryDictEntry(
     category: 'ICT',
     term: 'AMD / Power of 3 (Accumulation, Manipulation, Distribution)',
     signalBias: 'REVERSAL',
     meaningBanglish:
-        'মার্কেট প্রথমে রেঞ্জে থাকে (Accumulation), এরপর উল্টো দিকে ফেক ব্রেকআউট দেয় (Manipulation / Judas Swing), তারপর আসল দিকে বড় মুভ দেয় (Distribution)।',
-    proEntryRule: 'রেঞ্জের বাইরে হঠাৎ ফেক স্পাইক (Manipulation) দেখলে রিজেকশনের পর আসল দিকে (Distribution) এন্ট্রি।',
+        '১) রেঞ্জ (Accumulation) -> ২) আসল দিকের উল্টো দিকে ফেক ব্রেকআউট বা Judas Swing (Manipulation) -> ৩) আসল দিকে শক্তিশালী ট্রেন্ড মুভ (Distribution)।',
+    proEntryRule: 'রেঞ্জের পর প্রথম ব্রেকআউটটা যদি উইক দিয়ে ফেইল করে (Manipulation), তবে উল্টো দিকে (Distribution) ট্রেড নেবে।',
   ),
   BinaryDictEntry(
     category: 'ICT',
-    term: 'OTE (Optimal Trade Entry 61.8% – 78.6% Fib)',
-    signalBias: 'REVERSAL',
+    term: 'Premium vs Discount & OTE (61.8% – 78.6% Fib)',
+    signalBias: 'WAIT',
     meaningBanglish:
-        'ইমপালস সুইংয়ের ৬১.৮% থেকে ৭৮.৬% ডিসকাউন্ট/প্রিমিয়াম রিট্রেসমেন্ট জোন, যেখানে FVG বা Order Block থাকলে রিভার্সাল রেট ৯০%+ হয়।',
-    proEntryRule: 'OTE জোনে পিনবার বা এনগালফিং দেখলেই পরের ক্যান্ডেলে স্নাইপার এন্ট্রি।',
+        'সুইং রেঞ্জের উপরের ৫০% হলো Premium (শুধু SELL খোঁজার জোন) এবং নিচের ৫০% হলো Discount (শুধু BUY খোঁজার জোন)। মাঝখানের ৫০% হলো Equilibrium (No-Trade Zone)।',
+    proEntryRule: 'প্রাইস চার্টের মাঝখানে (Equilibrium) থাকলে ট্রেড নেবে না (WAIT)। ৬১.৮%–৭৮.৬% (OTE) জোনে এলে ট্রেড নেবে।',
   ),
 
   // ── 4. CLASSIC CHART PATTERNS ──
   BinaryDictEntry(
     category: 'PATTERN',
-    term: 'Double Top (M Pattern) & Double Bottom (W Pattern)',
+    term: 'Double Top (M) & Double Bottom (W) + Neckline',
     signalBias: 'REVERSAL',
     meaningBanglish:
-        'উপরে দুইবার বাধা পেয়ে M আকৃতি (Bearish) অথবা নিচে দুইবার সাপোর্ট পেয়ে W আকৃতি (Bullish) তৈরি হওয়া।',
-    proEntryRule: '২য় টপ/বটমে উইক রিজেকশনে অথবা Neckline ব্রেকআউট ও রিটেস্টে নিশ্চিত এন্ট্রি।',
+        'উপরে দুইবার বাধা পেয়ে M প্যাটান বা নিচে দুইবার সাপোর্ট পেয়ে W প্যাটার্ন। যদি ২য় টপ/বটমটি ১মটির লিকুইডিটি সুইপ করে পিনবার দেয়, তবে সেটি A+ সেটআপ।',
+    proEntryRule: '২য় টপ/বটমে রিজেকশন ক্যান্ডেলে অথবা Neckline ব্রেকআউটের পর রিটেস্ট ক্যান্ডেলে এন্ট্রি।',
   ),
   BinaryDictEntry(
     category: 'PATTERN',
-    term: 'Head and Shoulders / Inverse H&S',
+    term: 'Head & Shoulders / Inverse Head & Shoulders',
     signalBias: 'REVERSAL',
     meaningBanglish:
-        'বাম কাঁধ, উঁচু মাথা (Liquidity Sweep) এবং ডান কাঁধ (Lower High)। এটি মেজর ট্রেন্ড রিভার্সাল চার্ট প্যাটার্ন।',
-    proEntryRule: 'Right Shoulder থেকে রিজেকশন বা Neckline ব্রেকআউটে পরের ক্যান্ডেলে ট্রেড।',
+        'Left Shoulder -> Head (Liquidity Sweep) -> CHoCH -> Right Shoulder (Mitigation Block/OTE)। এটি সবচেয়ে শক্তিশালী চার্ট রিভার্সাল প্যাটার্ন।',
+    proEntryRule: 'Right Shoulder থেকে রিজেকশন ক্যান্ডেল ক্লোজ হলে অথবা Neckline ব্রেক-অ্যান্ড-রিটেস্টে এন্ট্রি।',
   ),
   BinaryDictEntry(
     category: 'PATTERN',
     term: 'Rising Wedge (Bearish) & Falling Wedge (Bullish)',
     signalBias: 'REVERSAL',
     meaningBanglish:
-        'প্রাইস সংকুচিত হতে হতে উপরে উঠলে (Rising Wedge) মোমেন্টাম কমে নিচে ব্রেক করে, আর সংকুচিত হয়ে নিচে নামলে (Falling Wedge) উপরে ব্রেক করে।',
-    proEntryRule: 'ওয়েজের ট্রেন্ডলাইন ব্রেক করার পর ১ম বা ২য় ক্যান্ডেলে ব্রেকআউট দিকে ট্রেড।',
+        'দুই পাশের ট্রেন্ডলাইন সংকুচিত হয়ে উপরে উঠলে (Rising Wedge) বায়ারদের শক্তি শেষ হয়ে নিচে ভাঙে; আর সংকুচিত হয়ে নিচে নামলে (Falling Wedge) সেলারদের শক্তি শেষ হয়ে উপরে ভাঙে।',
+    proEntryRule: 'ওয়েজের শেষ মাথায় রিজেকশনে অথবা ট্রেন্ডলাইন ব্রেকআউট ক্যান্ডেল ক্লোজ হলে এন্ট্রি।',
   ),
   BinaryDictEntry(
     category: 'PATTERN',
-    term: 'Bullish Flag / Bearish Flag & Triangle',
+    term: 'Bullish/Bearish Flag, Pennant & Triangles',
     signalBias: 'UP',
     meaningBanglish:
-        'স্ট্রং মুভের (Flagpole) পর ছোট চ্যানেলে বিপরীত দিকে হালকা পুলব্যাক (Flag)। ব্রেক করলেই আগের ট্রেন্ডের দিকে দ্রুত ছোটে।',
-    proEntryRule: 'ফ্ল্যাগ বা ট্রায়াঙ্গেলের বাউন্ডারি ব্রেক ক্যান্ডেল ক্লোজ হলেই পরের ক্যান্ডেলে কন্টিনিউয়েশন ট্রেড।',
+        'শক্তিশালী ইমপালস মুভের পর ছোট কাউন্টার-ট্রেন্ড চ্যানেল (Flag) বা ট্রায়াঙ্গেল কনসলিডেশন।',
+    proEntryRule: 'কনসলিডেশনের ভেতরে ট্রেড নেবে না (WAIT)। যেদিকে বডি দিয়ে পরিষ্কার ব্রেকআউট দেবে, পরের ক্যান্ডেলে সেদিকে ট্রেড।',
   ),
 
-  // ── 5. POCKET OPTION OTC & RETAIL TRAPS TRAINING ──
+  // ── 5. TRAPS TRAINING & WHEN NOT TO TRADE ("WAIT" RULES) ──
   BinaryDictEntry(
     category: 'TRAP',
-    term: 'Bull Trap & Bear Trap (SNR Fakeout)',
-    signalBias: 'TRAP',
-    meaningBanglish:
-        'সাপোর্ট বা রেজিস্ট্যান্স লাইন ১টি বড় ক্যান্ডেল দিয়ে ব্রেক দেখিয়ে সবাইকে ব্রেকআউট ট্রেডে ঢুকিয়ে পরের ক্যান্ডেলেই উল্টো দিকে চলে যাওয়া!',
-    proEntryRule: 'ব্রেকআউট ক্যান্ডেলে লম্বা উইক থাকলে বা ভলিউম সন্দেহজনক হলে ব্রেকআউটে ঢুকবে না—উল্টো দিকে Fade (Reversal) করো!',
-  ),
-  BinaryDictEntry(
-    category: 'TRAP',
-    term: 'Exhaustion Climax Trap (Bollinger Band Outside)',
-    signalBias: 'TRAP',
-    meaningBanglish:
-        'টানা ৪–৫টা একই রঙের ক্যান্ডেলের পর হঠাৎ অস্বাভাবিক বড় ক্যান্ডেল যা Bollinger Band-এর বাইরে চলে যায়। রিটেল ট্রেডাররা এখানে ট্রেন্ডে ঢুকে লস করে।',
-    proEntryRule: 'এখানে ট্রেন্ডের দিকে ট্রেড নিষিদ্ধ! ১ মিনিট পর বিপরীত ক্যান্ডেল (Pullback) অথবা ২ মিনিট অপেক্ষা করো।',
-  ),
-  BinaryDictEntry(
-    category: 'TRAP',
-    term: 'OTC Barcode / Doji Cluster Trap',
+    term: '2-3 Candle Blind Momentum Trap (Why Retails Lose!)',
     signalBias: 'WAIT',
     meaningBanglish:
-        'পরপর ৩–৫টি ছোট ডোজি, লম্বা দুই পাশের উইক বা সবুজ-লাল-সবুজ-লাল অল্টারনেটিং ক্যান্ডেল। এটি Pocket Option অ্যালগরিদমের চপি ট্র্যাপ জোন।',
-    proEntryRule: 'এই জোনে ট্রেড সম্পূর্ণ SKIP (WAIT) করো যতক্ষণ না পরিষ্কার Breakout বা Displacement ক্যান্ডেল আসে।',
+        'পরপর ২–৩টা সবুজ বা লাল ক্যান্ডেল দেখেই অন্ধভাবে পরের ক্যান্ডেল একই দিকে নেওয়া বাইনারি ট্রেডিংয়ের সবচেয়ে বড় ভুল! কারণ ২–৩ ক্যান্ডেল যাওয়ার পর প্রাইস সাধারণত রেজিস্ট্যান্স/সাপোর্টে ঠেকে যায় বা রিট্রেস করে।',
+    proEntryRule: 'কখনোই শুধু ২–৩টা ক্যান্ডেলের রঙ দেখে ট্রেড নেবে না! দেখবে সামনে খালি জায়গা (Clean Traffic) আছে কি না নাকি SNR/OB বাধা আছে।',
+  ),
+  BinaryDictEntry(
+    category: 'TRAP',
+    term: 'Mid-Range / No Man\'s Land (Strict NO-TRADE Rule)',
+    signalBias: 'WAIT',
+    meaningBanglish:
+        'যখন প্রাইস সাপোর্ট এবং রেজিস্ট্যান্সের মাঝামাঝি ভাসছে—যেখানে কোনো Order Block, FVG, Trendline বা Chart Pattern নেই। এখানে ক্যান্ডেল যেকোনো দিকে ৫০/৫০ র‍্যান্ডম মুভ দেয়।',
+    proEntryRule: 'প্রতিটি ক্যান্ডেলে ট্রেড হয় না! প্রাইস মাঝখানে থাকলে বাধ্যতামূলকভাবে WAIT কর এবং প্রাইসকে আগে লেভেলে আসতে দাও।',
+  ),
+  BinaryDictEntry(
+    category: 'TRAP',
+    term: 'OTC Choppy Barcode & Overlapping Doji Trap',
+    signalBias: 'WAIT',
+    meaningBanglish:
+        'পরপর ছোট বডি, লম্বা দুই পাশের উইক, বা ১টা সবুজ ১টা লাল ক্যান্ডেল পাশাপাশি আটকে থাকা। এটি ব্রোকার অ্যালগরিদমের মানি-ইটিং জোন।',
+    proEntryRule: '১০০% NO TRADE (WAIT)! পরিষ্কার ব্রেকআউট না হওয়া পর্যন্ত এন্ট্রি নেবে না।',
   ),
 
-  // ── 6. SMART MTG (MARTINGALE) RULES ──
+  // ── 6. SMART MTG (MARTINGALE) ADVISOR RULES ──
   BinaryDictEntry(
     category: 'MTG',
-    term: 'Direct Shot (No MTG Needed)',
+    term: 'Direct Shot Setup (No MTG Needed)',
     signalBias: 'MTG',
     meaningBanglish:
-        'যখন Liquidity Sweep ইতিমধ্যে হয়ে গেছে এবং Order Block বা SNR থেকে পরিষ্কার Pinbar/Engulfing ক্লোজ হয়েছে—তখন ১ম ক্যান্ডেলেই উইন হওয়ার সম্ভাবনা সর্বোচ্চ।',
-    proEntryRule: 'Direct Entry নাও। অযথা বেশি রিস্ক নেওয়ার দরকার নেই।',
+        'যখন সুইপ (BSL/SSL) সম্পন্ন হয়েছে, ক্যান্ডেল সাপোর্ট/রেজিস্ট্যান্স বা OB থেকে পরিষ্কার Pinbar/Engulfing দিয়ে ক্লোজ হয়েছে এবং ৪+ পিলার একমত।',
+    proEntryRule: 'Direct 1st Candle Entry।',
   ),
   BinaryDictEntry(
     category: 'MTG',
-    term: '1-Step MTG Ready Rule (Liquidity Wick Backup)',
+    term: '1-Step MTG Backup Rule',
     signalBias: 'MTG',
     meaningBanglish:
-        'যখন প্রাইস সাপোর্ট/রেজিস্ট্যান্স বা FVG জোনে ঢুকছে কিন্তু এখনো সুইপ ক্যান্ডেল তৈরি হয়নি—তখন ১ম ক্যান্ডেলটি জোনের ভেতর ডিপ (Dip) দিয়ে ২য় ক্যান্ডেলে স্ট্রং রিভার্সাল দেয়।',
-    proEntryRule: '১ম ক্যান্ডেলে Base Stake দিয়ে এন্ট্রি নাও; যদি পুলব্যাকের কারণে ১ম ক্যান্ডেল মিস হয়, তবে সাথে সাথে পরের ক্যান্ডেল ওপেনেই 1-Step MTG (2.1x Stake) নেবে।',
+        'যখন সেটআপ স্ট্রং কিন্তু প্রাইস জোনের আরেকটু গভীরে (যেমন FVG-এর ৫০% বা OB-এর শেষ প্রান্তে) ১টি ক্যান্ডেল ডিপ দিতে পারে।',
+    proEntryRule: '১ম ক্যান্ডেলে এন্ট্রি নাও; যদি ১ম ক্যান্ডেলটি জোনের ভেতর পুলব্যাক ক্যান্ডেল হয়, তবে ঠিক পরের ক্যান্ডেল ওপেনেই 1-Step MTG নাও।',
   ),
   BinaryDictEntry(
     category: 'MTG',
-    term: 'No-MTG Danger Zone (Stop Loss Rule)',
+    term: 'Strict No-MTG Rule (Protect Capital)',
     signalBias: 'MTG',
     meaningBanglish:
-        'যখন প্রাইস শক্তিশালী ব্রেকআউট (BOS/Displacement) দিয়ে সাপোর্ট/রেজিস্ট্যান্স ভেঙে ফেলে বা OTC ট্র্যাপ জোনে থাকে, তখন MTG নিলে পরপর লস হতে পারে।',
-    proEntryRule: 'স্ট্রং ব্রেকআউট ক্যান্ডেল আপনার বিপরীতে ক্লোজ হলে ওই ট্রেডে MTG নেবে না—পরের ফ্রেশ সেটআপের জন্য অপেক্ষা করো।',
+        'যদি ১ম ক্যান্ডেলটি বিশাল বডি (Marubozu) দিয়ে তোমার সাপোর্ট/রেজিস্ট্যান্স বা Order Block পুরোপুরি ভেঙে ফেলে, তার মানে ওই লেভেলটি ফেইল করেছে।',
+    proEntryRule: 'লেভেল বডি দিয়ে ভেঙে গেলে কখনোই অন্ধভাবে MTG নেবে না! পরের ফ্রেশ সেটআপের জন্য অপেক্ষা করো।',
   ),
 ];
 
 class BinarySignalScreen extends StatefulWidget {
   const BinarySignalScreen({super.key});
 
-  // External Screenshot Bridge: receives (id, path) from web_screen.dart
   static void Function(String id, String path)? onExternalScreenshot;
 
   @override
@@ -399,12 +380,13 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
   String _lastSsPath = '';
   DateTime? _lastSsTime;
 
-  // Signal + Advanced Multi-Pillar State (SMC, ICT, PA, Chart Patterns, Traps, MTG)
+  // Signal + Advanced Multi-Pillar State (PA Psychology, SMC, ICT, Chart Patterns, Traps, MTG)
   String _dir = '—';
   int _conf = 0;
   int _waitMins = 1;
   String _tradeAfterText = '—';
-  String _reason = 'Bubble ON rekhe Pocket Option-e SS nile auto ekhane chole ashbe (1 SS = 1 Pro Trade)!';
+  String _reason =
+      'Bubble ON rekhe Pocket Option-e SS nile auto ekhane chole ashbe (Setup na thakle WAIT bolbe, blind trade dibe na)!';
   String _targetTime = '—';
   String _candlePlan = '—';
   String _pattern = '—';
@@ -490,7 +472,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
     return counts.entries.map((e) => '${e.value} ${e.key}').join(', ');
   }
 
-  // Fast deterministic byte signature so the exact same screenshot image is NEVER analyzed twice
   String _computeBytesSignature(Uint8List bytes) {
     if (bytes.isEmpty) return 'empty';
     int h1 = bytes.length;
@@ -542,7 +523,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
     } catch (_) {}
   }
 
-  // ── SINGLE-SHOT EXTERNAL SCREENSHOT HANDLER (Never double-triggers when Bubble is ON!) ──
   void _handleExternalAutoScreenshot(String id, String path) {
     if (path.isEmpty) return;
     if (id.isNotEmpty && _analyzedIds.contains(id)) return;
@@ -555,9 +535,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
     });
     SharedPreferences.getInstance().then((p) => p.setString('bin_last_ss', path));
 
-    // IMPORTANT: If the Floating Bubble (BinaryService) is ON, BinaryService ALREADY
-    // receives this screenshot in Kotlin and runs the single analysis!
-    // We ONLY run Dart-side auto-analysis here if the Floating Bubble is OFF!
     if (_floatOn) return;
 
     final nowMs = DateTime.now().millisecondsSinceEpoch;
@@ -663,7 +640,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
     String? mtgShort,
   }) async {
     if (conf <= 0 && dir == 'WAIT') return;
-    // Prevent duplicate history entries for the exact same screenshot!
     if (ssSig != null && ssSig.isNotEmpty) {
       if (ssSig == _lastHistSsSig) return;
       _lastHistSsSig = ssSig;
@@ -744,7 +720,10 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
     return out;
   }
 
-  String _buildTradeAfterLabel(int waitMins, String targetCandleTime) {
+  String _buildTradeAfterLabel(int waitMins, String targetCandleTime, String dir) {
+    if (dir == 'WAIT') {
+      return '⏸️ EKHON TRADE NIBE NA (Wait for Setup)';
+    }
     final stepSec = _periodSec();
     if (stepSec < 60) {
       final secs = stepSec * waitMins.clamp(1, 3);
@@ -839,10 +818,10 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
                       children: [
                         const Expanded(
                           child: Text(
-                            '📚 Binary Pro Dictionary (SMC • ICT • PA • Traps • MTG)',
+                            '📚 Binary Pro Dictionary (PA • SMC • ICT • Patterns • Traps)',
                             style: TextStyle(
                               color: Color(0xFFC6A962),
-                              fontSize: 14.5,
+                              fontSize: 14.2,
                               fontWeight: FontWeight.w800,
                             ),
                           ),
@@ -857,7 +836,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
                       controller: ctrl,
                       style: const TextStyle(color: Colors.white, fontSize: 13.5),
                       decoration: InputDecoration(
-                        hintText: 'Search concept... (e.g. Order Block, FVG, Sweep, Pinbar, MTG, Trap)',
+                        hintText: 'Search concept... (e.g. Wick, Order Block, FVG, Sweep, Wedge, Wait)',
                         hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
                         prefixIcon: const Icon(Icons.search, color: Color(0xFFC6A962), size: 19),
                         filled: true,
@@ -881,11 +860,11 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
                         children: [
                           for (final c in [
                             ['ALL', 'All (${kBinaryTradingDictionary.length})'],
-                            ['PA', '🕯️ Price Action'],
+                            ['PA', '🕯️ Candle Psychology'],
                             ['SMC', '🏦 SMC'],
                             ['ICT', '🎯 ICT'],
                             ['PATTERN', '📐 Patterns'],
-                            ['TRAP', '🚨 Traps'],
+                            ['TRAP', '🚨 Traps & Wait'],
                             ['MTG', '🔄 MTG Rules'],
                           ])
                             Padding(
@@ -919,7 +898,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
                               ? const Color(0xFF00E676)
                               : item.signalBias == 'DOWN'
                                   ? const Color(0xFFFF5252)
-                                  : item.signalBias == 'TRAP'
+                                  : item.signalBias == 'TRAP' || item.signalBias == 'WAIT'
                                       ? const Color(0xFFFF8A80)
                                       : const Color(0xFFFFD54F);
                           return Container(
@@ -971,7 +950,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
                                 ),
                                 const SizedBox(height: 5),
                                 Text(
-                                  '🎯 Pro Entry / MTG Rule: ${item.proEntryRule}',
+                                  '🎯 Pro Rule: ${item.proEntryRule}',
                                   style: const TextStyle(
                                     color: Color(0xFF69F0AE),
                                     fontSize: 11.5,
@@ -1217,6 +1196,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
       final time = (map['time'] ?? _tf).toString();
       final ssPath = (map['path'] ?? '').toString();
       final ssSig = (map['sig'] ?? ssPath).toString();
+      final providerUsed = (map['provider'] ?? '').toString();
 
       if (dir == 'STATE') {
         if (mounted) {
@@ -1238,7 +1218,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
             _lastAnalyzeMs = DateTime.now().millisecondsSinceEpoch;
             _reason = reason.isNotEmpty
                 ? reason
-                : '📸 Screenshot Auto-Imported! Institutional SMC + ICT + PA + Trap AI Analyzing...';
+                : '📸 Screenshot Auto-Imported! Institutional Candlestick Psychology + SMC + ICT + Chart Pattern AI Analyzing...';
           });
         }
         return null;
@@ -1249,6 +1229,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
           _lastSsPath = ssPath;
           _lastSsTime = DateTime.now();
           _busy = false;
+          if (providerUsed.isNotEmpty) _activeProviderTag = providerUsed;
         });
       }
 
@@ -1323,20 +1304,26 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
         : upcoming[clampedWait - 1];
     final resolvedTradeAfter = (tradeAfterText != null && tradeAfterText.isNotEmpty)
         ? tradeAfterText
-        : _buildTradeAfterLabel(clampedWait, resolvedTargetTime);
+        : _buildTradeAfterLabel(clampedWait, resolvedTargetTime, finalDir);
 
-    final shortArrow = finalDir == 'UP' ? '⬆️ UP' : finalDir == 'DOWN' ? '⬇️ DOWN' : '⏸️ WAIT';
+    final shortArrow = finalDir == 'UP'
+        ? '⬆️ UP'
+        : finalDir == 'DOWN'
+            ? '⬇️ DOWN'
+            : '⏸️ NO TRADE (WAIT)';
     final resolvedPlan = (candlePlan != null && candlePlan.isNotEmpty)
         ? candlePlan
-        : '${upcoming[0]} $shortArrow | ${upcoming[1]} $shortArrow | ${upcoming[2]} $shortArrow';
+        : (finalDir == 'WAIT'
+            ? '${upcoming[0]} ⏸️ WAIT | ${upcoming[1]} ⏸️ WAIT — Setup তৈরি হওয়া পর্যন্ত অপেক্ষা করো'
+            : '${upcoming[0]} $shortArrow | ${upcoming[1]} $shortArrow | ${upcoming[2]} $shortArrow');
 
     final mtgBackupCandle = upcoming[math.min(clampedWait, 2)];
     final resolvedMtg = (mtgAdvice != null && mtgAdvice.isNotEmpty && mtgAdvice != '—')
         ? mtgAdvice
-        : (otcTrap
-            ? '⛔ No MTG (Trap Risk — Loss hole MTG nibe na)'
+        : (finalDir == 'WAIT' || otcTrap
+            ? '⛔ NO TRADE / NO MTG (এখন কোনো ট্রেড নেবে না)'
             : conf >= 88
-                ? '✅ Direct Shot Win Expected (Backup 1-Step MTG: $mtgBackupCandle)'
+                ? '✅ Direct Shot Setup (Backup 1-Step MTG: $mtgBackupCandle)'
                 : '🔄 1-Step MTG Ready Rakho ($mtgBackupCandle Candle-e Backup)');
 
     if (!mounted) return;
@@ -1349,65 +1336,71 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
         _pair = pair;
       }
       _dir = finalDir;
-      _conf = conf.clamp(0, 99);
+      _conf = finalDir == 'WAIT' ? 0 : conf.clamp(0, 99);
       _waitMins = clampedWait;
       _tradeAfterText = resolvedTradeAfter;
       _reason = reason.isNotEmpty ? reason : 'Institutional Analysis complete';
       _targetTime = resolvedTargetTime;
       _candlePlan = resolvedPlan;
-      _pattern = (pattern != null && pattern.isNotEmpty) ? pattern : 'Pinbar / Engulfing';
-      _structure = (structure != null && structure.isNotEmpty) ? structure : 'BOS / SNR Flip';
-      _smcZone = (smcZone != null && smcZone.isNotEmpty) ? smcZone : 'Order Block + FVG';
+      _pattern = (pattern != null && pattern.isNotEmpty) ? pattern : 'Candlestick Check';
+      _structure = (structure != null && structure.isNotEmpty) ? structure : 'Structure Check';
+      _smcZone = (smcZone != null && smcZone.isNotEmpty) ? smcZone : 'SMC Zone Check';
       _ictConcept = (ictConcept != null && ictConcept.isNotEmpty && ictConcept != '—')
           ? ictConcept
-          : 'Liquidity Sweep + Displacement';
+          : 'ICT Liquidity Check';
       _chartPattern = (chartPattern != null && chartPattern.isNotEmpty && chartPattern != '—')
           ? chartPattern
-          : 'Price Channel / Breakout';
+          : 'Chart Pattern Check';
       _mtgAdvice = resolvedMtg;
       _entryGuide = (entryGuide != null && entryGuide.isNotEmpty)
           ? entryGuide
           : (finalDir == 'WAIT'
-              ? 'Avoid Entry • Wait for Clean Breakout'
+              ? '⏸️ Skip This Candle • Wait for SNR / Order Block Touch'
               : '$resolvedTradeAfter • MTG: $mtgBackupCandle');
       _riskLevel = (riskLevel != null && riskLevel.isNotEmpty)
           ? riskLevel
-          : (conf >= 84 ? 'Low Risk (Sniper)' : conf >= 75 ? 'Medium Risk' : 'High Risk');
+          : (finalDir == 'WAIT'
+              ? 'Skip Trade'
+              : conf >= 85
+                  ? 'Low Risk (Sniper)'
+                  : 'Medium Risk');
       _otcTrap = otcTrap;
       _trapType = (trapType != null && trapType.isNotEmpty)
           ? trapType
-          : (otcTrap ? 'OTC Fakeout / Inducement Trap!' : 'No Trap — Liquidity Swept Cleanly');
+          : (otcTrap ? 'Trap / Mid-Range Choppy Zone!' : 'Clean Institutional Setup');
       _trendScore = (trendScore != null && trendScore > 0)
           ? trendScore.clamp(0, 99)
-          : (conf > 0 ? (conf - 2).clamp(40, 98) : 0);
+          : (_conf > 0 ? (_conf - 2).clamp(40, 98) : 0);
       _patternScore = (patternScore != null && patternScore > 0)
           ? patternScore.clamp(0, 99)
-          : (conf > 0 ? (conf + 2).clamp(40, 98) : 0);
+          : (_conf > 0 ? (_conf + 2).clamp(40, 98) : 0);
       _snrScore = (snrScore != null && snrScore > 0)
           ? snrScore.clamp(0, 99)
-          : (conf > 0 ? (conf + 1).clamp(40, 98) : 0);
+          : (_conf > 0 ? (_conf + 1).clamp(40, 98) : 0);
       _momentumScore = (momentumScore != null && momentumScore > 0)
           ? momentumScore.clamp(0, 99)
-          : (conf > 0 ? (conf - 1).clamp(40, 98) : 0);
+          : (_conf > 0 ? (_conf - 1).clamp(40, 98) : 0);
       if (latencyMs != null) _latencyMs = latencyMs;
     });
 
-    final shortMtgTag = resolvedMtg.contains('Direct')
-        ? 'Direct'
-        : resolvedMtg.contains('No MTG')
-            ? 'No-MTG'
-            : '1-MTG Ready';
+    if (finalDir != 'WAIT' && _conf > 0) {
+      final shortMtgTag = resolvedMtg.contains('Direct')
+          ? 'Direct'
+          : resolvedMtg.contains('NO')
+              ? 'No-MTG'
+              : '1-MTG Ready';
 
-    _saveHist(
-      finalDir,
-      _conf,
-      ssSig: ssSig,
-      customPair: _pair,
-      customTf: time,
-      targetCandleTime: resolvedTargetTime,
-      tradeAfter: '${_waitMins}m por',
-      mtgShort: shortMtgTag,
-    );
+      _saveHist(
+        finalDir,
+        _conf,
+        ssSig: ssSig,
+        customPair: _pair,
+        customTf: time,
+        targetCandleTime: resolvedTargetTime,
+        tradeAfter: '${_waitMins}m por',
+        mtgShort: shortMtgTag,
+      );
+    }
   }
 
   Future<void> _pickAndAnalyze() async {
@@ -1470,7 +1463,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
     final rawBytes = await file.readAsBytes();
     final byteSig = _computeBytesSignature(rawBytes);
 
-    // STRICT SINGLE-ANALYSIS GUARD: If auto-triggered, never analyze the same screenshot twice!
     if (!forceManual && _analyzedByteSignatures.contains(byteSig)) {
       return;
     }
@@ -1483,7 +1475,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
       _lastSsPath = path;
       _lastSsTime = DateTime.now();
       _busy = true;
-      _reason = '📸 SS Analysis Ghore Import Hoyeche! SMC + ICT + Price Action + Trap + MTG Engine analyze korche...';
+      _reason = '📸 SS Analysis Ghore Import Hoyeche! Candlestick Psychology + Chart Patterns + SMC + ICT analyze korche...';
     });
 
     try {
@@ -1496,7 +1488,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
       try {
         final comp = await _gal.invokeMethod<Uint8List>('compress', {
           'bytes': rawBytes,
-          'maxKB': 180,
+          'maxKB': 240,
         });
         if (comp != null && comp.isNotEmpty) {
           sendBytes = comp;
@@ -1504,7 +1496,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
       } catch (_) {}
 
       final b64 = base64Encode(sendBytes);
-      final parsed = await _multiProviderVisionWithFailover(b64, sendBytes);
+      final parsed = await _multiProviderVisionWithFailover(b64);
       final elapsed = DateTime.now().millisecondsSinceEpoch - startMs;
 
       final dir = (parsed['dir'] ?? 'WAIT').toString();
@@ -1558,12 +1550,12 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  //  INSTITUTIONAL SMC + ICT + PRICE ACTION + CHART PATTERNS + TRAP + MTG ENGINE
+  //  TRUE INSTITUTIONAL VISION ENGINE (NO FAKE PIXEL-COUNTING FALLBACK!)
+  //  • Evaluates Candlestick Psychology + Chart Patterns + SMC + ICT + Traps
+  //  • Strictly outputs dir="WAIT" when the chart is mid-range, choppy, or has
+  //    no clean 80%+ confluence setup (NOT every candle is a trade!)
   // ═══════════════════════════════════════════════════════════════════════════
-  Future<Map<String, dynamic>> _multiProviderVisionWithFailover(
-    String b64,
-    Uint8List imageBytes,
-  ) async {
+  Future<Map<String, dynamic>> _multiProviderVisionWithFailover(String b64) async {
     final now = DateTime.now();
     final nowStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
     final times = _upcomingCandleTimes;
@@ -1574,23 +1566,39 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
     final isOtc = _pair.contains('(OTC)');
     final marketType = isOtc ? 'Pocket Option OTC algorithmic chart' : 'Live Interbank chart';
 
-    final prompt = 'You are an elite 15-Year Institutional Binary Options Master Trader combining:\n'
-        '1. PRICE ACTION & CANDLESTICK PSYCHOLOGY: Pinbar/Hammer/Shooting Star wick rejection (upper/lower wick pressure), Bullish/Bearish Engulfing, Morning/Evening Star, Tweezer Top/Bottom, Three Soldiers/Crows, Inside Bar Fakey, Marubozu impulse vs Exhaustion Climax candle.\n'
-        '2. SMART MONEY CONCEPTS (SMC): BOS (Break of Structure), CHoCH (Change of Character), Unmitigated Bullish/Bearish Order Block (OB), Breaker Block, Fair Value Gap (FVG / Imbalance 50% fill), Equal Highs/Lows (EQH/EQL), Premium vs Discount Fib OTE (61.8%-78.6%).\n'
-        '3. ICT (INNER CIRCLE TRADER): Buy-Side / Sell-Side Liquidity Sweep (BSL/SSL Stop-Hunt / Turtle Soup), Inducement (IDM) Trap before real OB, Displacement candle, Power of 3 (AMD: Accumulation, Manipulation, Distribution).\n'
-        '4. CLASSIC CHART PATTERNS: Double Top (M), Double Bottom (W), Head & Shoulders, Rising/Falling Wedge, Bullish/Bearish Flag, Triangle Breakout.\n'
-        '5. POCKET OPTION TRAP TRAINING: Detect Bull Trap (Resistance fakeout), Bear Trap (Support fakeout), Exhaustion Climax Trap outside Bollinger Band, or OTC Doji/Barcode Choppy Trap.\n'
-        '6. SMART MTG (MARTINGALE) ADVISOR: State clearly in "mtg_advice" whether this is a "✅ Direct Shot (MTG Lagbe Na — Clean Sweep + OB Bounce)" OR "🔄 1-Step MTG Ready Rakho ($t2 Candle Backup — Zone Retest Possible)" OR "⛔ No MTG (High Trap Risk)".\n\n'
-        'Current time: $nowStr | Selected Pair: $_pair | Timeframe: $_tf ($marketType).\n'
+    final prompt = 'You are an elite 15-Year Institutional Price Action, Candlestick Psychology, SMC, ICT & Chart Pattern Master Trader.\n'
+        'Read this trading chart screenshot with extreme precision. DO NOT guess or blindly follow 2-3 green/red candles!\n\n'
+        'MANDATORY 6-STAGE INSTITUTIONAL ANALYSIS PROTOCOL:\n'
+        '1. STRICT "NO-TRADE / WAIT" FILTER (NOT EVERY CANDLE IS A TRADE!):\n'
+        '   - If price is in the middle of nowhere (Mid-Range / Equilibrium) with no nearby Support/Resistance, Order Block, FVG, or Trendline touch -> YOU MUST OUTPUT "dir": "WAIT" and "conf": 0!\n'
+        '   - If the chart has choppy overlapping Doji/Spinning Top barcode candles or conflicting signals -> YOU MUST OUTPUT "dir": "WAIT"!\n'
+        '   - If a setup is still 1-2 candles away from touching the SNR/Order Block/Neckline -> either set "wait_mins": 2 or 3 (for $t2 or $t3) OR output "dir": "WAIT" and tell the trader to wait until price reaches the level!\n'
+        '2. DEEP CANDLESTICK PSYCHOLOGY ("CANDLESTICK SOCIOLOGY"):\n'
+        '   - Never predict UP just because 2-3 green candles went up! Check whether the candle bodies are shrinking (momentum exhaustion) or hitting a Resistance/Supply level.\n'
+        '   - Inspect the exact upper and lower wicks of the last 3 candles: Upper wick rejection at Resistance/Supply = Seller control (DOWN). Lower wick rejection at Support/Demand = Buyer absorption (UP).\n'
+        '   - Check multi-candle formations: Pinbar/Hammer/Shooting Star, Bullish/Bearish Engulfing, Morning/Evening Star, Tweezer Top/Bottom, Inside Bar (Mother Bar) Fakey, Piercing Line, Dark Cloud Cover, Three White Soldiers/Crows, or Climax Exhaustion Marubozu.\n'
+        '3. COMPLETE CHART PATTERNS:\n'
+        '   - Identify the broader 20-40 candle chart pattern: Double Top (M Pattern + Neckline), Double Bottom (W Pattern + Neckline), Head & Shoulders / Inverse H&S, Rising Wedge (Bearish), Falling Wedge (Bullish), Bullish/Bearish Flag, Ascending/Descending/Symmetrical Triangle, or Parallel Trend Channel.\n'
+        '4. SMART MONEY CONCEPTS (SMC) & ICT:\n'
+        '   - Structure: HH/HL vs LH/LL, true body BOS (Break of Structure) vs wick-only Liquidity Sweep, CHoCH (Change of Character).\n'
+        '   - Zones: Unmitigated Bullish/Bearish Order Block (OB), Breaker Block, 50% FVG (Fair Value Gap) retest, Premium vs Discount Fib OTE (61.8%-78.6%).\n'
+        '   - ICT Liquidity: BSL (Buy-Side Liquidity sweep above Equal/Swing Highs -> Reversal DOWN) or SSL (Sell-Side Liquidity sweep below Equal/Swing Lows -> Reversal UP), Inducement (IDM) trap, AMD (Power of 3).\n'
+        '5. POCKET OPTION TRAP FILTER:\n'
+        '   - Flag Bull Trap (fake breakout above Resistance), Bear Trap (fake breakdown below Support), Late-Chaser Exhaustion Trap (3+ big candles into SNR), or OTC Barcode Trap.\n'
+        '6. SMART MTG (MARTINGALE) ADVISOR:\n'
+        '   - If dir is WAIT: set mtg_advice to "⛔ NO TRADE — Ekhon kono trade nibe na (Wait for Clean Setup)".\n'
+        '   - If dir is UP or DOWN: state clearly whether it is "✅ Direct Shot (MTG Lagbe Na — Clean Sweep + Rejection)" OR "🔄 1-Step MTG Ready Rakho ($t2 Candle Backup — Zone Retest Possible)" OR "⛔ No MTG (Breakout Risk)".\n\n'
+        'Current time: $nowStr | Pair: $_pair | Timeframe: $_tf ($marketType).\n'
         'Upcoming 3 candles: Candle 1 (1m por) = $t1, Candle 2 (2m por) = $t2, Candle 3 (3m por) = $t3.\n'
-        'If a different pair name is visible on the screenshot, put it in "detected_pair", otherwise "$_pair".\n'
-        'Respond ONLY with a single raw JSON object (no markdown fences, no extra text):\n'
-        '{"dir":"UP","conf":89,"detected_pair":"$_pair","wait_mins":1,"trade_after_text":"1 min por Trade ($t1 Candle)","target_time":"$t1","candle_plan":"$t1 ⬆️ UP | $t2 ⬆️ UP | $t3 ⬆️ UP","trap":false,"trap_type":"SSL Liquidity Swept — Bear Trap Reversal","pattern":"Lower Wick Pinbar + Bullish Engulfing","structure":"Bullish CHoCH + Support Flip (RBS)","smc":"Bullish Order Block + 50% FVG Fill","ict":"SSL Stop-Hunt Sweep + Displacement","chart_pattern":"Double Bottom (W) Neckline Retest","mtg_advice":"✅ Direct Shot (Backup 1-Step MTG at $t2)","entry":"1 min por ($t1 Open) • Backup MTG: $t2","risk":"Low Risk (Sniper)","trend_score":89,"pattern_score":92,"snr_score":90,"momentum_score":87,"reason":"Detailed Pro Trader Banglish analysis explaining the exact SMC/ICT/Price Action setup, why traps were cleared, whether MTG is needed, and why $t1 candle will go UP or DOWN."}';
+        'Reply ONLY with a single raw JSON object (no markdown fences):\n'
+        '{"dir":"UP","conf":89,"detected_pair":"$_pair","wait_mins":1,"trade_after_text":"1 min por Trade ($t1 Candle)","target_time":"$t1","candle_plan":"$t1 ⬆️ UP | $t2 ⬆️ UP | $t3 ⬆️ UP","trap":false,"trap_type":"SSL Swept at Support — Bear Trap Reversal","pattern":"Lower Wick Pinbar + Morning Star","structure":"Bullish CHoCH + Support Flip (RBS)","smc":"Unmitigated Bullish OB + 50% FVG","ict":"SSL Liquidity Sweep (Turtle Soup)","chart_pattern":"Double Bottom (W) Neckline Bounce","mtg_advice":"✅ Direct Shot (Backup 1-Step MTG: $t2)","entry":"1 min por ($t1 Open) • Backup MTG: $t2","risk":"Low Risk (Sniper)","trend_score":88,"pattern_score":91,"snr_score":90,"momentum_score":87,"reason":"Detailed Banglish explanation of the exact Candlestick Psychology (wicks & bodies), Chart Pattern, SMC/ICT zone, why this is a real setup (or why to WAIT), and whether MTG is needed."}';
 
     final orderedKeys = <String>[
       if (_lastWorkingKey.isNotEmpty && _keys.contains(_lastWorkingKey)) _lastWorkingKey,
       ..._keys.map(_cleanKey).where((k) => k.isNotEmpty && k != _lastWorkingKey),
     ];
+
+    final List<String> errorLog = [];
 
     for (int idx = 0; idx < orderedKeys.length; idx++) {
       final key = orderedKeys[idx];
@@ -1599,42 +1607,69 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
 
       if (mounted && orderedKeys.length > 1) {
         setState(() {
-          _reason = '⚡ Key ${idx + 1}/${orderedKeys.length} ($providerName) diye Institutional SMC+ICT+PA Engine analyze korche...';
+          _reason = '⚡ Key ${idx + 1}/${orderedKeys.length} ($providerName) diye Deep Chart + Candlestick Psychology analyze korche...';
         });
       }
 
       Map<String, dynamic>? result;
       if (key.startsWith('gsk_')) {
-        result = await _callGroqVisionSequential(key, prompt, b64);
+        result = await _callGroqVision2026(key, prompt, b64, errorLog);
       } else if (key.startsWith('sk-or-')) {
-        result = await _callOpenRouterVisionSequential(key, prompt, b64);
+        result = await _callOpenRouterVision2026(key, prompt, b64, errorLog);
       } else if (key.startsWith('AIza')) {
         result = await _raceGeminiModels(
           key: key,
           models: const [
+            'gemini-2.5-flash',
             'gemini-2.5-flash-lite',
             'gemini-2.0-flash',
-            'gemini-2.5-flash',
           ],
           prompt: prompt,
           b64: b64,
-          timeoutSec: orderedKeys.length > 1 ? 7 : 9,
+          timeoutSec: 11,
         );
       } else {
-        // Try Mistral Pixtral first, then OpenRouter, then Groq
-        result = await _callMistralVisionSequential(key, prompt, b64) ??
-            await _callOpenRouterVisionSequential(key, prompt, b64);
+        result = await _callMistralVision2026(key, prompt, b64, errorLog) ??
+            await _callOpenRouterVision2026(key, prompt, b64, errorLog);
       }
 
       if (result != null) {
         _lastWorkingKey = key;
-        _activeProviderTag = providerName;
+        final usedModel = (result['__model'] ?? providerName).toString();
+        _activeProviderTag = '$providerName ($usedModel)';
         return result;
       }
     }
 
-    _activeProviderTag = 'Multi-Candle Pro Vision';
-    return await _advancedMultiCandlePixelAnalysis(imageBytes, t1, t2, t3);
+    // NEVER invent a fake UP/DOWN 91% trade if all API keys failed!
+    // Always output WAIT so the trader never takes a blind trade!
+    _activeProviderTag = 'API Check Required';
+    final errSummary = errorLog.isNotEmpty ? errorLog.take(2).join(' | ') : 'Check Internet / API Keys';
+    return {
+      'dir': 'WAIT',
+      'conf': 0,
+      'detected_pair': _pair,
+      'wait_mins': 1,
+      'trade_after_text': '⏸️ EKHON TRADE NIBE NA (Wait)',
+      'target_time': t1,
+      'candle_plan': '$t1 ⏸️ WAIT | $t2 ⏸️ WAIT',
+      'trap': true,
+      'trap_type': 'AI Server Busy / Key Limit ($errSummary)',
+      'pattern': 'No Blind Trade',
+      'structure': 'Wait for AI Vision Verification',
+      'smc': 'Capital Protection Active',
+      'ict': 'Never Trade Blindly',
+      'chart_pattern': 'Wait for Setup',
+      'mtg_advice': '⛔ NO TRADE (অন্ধভাবে ট্রেড দেওয়া বন্ধ রাখা হয়েছে)',
+      'entry': 'Check API Key or tap Latest SS again in 5s',
+      'risk': 'Protected (No Trade)',
+      'trend_score': 0,
+      'pattern_score': 0,
+      'snr_score': 0,
+      'momentum_score': 0,
+      'reason':
+          '⚠️ ভুল বা অন্ধ সিগন্যাল (Blind 91% Trade) সম্পূর্ণ বন্ধ করা হয়েছে! তোমার দেওয়া API Key-গুলোতে এই মুহূর্তে সার্ভার রেসপন্স আসেনি ($errSummary)। অনুগ্রহ করে ৫ সেকেন্ড পর আবার ট্রাই করো অথবা Key Box-এ একটি ফ্রি Gemini (AIza...) বা নতুন Groq (gsk_...) Key যোগ করো।',
+    };
   }
 
   Future<Map<String, dynamic>?> _raceGeminiModels({
@@ -1651,6 +1686,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
       _trySingleGeminiModel(key, m, prompt, b64, timeoutSec: timeoutSec).then((res) {
         if (res != null && res['__ok'] == true && !completer.isCompleted) {
           res.remove('__ok');
+          res['__model'] = m;
           completer.complete(res);
         } else {
           remaining--;
@@ -1677,19 +1713,19 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
     String model,
     String prompt,
     String b64, {
-    int timeoutSec = 8,
+    int timeoutSec = 10,
   }) async {
     HttpClient? client;
     try {
-      client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+      client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
       final uri = Uri.parse(
         'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$key',
       );
-      final req = await client.postUrl(uri).timeout(const Duration(seconds: 5));
+      final req = await client.postUrl(uri).timeout(const Duration(seconds: 6));
       req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
 
       final Map<String, dynamic> genConfig = {
-        'temperature': 0.2,
+        'temperature': 0.15,
       };
       if (model.contains('2.5')) {
         genConfig['thinkingConfig'] = {'thinkingBudget': 0};
@@ -1756,16 +1792,25 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
     }
   }
 
-  // ── Groq Vision API (Sequential so 1 key never hits concurrent burst 429!) ──
-  Future<Map<String, dynamic>?> _callGroqVisionSequential(
+  // ── Groq 2026 Vision API (qwen/qwen3.8-27b + dynamic /v1/models discovery) ──
+  Future<Map<String, dynamic>?> _callGroqVision2026(
     String key,
     String prompt,
     String b64,
+    List<String> errorLog,
   ) async {
-    const models = [
+    final models = <String>[
+      'qwen/qwen3.8-27b',
+      'meta-models/muse-spark-open',
       'meta-llama/llama-4-scout-17b-16e-instruct',
       'meta-llama/llama-4-maverick-17b-128e-instruct',
     ];
+
+    final discovered = await _discoverVisionModels('https://api.groq.com/openai/v1/models', key);
+    for (final dm in discovered) {
+      if (!models.contains(dm)) models.add(dm);
+    }
+
     for (final m in models) {
       final res = await _trySingleOpenAiVisionModel(
         endpointUrl: 'https://api.groq.com/openai/v1/chat/completions',
@@ -1773,52 +1818,32 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
         model: m,
         prompt: prompt,
         b64: b64,
-        timeoutSec: 9,
+        timeoutSec: 12,
+        errorLog: errorLog,
       );
-      if (res != null) return res;
+      if (res != null) {
+        res['__model'] = m.split('/').last;
+        return res;
+      }
     }
     return null;
   }
 
-  // ── OpenRouter Free Vision API (Sequential across verified Vision models) ──
-  Future<Map<String, dynamic>?> _callOpenRouterVisionSequential(
+  // ── Mistral 2026 Vision API (Mistral Small 4 / Ministral 3 14B/8B / Medium 3.5 / Large 4) ──
+  Future<Map<String, dynamic>?> _callMistralVision2026(
     String key,
     String prompt,
     String b64,
+    List<String> errorLog,
   ) async {
-    const models = [
-      'google/gemma-3-27b-it:free',
-      'qwen/qwen2.5-vl-32b-instruct:free',
-      'mistralai/mistral-small-3.1-24b-instruct:free',
-      'meta-llama/llama-3.2-11b-vision-instruct:free',
-    ];
-    for (final m in models) {
-      final res = await _trySingleOpenAiVisionModel(
-        endpointUrl: 'https://openrouter.ai/api/v1/chat/completions',
-        key: key,
-        model: m,
-        prompt: prompt,
-        b64: b64,
-        timeoutSec: 9,
-        extraHeaders: const {
-          'HTTP-Referer': 'https://aniketpro.ai',
-          'X-Title': 'ANIKET PRO AI',
-        },
-      );
-      if (res != null) return res;
-    }
-    return null;
-  }
-
-  // ── Mistral Pixtral Vision API ──
-  Future<Map<String, dynamic>?> _callMistralVisionSequential(
-    String key,
-    String prompt,
-    String b64,
-  ) async {
-    const models = [
-      'pixtral-12b-2409',
+    final models = <String>[
       'mistral-small-latest',
+      'ministral-14b-latest',
+      'ministral-8b-latest',
+      'mistral-medium-latest',
+      'mistral-large-latest',
+      'ministral-14b-2512',
+      'ministral-8b-2512',
     ];
     for (final m in models) {
       final res = await _trySingleOpenAiVisionModel(
@@ -1827,11 +1852,105 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
         model: m,
         prompt: prompt,
         b64: b64,
-        timeoutSec: 9,
+        timeoutSec: 12,
+        errorLog: errorLog,
       );
-      if (res != null) return res;
+      if (res != null) {
+        res['__model'] = m;
+        return res;
+      }
     }
     return null;
+  }
+
+  // ── OpenRouter 2026 Free Vision API ──
+  Future<Map<String, dynamic>?> _callOpenRouterVision2026(
+    String key,
+    String prompt,
+    String b64,
+    List<String> errorLog,
+  ) async {
+    final models = <String>[
+      'openrouter/free',
+      'google/gemma-3-27b-it:free',
+      'qwen/qwen2.5-vl-72b-instruct:free',
+      'qwen/qwen2.5-vl-32b-instruct:free',
+      'mistralai/mistral-small-3.1-24b-instruct:free',
+    ];
+
+    final discovered = await _discoverVisionModels(
+      'https://openrouter.ai/api/v1/models',
+      key,
+      requireFreeSuffix: true,
+    );
+    for (final dm in discovered.take(4)) {
+      if (!models.contains(dm)) models.add(dm);
+    }
+
+    for (final m in models) {
+      final res = await _trySingleOpenAiVisionModel(
+        endpointUrl: 'https://openrouter.ai/api/v1/chat/completions',
+        key: key,
+        model: m,
+        prompt: prompt,
+        b64: b64,
+        timeoutSec: 13,
+        extraHeaders: const {
+          'HTTP-Referer': 'https://aniketpro.ai',
+          'X-Title': 'ANIKET PRO AI',
+        },
+        errorLog: errorLog,
+      );
+      if (res != null) {
+        res['__model'] = m.split('/').last;
+        return res;
+      }
+    }
+    return null;
+  }
+
+  Future<List<String>> _discoverVisionModels(
+    String modelsUrl,
+    String key, {
+    bool requireFreeSuffix = false,
+  }) async {
+    HttpClient? client;
+    try {
+      client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+      final req = await client.getUrl(Uri.parse(modelsUrl)).timeout(const Duration(seconds: 4));
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $key');
+      final resp = await req.close().timeout(const Duration(seconds: 5));
+      if (resp.statusCode != 200) return const [];
+      final txt = await resp.transform(utf8.decoder).join();
+      final root = jsonDecode(txt) as Map<String, dynamic>;
+      final data = root['data'] as List?;
+      if (data == null) return const [];
+      final out = <String>[];
+      for (final item in data) {
+        if (item is Map) {
+          final id = (item['id'] ?? '').toString();
+          if (id.isEmpty) continue;
+          if (requireFreeSuffix && !id.endsWith(':free')) continue;
+          final low = id.toLowerCase();
+          final arch = item['architecture']?.toString().toLowerCase() ?? '';
+          if (low.contains('qwen') ||
+              low.contains('vl') ||
+              low.contains('vision') ||
+              low.contains('gemma-3') ||
+              low.contains('pixtral') ||
+              low.contains('ministral') ||
+              low.contains('llama-4') ||
+              arch.contains('image')) {
+            out.add(id);
+          }
+        }
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    } finally {
+      client?.close(force: true);
+    }
   }
 
   Future<Map<String, dynamic>?> _trySingleOpenAiVisionModel({
@@ -1842,6 +1961,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
     required String b64,
     required int timeoutSec,
     Map<String, String>? extraHeaders,
+    List<String>? errorLog,
   }) async {
     HttpClient? client;
     try {
@@ -1854,10 +1974,12 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
         extraHeaders.forEach((k, v) => req.headers.set(k, v));
       }
 
+      // IMPORTANT: Use 2048 tokens so Thinking + Instruct models (like Qwen 3.8 27B)
+      // never truncate inside <think>...</think> before outputting the JSON!
       final bodyMap = {
         'model': model,
         'temperature': 0.15,
-        'max_tokens': 850,
+        'max_tokens': 2048,
         'messages': [
           {
             'role': 'user',
@@ -1873,290 +1995,27 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
       };
       req.add(utf8.encode(jsonEncode(bodyMap)));
       final resp = await req.close().timeout(Duration(seconds: timeoutSec));
-      if (resp.statusCode != 200) return null;
       final txt = await resp.transform(utf8.decoder).join();
+      if (resp.statusCode != 200) {
+        errorLog?.add('${model.split('/').last}: HTTP ${resp.statusCode}');
+        return null;
+      }
       final root = jsonDecode(txt) as Map<String, dynamic>;
       final choices = root['choices'] as List?;
       if (choices == null || choices.isEmpty) return null;
       final content = ((choices.first as Map)['message'] as Map?)?['content']?.toString() ?? '';
       return _extractJsonMap(content);
-    } catch (_) {
+    } catch (e) {
       return null;
     } finally {
       client?.close(force: true);
     }
   }
 
-  // ── ADVANCED MULTI-CANDLE OHLC COMPUTER VISION ENGINE (SMC + ICT + PA + Chart Patterns + MTG) ──
-  Future<Map<String, dynamic>> _advancedMultiCandlePixelAnalysis(
-    Uint8List imageBytes,
-    String t1,
-    String t2,
-    String t3,
-  ) async {
-    try {
-      final codec = await ui.instantiateImageCodec(imageBytes, targetWidth: 420);
-      final frame = await codec.getNextFrame();
-      final img = frame.image;
-      final w = img.width;
-      final h = img.height;
-      final byteData = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
-      img.dispose();
-      codec.dispose();
-
-      if (byteData != null && w > 60 && h > 60) {
-        final pixels = byteData.buffer.asUint8List();
-
-        // Divide active chart area into 12 vertical candle slices to reconstruct OHLC bars!
-        final xStart = (w * 0.12).toInt();
-        final xEnd = (w * 0.88).toInt();
-        final yStart = (h * 0.16).toInt();
-        final yEnd = (h * 0.78).toInt();
-        const numSlices = 12;
-        final sliceW = math.max(4, (xEnd - xStart) ~/ numSlices);
-
-        final List<double> sliceCenterY = [];
-        final List<int> sliceHighY = [];
-        final List<int> sliceLowY = [];
-        final List<int> sliceBullPx = [];
-        final List<int> sliceBearPx = [];
-
-        int globalHighY = yEnd;
-        int globalLowY = yStart;
-
-        for (int s = 0; s < numSlices; s++) {
-          final sx0 = xStart + s * sliceW;
-          final sx1 = math.min(xEnd, sx0 + sliceW);
-          int bull = 0;
-          int bear = 0;
-          int highY = yEnd;
-          int lowY = yStart;
-          double sumY = 0;
-          int cnt = 0;
-
-          for (int y = yStart; y < yEnd; y += 2) {
-            for (int x = sx0; x < sx1; x += 2) {
-              final idx = (y * w + x) * 4;
-              if (idx + 3 >= pixels.length) continue;
-              final r = pixels[idx];
-              final g = pixels[idx + 1];
-              final b = pixels[idx + 2];
-
-              final isBull = (g > r + 22 && g > 72 && g >= b - 18);
-              final isBear = (r > g + 22 && r > 78 && r > b + 14);
-
-              if (isBull || isBear) {
-                if (isBull) bull++;
-                if (isBear) bear++;
-                if (y < highY) highY = y;
-                if (y > lowY) lowY = y;
-                if (y < globalHighY) globalHighY = y;
-                if (y > globalLowY) globalLowY = y;
-                sumY += y;
-                cnt++;
-              }
-            }
-          }
-
-          sliceBullPx.add(bull);
-          sliceBearPx.add(bear);
-          sliceHighY.add(cnt > 2 ? highY : (yStart + yEnd) ~/ 2);
-          sliceLowY.add(cnt > 2 ? lowY : (yStart + yEnd) ~/ 2);
-          sliceCenterY.add(cnt > 2 ? (sumY / cnt) : (yStart + yEnd) / 2.0);
-        }
-
-        // Analyze reconstructed 12-segment structure (0..3 = Left, 4..7 = Mid, 8..11 = Recent Candles)
-        final cLeft = (sliceCenterY[0] + sliceCenterY[1] + sliceCenterY[2] + sliceCenterY[3]) / 4.0;
-        final cMid = (sliceCenterY[4] + sliceCenterY[5] + sliceCenterY[6] + sliceCenterY[7]) / 4.0;
-        final cRight = (sliceCenterY[8] + sliceCenterY[9] + sliceCenterY[10] + sliceCenterY[11]) / 4.0;
-        final cLast2 = (sliceCenterY[10] + sliceCenterY[11]) / 2.0;
-
-        final chartSpan = math.max(12, globalLowY - globalHighY);
-        // 0.0 = at lowest support, 1.0 = at highest resistance
-        final priceZonePos = ((globalLowY - cLast2) / chartSpan).clamp(0.0, 1.0);
-
-        final bullRecent = sliceBullPx[9] + sliceBullPx[10] + sliceBullPx[11];
-        final bearRecent = sliceBearPx[9] + sliceBearPx[10] + sliceBearPx[11];
-        final bullPrev = sliceBullPx[6] + sliceBullPx[7] + sliceBullPx[8];
-        final bearPrev = sliceBearPx[6] + sliceBearPx[7] + sliceBearPx[8];
-
-        final recentBullRatio = (bullRecent + 1.0) / (bullRecent + bearRecent + 2.0);
-        final prevBullRatio = (bullPrev + 1.0) / (bullPrev + bearPrev + 2.0);
-
-        // Wick & Sweep Detection on last 2 slices
-        final lastHighY = math.min(sliceHighY[10], sliceHighY[11]);
-        final lastLowY = math.max(sliceLowY[10], sliceLowY[11]);
-        final prevSwingHighY = sliceHighY.sublist(2, 9).reduce(math.min);
-        final prevSwingLowY = sliceLowY.sublist(2, 9).reduce(math.max);
-
-        final sweptBSL = lastHighY <= prevSwingHighY + 3 && cLast2 > lastHighY + 6;
-        final sweptSSL = lastLowY >= prevSwingLowY - 3 && cLast2 < lastLowY - 6;
-
-        // Detect Double Bottom (W) / Double Top (M)
-        final isDoubleBottomW = (sliceLowY[3] >= globalLowY - 8 && lastLowY >= globalLowY - 8 && cMid < globalLowY - 12);
-        final isDoubleTopM = (sliceHighY[3] <= globalHighY + 8 && lastHighY <= globalHighY + 8 && cMid > globalHighY + 12);
-
-        bool goUp;
-        int waitMins = 1;
-        String targetCandle = t1;
-        String paPattern;
-        String structureDesc;
-        String smcDesc;
-        String ictDesc;
-        String chartPatDesc;
-        String trapDesc;
-        String mtgDesc;
-        String reasonBanglish;
-
-        if (sweptSSL || (priceZonePos < 0.26 && recentBullRatio >= 0.45)) {
-          goUp = true;
-          waitMins = 1;
-          targetCandle = t1;
-          paPattern = sweptSSL
-              ? 'Lower Wick Pinbar Rejection + Bullish Engulfing'
-              : 'Hammer / Tweezer Bottom Bounce';
-          structureDesc = 'Support Flip Zone (RBS) + Bullish CHoCH';
-          smcDesc = 'Discount Zone Bullish Order Block (OB) + FVG';
-          ictDesc = 'SSL Sell-Side Liquidity Sweep (Turtle Soup)';
-          chartPatDesc = isDoubleBottomW ? 'Double Bottom (W Pattern) Reversal' : 'Falling Wedge Support Bounce';
-          trapDesc = 'Bear Trap Cleared (Retail Sellers Trapped at Support)';
-          mtgDesc = '✅ Direct Shot Win Expected (Backup 1-Step MTG: $t2)';
-          reasonBanglish =
-              'SMC + ICT Analysis: Market নিচে নামার ভান করে Sell-Side Liquidity (SSL) সুইপ করেছে এবং Bullish Order Block থেকে লম্বা Lower Wick Pinbar রিজেকশন দিয়েছে (Bear Trap)। তাই 1 min por ($t1 ক্যান্ডেলে) Direct UP যাবে (Backup 1-Step MTG: $t2)।';
-        } else if (sweptBSL || (priceZonePos > 0.74 && recentBullRatio <= 0.55)) {
-          goUp = false;
-          waitMins = 1;
-          targetCandle = t1;
-          paPattern = sweptBSL
-              ? 'Shooting Star Upper Wick + Bearish Engulfing'
-              : 'Evening Star / Tweezer Top Rejection';
-          structureDesc = 'Major Resistance Supply Zone + Bearish CHoCH';
-          smcDesc = 'Premium Zone Bearish Order Block (OB) + Supply';
-          ictDesc = 'BSL Buy-Side Liquidity Sweep (Judas Swing)';
-          chartPatDesc = isDoubleTopM ? 'Double Top (M Pattern) Reversal' : 'Rising Wedge Resistance Drop';
-          trapDesc = 'Bull Trap Cleared (Late Buyers Trapped at Resistance)';
-          mtgDesc = '✅ Direct Shot Win Expected (Backup 1-Step MTG: $t2)';
-          reasonBanglish =
-              'SMC + ICT Analysis: রেজিস্ট্যান্সের উপরে Buy-Side Liquidity (BSL) সুইপ করে বায়ারদের Bull Trap-এ ফেলেছে এবং Bearish Order Block থেকে Shooting Star/Engulfing রিজেকশন এসেছে। তাই 1 min por ($t1 ক্যান্ডেলে) Direct DOWN যাবে (Backup 1-Step MTG: $t2)।';
-        } else if (recentBullRatio > 0.76 && priceZonePos > 0.65) {
-          // Climax Exhaustion Candle at top -> Wait 2m or Reversal!
-          goUp = false;
-          waitMins = 1;
-          targetCandle = t1;
-          paPattern = 'Exhaustion Climax Marubozu at Top';
-          structureDesc = 'Overbought Bollinger Extreme • Pullback Due';
-          smcDesc = 'Premium Supply Mitigation Block';
-          ictDesc = 'AMD Manipulation Climax -> Distribution Drop';
-          chartPatDesc = 'Channel Top Exhaustion';
-          trapDesc = 'Exhaustion Bull Trap (Retails Chasing Late Green Candle)';
-          mtgDesc = '🔄 1-Step MTG Ready Rakho ($t2 Candle-e Backup)';
-          reasonBanglish =
-              'Trap + Price Action Analysis: টানা আপ-মুভের শেষে রেজিস্ট্যান্স ও Bollinger Band-এর বাইরে Exhaustion Trap তৈরি হয়েছে। বায়াররা ক্লান্ত হওয়ায় $t1 ক্যান্ডেলে পুলব্যাক DOWN আসার সম্ভাবনা প্রবল (প্রয়োজনে $t2 ক্যান্ডেলে 1-Step MTG রাখবে)।';
-        } else if (recentBullRatio < 0.24 && priceZonePos < 0.35) {
-          // Oversold Exhaustion Drop at bottom -> Reversal UP!
-          goUp = true;
-          waitMins = 1;
-          targetCandle = t1;
-          paPattern = 'Oversold Climax Drop + Demand Absorption';
-          structureDesc = 'Oversold Bollinger Extreme • Bounce Setup';
-          smcDesc = 'Discount Demand Zone + Unmitigated OB';
-          ictDesc = 'SSL Liquidity Grab Complete -> Reversal';
-          chartPatDesc = 'Channel Bottom Oversold Bounce';
-          trapDesc = 'Exhaustion Bear Trap (Late Sellers Trapped)';
-          mtgDesc = '🔄 1-Step MTG Ready Rakho ($t2 Candle-e Backup)';
-          reasonBanglish =
-              'Trap + Price Action Analysis: ডিসকাউন্ট ডিমান্ড জোনে সেলারদের Exhaustion ক্যান্ডেল তৈরি হয়েছে এবং নিচে স্ট্রং বায়ার প্রেশার ঢুকছে। তাই $t1 ক্যান্ডেলে রিভার্সাল UP যাবে (1-Step MTG Backup: $t2)।';
-        } else if (recentBullRatio >= 0.52 || (cRight < cMid - 2.0 && cMid <= cLeft)) {
-          goUp = true;
-          waitMins = prevBullRatio < 0.45 ? 1 : 1;
-          targetCandle = t1;
-          paPattern = recentBullRatio > 0.62
-              ? 'Bullish Engulfing + Three White Soldiers'
-              : 'Morning Star + Inside Bar Breakout';
-          structureDesc = 'Uptrend HH/HL • Bullish BOS Confirmed';
-          smcDesc = 'Bullish FVG (Fair Value Gap) 50% Retest + OB';
-          ictDesc = 'Institutional Bullish Order Flow + Displacement';
-          chartPatDesc = 'Bullish Flag / Ascending Triangle Breakout';
-          trapDesc = 'Inducement (IDM) Cleared — Clean Trend Flow';
-          mtgDesc = recentBullRatio > 0.60
-              ? '✅ Direct Shot (MTG Lagbe Na — Strong Displacement)'
-              : '🔄 1-Step MTG Ready Rakho ($t2 Candle Backup)';
-          reasonBanglish =
-              'SMC + Price Action Analysis: চার্টে পরিষ্কার Uptrend (HH/HL) ও Bullish BOS হয়েছে এবং প্রাইস Bullish FVG / Order Block রিট্রেস করে বায়ার মোমেন্টাম পেয়েছে। তাই 1 min por ($t1 ক্যান্ডেলে) UP যাবে ($mtgDesc)।';
-        } else {
-          goUp = false;
-          waitMins = 1;
-          targetCandle = t1;
-          paPattern = recentBullRatio < 0.38
-              ? 'Bearish Engulfing + Three Black Crows'
-              : 'Evening Star + Mother Bar Breakdown';
-          structureDesc = 'Downtrend LH/LL • Bearish BOS Confirmed';
-          smcDesc = 'Bearish FVG Imbalance + Breaker Block';
-          ictDesc = 'Institutional Bearish Order Flow + Displacement';
-          chartPatDesc = 'Bearish Flag / Descending Triangle Breakdown';
-          trapDesc = 'Inducement (IDM) Swept — Seller Control';
-          mtgDesc = recentBullRatio < 0.40
-              ? '✅ Direct Shot (MTG Lagbe Na — Strong Bearish Flow)'
-              : '🔄 1-Step MTG Ready Rakho ($t2 Candle Backup)';
-          reasonBanglish =
-              'SMC + Price Action Analysis: চার্টে Bearish BOS সহ LH/LL ডাউনট্রেন্ড চলছে এবং প্রাইস Bearish FVG ও Breaker Block থেকে রিজেকশন খেয়েছে। তাই 1 min por ($t1 ক্যান্ডেলে) DOWN যাবে ($mtgDesc)।';
-        }
-
-        final dirStr = goUp ? 'UP' : 'DOWN';
-        final arrow = goUp ? '⬆️ UP' : '⬇️ DOWN';
-        final confSpread = ((recentBullRatio - 0.5).abs() * 55 + (sweptSSL || sweptBSL ? 7 : 3)).round();
-        final confVal = (79 + confSpread).clamp(80, 94);
-
-        return {
-          'dir': dirStr,
-          'conf': confVal,
-          'detected_pair': _pair,
-          'wait_mins': waitMins,
-          'trade_after_text': '$waitMins min por Trade ($targetCandle Candle)',
-          'target_time': targetCandle,
-          'candle_plan': '$t1 $arrow | $t2 $arrow | $t3 ${goUp ? "⬆️" : "⬇️"}',
-          'trap': false,
-          'trap_type': trapDesc,
-          'pattern': paPattern,
-          'structure': structureDesc,
-          'smc': smcDesc,
-          'ict': ictDesc,
-          'chart_pattern': chartPatDesc,
-          'mtg_advice': mtgDesc,
-          'entry': '$waitMins min por ($targetCandle Open) • MTG Backup: $t2',
-          'risk': confVal >= 85 ? 'Low Risk (Sniper)' : 'Medium Risk',
-          'trend_score': (confVal - 1).clamp(76, 95),
-          'pattern_score': (confVal + 2).clamp(78, 96),
-          'snr_score': (confVal + 1).clamp(77, 95),
-          'momentum_score': confVal.clamp(76, 94),
-          'reason': reasonBanglish,
-        };
-      }
-    } catch (_) {}
-
-    return {
-      'dir': 'WAIT',
-      'conf': 0,
-      'wait_mins': 1,
-      'trade_after_text': 'Wait for Setup',
-      'target_time': t1,
-      'candle_plan': '$t1 ⏸️ WAIT',
-      'pattern': 'Unclear Chart',
-      'structure': 'Wait for Clean Candle',
-      'smc': 'No Clear OB/FVG',
-      'ict': 'No Sweep',
-      'chart_pattern': 'Consolidation',
-      'mtg_advice': '⛔ No Trade',
-      'entry': 'Take a clearer chart screenshot',
-      'risk': 'No Trade',
-      'trap': false,
-      'reason': 'Chart porishkar bujha যাচ্ছে না — অনুগ্রহ করে ক্যান্ডেলগুলো স্পষ্ট রেখে আরেকটি স্ক্রিনশট নাও।',
-    };
-  }
-
-  // ── Bulletproof JSON + Regex Field Extractor (Never loses AI response on formatting quirks!) ──
   Map<String, dynamic>? _extractJsonMap(String raw) {
-    final cleaned = raw.replaceAll('```json', '').replaceAll('```', '').trim();
+    // Strip any <think>...</think> reasoning blocks emitted by Qwen 3.8 / DeepSeek / reasoning models
+    final noThink = raw.replaceAll(RegExp(r'<think>[\s\S]*?</think>', caseSensitive: false), '');
+    final cleaned = noThink.replaceAll('```json', '').replaceAll('```', '').trim();
     try {
       final start = cleaned.indexOf('{');
       final end = cleaned.lastIndexOf('}');
@@ -2166,7 +2025,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
           final decoded = jsonDecode(jsonSlice);
           if (decoded is Map<String, dynamic>) return decoded;
         } catch (_) {
-          // Sanitize unescaped newlines inside JSON string values and retry
           final singleLine = jsonSlice.replaceAll('\r', ' ').replaceAll('\n', ' ');
           final decoded2 = jsonDecode(singleLine);
           if (decoded2 is Map<String, dynamic>) return decoded2;
@@ -2306,10 +2164,10 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
           children: [
             const Text(
               'যেকোনো ফ্রি Key নিচে পরপর লাইনে বসাও — ১টা সার্ভার Busy থাকলে অটো পরের Key দিয়ে ট্রাই করবে:\n'
-              '• Groq: gsk_... (সবচেয়ে ফাস্ট)\n'
-              '• Gemini: AIzaSy...\n'
+              '• Groq: gsk_... (Qwen 3.8 27B Vision)\n'
+              '• Gemini: AIzaSy... (Gemini 2.5 Flash)\n'
               '• OpenRouter: sk-or-v1-...\n'
-              '• Mistral: Pixtral key',
+              '• Mistral: Ministral 3 / Mistral Small 4',
               style: TextStyle(color: Colors.white70, fontSize: 11.5, height: 1.35),
             ),
             const SizedBox(height: 10),
@@ -2395,7 +2253,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
     if (d == 'UP') return 'CALL / UP';
     if (d == 'DOWN') return 'PUT / DOWN';
     if (d == '—') return '— —';
-    return 'WAIT';
+    return 'NO TRADE (WAIT)';
   }
 
   @override
@@ -2562,7 +2420,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
               ),
               const SizedBox(height: 10),
 
-              // 3. Main Institutional Pro Analysis Box (SMC + ICT + PA + Patterns + Traps + MTG Advisor)
+              // 3. Main Institutional Pro Analysis Box
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
@@ -2598,16 +2456,15 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
                             fontWeight: FontWeight.w700,
                           ),
                         ),
-                        if (_latencyMs > 0)
+                        if (_activeProviderTag.isNotEmpty)
                           Text(
-                            '⚡ ${(_latencyMs / 1000).toStringAsFixed(1)}s ${_activeProviderTag.isNotEmpty ? _activeProviderTag : "AI"}',
-                            style: const TextStyle(color: Colors.white54, fontSize: 11),
+                            '⚡ ${_latencyMs > 0 ? "${(_latencyMs / 1000).toStringAsFixed(1)}s " : ""}$_activeProviderTag',
+                            style: const TextStyle(color: Colors.white54, fontSize: 10.5),
                           ),
                       ],
                     ),
                     const SizedBox(height: 8),
 
-                    // AUTO-IMPORTED SCREENSHOT PREVIEW INSIDE ANALYSIS BOX
                     if (hasScreenshot) ...[
                       Container(
                         margin: const EdgeInsets.only(bottom: 10),
@@ -2637,7 +2494,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
                                       Text(
                                         _busy
                                             ? '📸 SS Auto-Imported — Analyzing...'
-                                            : '📸 Auto-Imported Chart (1 SS = 1 Trade)',
+                                            : '📸 Auto-Imported Chart (1 SS = 1 Check)',
                                         style: const TextStyle(
                                           color: Color(0xFFFFD54F),
                                           fontSize: 11,
@@ -2691,9 +2548,9 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
                             style: TextStyle(color: Colors.white24, fontSize: 20),
                           ),
                           Text(
-                            '$_conf%',
+                            _dir == 'WAIT' ? 'SKIP' : '$_conf%',
                             style: TextStyle(
-                              color: _conf >= 75 ? const Color(0xFF00E676) : Colors.white,
+                              color: _conf >= 75 ? const Color(0xFF00E676) : const Color(0xFFFFB300),
                               fontSize: 22,
                               fontWeight: FontWeight.w800,
                             ),
@@ -2715,7 +2572,6 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
                     ),
                     const SizedBox(height: 8),
 
-                    // PROMINENT "KOTO MINUTE POR TRADE" + SMART MTG ADVISOR BOX
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -2729,7 +2585,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
                           Text(
                             _dir == '—'
                                 ? '⏱️ Koto Minute Por Trade: Bubble ON rekhe SS nao (${nextTimes[0]} / ${nextTimes[1]})'
-                                : '⏱️ Koto Minute Por Trade: $_tradeAfterText',
+                                : '⏱️ Trade Timing: $_tradeAfterText',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               color: _dir == '—' ? const Color(0xFFFFD54F) : sigColor,
@@ -2766,26 +2622,31 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
                     ),
                     const SizedBox(height: 6),
 
-                    // DEDICATED TRAP RADAR BANNER
                     if (_dir != '—')
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                         decoration: BoxDecoration(
-                          color: _otcTrap ? const Color(0xFF4A151B) : const Color(0xFF102A22),
+                          color: (_otcTrap || _dir == 'WAIT')
+                              ? const Color(0xFF4A151B)
+                              : const Color(0xFF102A22),
                           borderRadius: BorderRadius.circular(7),
                           border: Border.all(
-                            color: _otcTrap ? Colors.redAccent : const Color(0xFF00E676),
+                            color: (_otcTrap || _dir == 'WAIT')
+                                ? Colors.redAccent
+                                : const Color(0xFF00E676),
                             width: 0.9,
                           ),
                         ),
                         child: Text(
-                          _otcTrap
-                              ? '🚨 TRAP ALERT: $_trapType — Retail Trap! Ekhon Trade Skip Koro!'
-                              : '🛡️ Trap Check: $_trapType',
+                          (_otcTrap || _dir == 'WAIT')
+                              ? '🚨 NO-TRADE / TRAP FILTER: $_trapType'
+                              : '🛡️ Trap Check Passed: $_trapType',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            color: _otcTrap ? const Color(0xFFFF8A80) : const Color(0xFF69F0AE),
+                            color: (_otcTrap || _dir == 'WAIT')
+                                ? const Color(0xFFFF8A80)
+                                : const Color(0xFF69F0AE),
                             fontSize: 11.5,
                             fontWeight: FontWeight.bold,
                           ),
@@ -2816,11 +2677,11 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
                         runSpacing: 6,
                         alignment: WrapAlignment.center,
                         children: [
-                          _infoBadge('🕯️ Price Action', _pattern, const Color(0xFF263238)),
+                          _infoBadge('🕯️ Candle Psych', _pattern, const Color(0xFF263238)),
                           _infoBadge('📐 Structure', _structure, const Color(0xFF1E2746)),
                           _infoBadge('🏦 SMC', _smcZone, const Color(0xFF2B2240)),
                           _infoBadge('🎯 ICT', _ictConcept, const Color(0xFF1A333A)),
-                          _infoBadge('📊 Pattern', _chartPattern, const Color(0xFF2D291E)),
+                          _infoBadge('📊 Chart Pattern', _chartPattern, const Color(0xFF2D291E)),
                           _infoBadge('⏱️ Entry', _entryGuide, const Color(0xFF1B352E)),
                           _infoBadge('🛡️ Risk', _riskLevel, const Color(0xFF3A2A1D)),
                         ],
@@ -2830,11 +2691,11 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
                         children: [
                           _scoreMiniBar('SMC/Trend', _trendScore),
                           const SizedBox(width: 6),
-                          _scoreMiniBar('PA/Pattern', _patternScore),
+                          _scoreMiniBar('Candle Psych', _patternScore),
                           const SizedBox(width: 6),
                           _scoreMiniBar('ICT/SNR', _snrScore),
                           const SizedBox(width: 6),
-                          _scoreMiniBar('Momentum', _momentumScore),
+                          _scoreMiniBar('Pattern', _momentumScore),
                         ],
                       ),
                     ],
@@ -2843,7 +2704,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
               ),
               const SizedBox(height: 10),
 
-              // 4. Primary Action Buttons: File Picker + 1-Tap Latest Screenshot
+              // 4. Primary Action Buttons
               Row(
                 children: [
                   Expanded(
@@ -2907,7 +2768,7 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
               ),
               const SizedBox(height: 10),
 
-              // 5. AUTO SS ANALYSIS Toggle Card (1 SS = 1 Auto Trade + In-Bubble Result + MTG Guide)
+              // 5. AUTO SS ANALYSIS Toggle Card
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
@@ -2936,18 +2797,18 @@ class _BinarySignalScreenState extends State<BinarySignalScreen> with WidgetsBin
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
-                            'AUTO SS BUBBLE 🎯 (1 SS = 1 Pro Signal + MTG)',
+                            'AUTO SS BUBBLE 🎯 (No Blind Trade • Pro Setup Only)',
                             style: TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.w800,
-                              fontSize: 12.8,
+                              fontSize: 12.6,
                             ),
                           ),
                           const SizedBox(height: 3),
                           Text(
                             _floatOn
-                                ? '🟢 ON: ১টা SS নিলে ঠিক ১ বারই SMC+ICT+PA+Trap অ্যানালাইসিস হবে এবং বাবলে UP/DOWN, কত মিনিট পর ট্রেড ও MTG লাগবে কি না দেখাবে!'
-                                : 'ON করলে: SS নিলেই অটো ডিটেক্ট করে ১ বারই প্রো অ্যানালাইসিস করবে এবং বাবলে UP/DOWN, সময় ও MTG গাইড দেবে',
+                                ? '🟢 ON: ১টা SS নিলে ঠিক ১ বারই Candlestick Psychology + Chart Pattern + SMC/ICT চেক করবে (সেটআপ না থাকলে WAIT বলবে, অন্ধভাবে 91% ট্রেড দেবে না)!'
+                                : 'ON করলে: SS নিলেই অটো ডিটেক্ট করে প্রো সেটআপ থাকলে UP/DOWN আর সেটআপ না থাকলে WAIT (No Trade) বলে দেবে',
                             style: const TextStyle(color: Colors.white60, fontSize: 11.2),
                           ),
                         ],
