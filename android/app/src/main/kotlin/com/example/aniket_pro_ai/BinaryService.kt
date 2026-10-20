@@ -13,7 +13,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BitmapShader
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Shader
@@ -53,15 +52,14 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.roundToInt
 
 // ═══════════════════════════════════════════════════════════════════
-//  INSTITUTIONAL BINARY SIGNAL SERVICE (SMC + ICT + PA + TRAPS + MTG)
-//  • STRICT 1-SS-1-TRADE LOCK: Tracks MediaStore IDs, source file mtimes,
-//    and image byte-signatures so 1 screenshot NEVER triggers 2/3/4 times!
-//  • Multi-Provider Failover (Groq, Gemini, OpenRouter, Mistral) +
-//    Bulletproof Regex JSON Extractor + 12-Slice Multi-Candle OHLC Vision!
-//  • Displays UP/DOWN + "Koto Minute Por Trade" + "MTG Guide" inside Bubble!
+//  TRUE INSTITUTIONAL BINARY SIGNAL SERVICE (NO FAKE 91% PIXEL FALLBACK!)
+//  • Evaluates Deep Candlestick Psychology + Chart Patterns + SMC + ICT
+//  • STRICT "NO-TRADE / WAIT" FILTER: Not every candle is a trade!
+//    If the market is mid-range, choppy, or has no clean 80%+ setup,
+//    it outputs "WAIT" (⏸️ EKHON TRADE NIBE NA) instead of forcing a trade!
+//  • Strips <think>...</think> blocks on Groq Qwen 3.8 27B with max_tokens=2048
 // ═══════════════════════════════════════════════════════════════════
 class BinaryService : Service() {
 
@@ -78,27 +76,35 @@ class BinaryService : Service() {
         private var lastWorkingKey: String = ""
 
         private val GEMINI_MODELS = listOf(
+            "gemini-2.5-flash",
             "gemini-2.5-flash-lite",
             "gemini-2.0-flash",
-            "gemini-2.5-flash",
             "gemini-2.0-flash-lite"
         )
 
         private val GROQ_MODELS = listOf(
+            "qwen/qwen3.8-27b",
+            "meta-models/muse-spark-open",
             "meta-llama/llama-4-scout-17b-16e-instruct",
             "meta-llama/llama-4-maverick-17b-128e-instruct"
         )
 
         private val OPENROUTER_MODELS = listOf(
+            "openrouter/free",
             "google/gemma-3-27b-it:free",
+            "qwen/qwen2.5-vl-72b-instruct:free",
             "qwen/qwen2.5-vl-32b-instruct:free",
-            "mistralai/mistral-small-3.1-24b-instruct:free",
-            "meta-llama/llama-3.2-11b-vision-instruct:free"
+            "mistralai/mistral-small-3.1-24b-instruct:free"
         )
 
         private val MISTRAL_MODELS = listOf(
-            "pixtral-12b-2409",
-            "mistral-small-latest"
+            "mistral-small-latest",
+            "ministral-14b-latest",
+            "ministral-8b-latest",
+            "mistral-medium-latest",
+            "mistral-large-latest",
+            "ministral-14b-2512",
+            "ministral-8b-2512"
         )
     }
 
@@ -127,7 +133,6 @@ class BinaryService : Service() {
     private var lastSeenMediaId: Long = 0L
     private var lastSignalShort: String = ""
 
-    // Strict Single-Analysis Deduplication Sets (Guarantees 1 Screenshot = 1 Trade ONLY!)
     private val analyzedMediaIds = Collections.synchronizedSet(HashSet<Long>())
     private val analyzedSourceMtimes = Collections.synchronizedSet(HashSet<Long>())
     private val analyzedByteSignatures = Collections.synchronizedSet(HashSet<String>())
@@ -188,7 +193,7 @@ class BinaryService : Service() {
         val nb = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "bin_chan")
         else @Suppress("DEPRECATION") Notification.Builder(this)
         nb.setContentTitle("ANIKET PRO AI")
-            .setContentText("Auto SS Bubble ON ($pair • $time) — 1 SS = 1 Pro SMC/ICT/PA Signal")
+            .setContentText("Auto SS Bubble ON ($pair • $time) — Pro Setup Only (No Blind Trade)")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setOngoing(true)
         var started = false
@@ -222,7 +227,7 @@ class BinaryService : Service() {
             main.post {
                 Toast.makeText(
                     this,
-                    "🟢 Auto SS Bubble ON — ১টা SS নিলে ঠিক ১ বারই প্রো SMC+ICT+PA+MTG সিগন্যাল দেবে!",
+                    "🟢 Auto SS Bubble ON — প্রো সেটআপ থাকলে সিগন্যাল দেবে, আর সেটআপ না থাকলে WAIT (No Trade) বলবে!",
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -239,7 +244,6 @@ class BinaryService : Service() {
             .trim()
     }
 
-    // Fast deterministic byte signature so identical screenshot bytes are NEVER analyzed more than once
     private fun computeBytesSignature(bytes: ByteArray): String {
         if (bytes.isEmpty()) return "empty"
         var h1 = bytes.size
@@ -313,7 +317,6 @@ class BinaryService : Service() {
                 override fun onChange(selfChange: Boolean, uri: Uri?) {
                     super.onChange(selfChange, uri)
                     if (!captureOn) return
-                    // Check at 450ms and 1200ms (with strict ID + ByteSignature lock so it only triggers ONCE)
                     for (delayMs in listOf(450L, 1200L)) {
                         main.postDelayed({
                             if (captureOn && !busy) {
@@ -478,7 +481,6 @@ class BinaryService : Service() {
             }
         } catch (_: Exception) {}
 
-        // Fallback direct folder check (with strict mtime deduplication so it NEVER loops!)
         try {
             val nowMs = System.currentTimeMillis()
             val root = Environment.getExternalStorageDirectory()
@@ -858,7 +860,7 @@ class BinaryService : Service() {
         main.post {
             Toast.makeText(
                 this,
-                if (captureOn) "🟢 Auto SS Capture ON (1 SS = 1 Pro Signal)"
+                if (captureOn) "🟢 Auto SS Capture ON (Pro Setup Only)"
                 else "⏸️ Auto SS Capture OFF (Long-press or tap bubble to turn ON)",
                 Toast.LENGTH_SHORT
             ).show()
@@ -876,7 +878,6 @@ class BinaryService : Service() {
         } catch (_: Exception) {}
     }
 
-    // Called by MainActivity's ScreenshotObserver when user takes a screenshot
     fun onScreenshotReceived(id: Long, path: String) {
         if (!captureOn) return
         if (id > 0) {
@@ -905,7 +906,6 @@ class BinaryService : Service() {
         }
 
         val byteSig = computeBytesSignature(rawBytes)
-        // STRICT SINGLE-ANALYSIS LOCK: Never analyze the same screenshot bytes twice automatically!
         if (!forceManual && analyzedByteSignatures.contains(byteSig)) {
             return
         }
@@ -924,7 +924,7 @@ class BinaryService : Service() {
         } catch (_: Exception) {}
 
         main.post {
-            showBubbleLoadingState("📸 SS Detected! SMC+ICT+PA Analyzing...")
+            showBubbleLoadingState("📸 SS Detected! Deep Chart Analyzing...")
             try {
                 onResult?.invoke(
                     mapOf<String, Any>(
@@ -932,7 +932,7 @@ class BinaryService : Service() {
                         "conf" to 0,
                         "path" to path,
                         "sig" to byteSig,
-                        "reason" to "📸 Screenshot Auto-Imported! Institutional SMC + ICT + PA + Trap + MTG Engine analyze korche...",
+                        "reason" to "📸 Screenshot Auto-Imported! Candlestick Psychology + Chart Pattern + SMC + ICT Engine analyze korche...",
                         "pair" to pair,
                         "time" to time
                     )
@@ -945,7 +945,7 @@ class BinaryService : Service() {
                 loadPrefsFallbackIfNeeded()
                 val upcomingTimes = computeUpcomingCandleTimes(time)
                 val b64 = bytesToB64(rawBytes)
-                val res = callMultiProviderWithKeyFailover(b64, rawBytes, upcomingTimes)
+                val res = callMultiProviderWithKeyFailover(b64, upcomingTimes)
 
                 val dir = res.optString("dir", "WAIT").uppercase().let {
                     if (it == "CALL" || it == "BUY") "UP"
@@ -953,7 +953,7 @@ class BinaryService : Service() {
                     else if (it == "UP" || it == "DOWN") it
                     else "WAIT"
                 }
-                val conf = res.optInt("conf", 0)
+                val conf = if (dir == "WAIT") 0 else res.optInt("conf", 0)
                 val detectedPair = res.optString("detected_pair", "").trim()
                 if (detectedPair.isNotEmpty() && detectedPair != "UNKNOWN" && detectedPair.contains("/")) {
                     pair = detectedPair
@@ -965,7 +965,9 @@ class BinaryService : Service() {
                 val mtgBackupTime = upcomingTimes[min(waitMins, 2)]
 
                 val stepSec = timeframeStepSeconds(time)
-                val defaultTradeAfter = if (stepSec < 60) {
+                val defaultTradeAfter = if (dir == "WAIT") {
+                    "⏸️ EKHON TRADE NIBE NA (Wait)"
+                } else if (stepSec < 60) {
                     "${stepSec * waitMins} sec por Trade ($targetTime)"
                 } else {
                     "$waitMins min por Trade ($targetTime)"
@@ -974,33 +976,38 @@ class BinaryService : Service() {
 
                 val candlePlan = res.optString(
                     "candle_plan",
-                    "${upcomingTimes[0]}: ${if (dir == "UP") "⬆️ UP" else if (dir == "DOWN") "⬇️ DOWN" else "⏸️ WAIT"} | ${upcomingTimes[1]}: ${if (dir == "UP") "⬆️" else "⬇️"} | ${upcomingTimes[2]}: ${if (dir == "UP") "⬆️" else "⬇️"}"
+                    if (dir == "WAIT") {
+                        "${upcomingTimes[0]} ⏸️ WAIT | ${upcomingTimes[1]} ⏸️ WAIT (Setup তৈরি হওয়া পর্যন্ত অপেক্ষা করো)"
+                    } else {
+                        "${upcomingTimes[0]}: ${if (dir == "UP") "⬆️ UP" else "⬇️ DOWN"} | ${upcomingTimes[1]}: ${if (dir == "UP") "⬆️" else "⬇️"} | ${upcomingTimes[2]}: ${if (dir == "UP") "⬆️" else "⬇️"}"
+                    }
                 )
-                val pattern = res.optString("pattern", "Pinbar / Engulfing")
-                val structure = res.optString("structure", "BOS / SNR Flip")
-                val smc = res.optString("smc", "Order Block + FVG")
-                val ict = res.optString("ict", "Liquidity Sweep + Displacement")
-                val chartPattern = res.optString("chart_pattern", "Price Channel Breakout")
+                val pattern = res.optString("pattern", "Candlestick Check")
+                val structure = res.optString("structure", "Structure Check")
+                val smc = res.optString("smc", "SMC Zone Check")
+                val ict = res.optString("ict", "ICT Liquidity Check")
+                val chartPattern = res.optString("chart_pattern", "Chart Pattern Check")
                 val trap = res.optBoolean("trap", false)
-                val trapType = res.optString("trap_type", if (trap) "OTC Trap Detected!" else "No Trap — Liquidity Swept")
+                val trapType = res.optString("trap_type", if (trap || dir == "WAIT") "Skip / Wait for Clean Setup" else "Clean Institutional Setup")
+                val providerUsed = res.optString("__provider", "AI")
 
                 val defaultMtg = when {
-                    trap -> "⛔ No MTG (Trap Risk)"
+                    dir == "WAIT" || trap -> "⛔ NO TRADE / NO MTG (এখন ট্রেড নেবে না)"
                     conf >= 88 -> "✅ Direct Shot (Backup 1-Step MTG: $mtgBackupTime)"
                     else -> "🔄 1-Step MTG Ready Rakho ($mtgBackupTime Backup)"
                 }
                 val mtgAdvice = res.optString("mtg_advice", defaultMtg).ifEmpty { defaultMtg }
-                val entry = res.optString("entry", "$tradeAfterText • MTG: $mtgBackupTime")
-                val risk = res.optString("risk", if (conf >= 85) "Low Risk (Sniper)" else "Medium Risk")
+                val entry = res.optString("entry", if (dir == "WAIT") "Skip This Candle" else "$tradeAfterText • MTG: $mtgBackupTime")
+                val risk = res.optString("risk", if (dir == "WAIT") "Skip Trade" else if (conf >= 85) "Low Risk (Sniper)" else "Medium Risk")
                 val rawReason = res.optString("reason", "")
-                val fullReason = if (pattern.isNotEmpty() && !rawReason.contains(pattern)) {
-                    "[$pattern • $smc] $rawReason"
+                val fullReason = if (pattern.isNotEmpty() && !rawReason.contains(pattern) && dir != "WAIT") {
+                    "[$pattern • $chartPattern] $rawReason"
                 } else {
                     rawReason
                 }
 
                 val shortIcon = if (dir == "UP") "⬆️" else if (dir == "DOWN") "⬇️" else "⏸️"
-                lastSignalShort = "$shortIcon ${waitMins}m ($targetTime)"
+                lastSignalShort = if (dir == "WAIT") "⏸️ WAIT" else "$shortIcon ${waitMins}m ($targetTime)"
 
                 main.post {
                     showSignalInsideBubble(
@@ -1024,6 +1031,7 @@ class BinaryService : Service() {
                                 "conf" to conf,
                                 "path" to path,
                                 "sig" to byteSig,
+                                "provider" to providerUsed,
                                 "wait_mins" to waitMins,
                                 "trade_after" to tradeAfterText,
                                 "reason" to fullReason,
@@ -1050,7 +1058,7 @@ class BinaryService : Service() {
                     } catch (_: Exception) {}
                 }
 
-                if ((conf > 0 || dir != "WAIT") && byteSig != lastSavedHistSig) {
+                if (conf > 0 && dir != "WAIT" && byteSig != lastSavedHistSig) {
                     lastSavedHistSig = byteSig
                     appendHistory(dir, conf, waitMins, targetTime)
                 }
@@ -1065,7 +1073,7 @@ class BinaryService : Service() {
         }.start()
     }
 
-    private fun showBubbleLoadingState(statusLabel: String = "⚡ SMC + ICT + PA Analyze korche...") {
+    private fun showBubbleLoadingState(statusLabel: String = "⚡ Deep Chart Analyze korche...") {
         try {
             main.removeCallbacks(collapseRunnable)
             isBubbleExpanded = true
@@ -1086,7 +1094,7 @@ class BinaryService : Service() {
                 setTextColor(0xFFF5E6C8.toInt())
             }
             bubblePairReasonText?.apply {
-                text = "$pair • $time (1 SS = 1 Pro Trade Analysis)"
+                text = "$pair • $time (Candlestick Psychology + Chart Pattern + SMC/ICT)"
                 setTextColor(0xFFBBBBBB.toInt())
             }
             val root = bubbleRoot
@@ -1121,7 +1129,7 @@ class BinaryService : Service() {
             val icon = when (dir) {
                 "UP" -> "⬆️ UP / CALL"
                 "DOWN" -> "⬇️ DOWN / PUT"
-                else -> "⏸️ WAIT"
+                else -> "⏸️ NO TRADE (WAIT)"
             }
 
             val panel = bubbleDetailPanel ?: return
@@ -1132,25 +1140,26 @@ class BinaryService : Service() {
                 setStroke(3, strokeColor)
             }
 
-            // LINE 1: Direction + Confidence + Exact "Koto Minute Por Trade"
             bubbleTitleText?.apply {
-                text = "$icon ($conf%)  •  ⏱️ $waitMins min por ($targetTime)"
+                text = if (dir == "WAIT") {
+                    "⏸️ NO TRADE (WAIT) • Ekhon Trade Nibe Na!"
+                } else {
+                    "$icon ($conf%)  •  ⏱️ $waitMins min por ($targetTime)"
+                }
                 setTextColor(strokeColor)
             }
 
-            // LINE 2: MTG Advice + 3-Candle Roadmap
             bubbleTimeScheduleText?.apply {
-                text = if (trap) {
-                    "🚨 TRAP ALERT ($trapType) • ⛔ No MTG"
+                text = if (dir == "WAIT" || trap) {
+                    "🚨 $trapType  •  $mtgAdvice"
                 } else {
                     "$mtgAdvice  |  🕯️ $candlePlan"
                 }
-                setTextColor(if (trap) 0xFFFF8A80.toInt() else 0xFFFFD54F.toInt())
+                setTextColor(if (trap || dir == "WAIT") 0xFFFF8A80.toInt() else 0xFFFFD54F.toInt())
             }
 
-            // LINE 3: Trap Check + Pro SMC/ICT/PA Reason
             bubblePairReasonText?.apply {
-                text = "🛡️ $trapType — $reason"
+                text = reason
                 setTextColor(0xFFEEEEEE.toInt())
             }
 
@@ -1172,7 +1181,7 @@ class BinaryService : Service() {
         return try {
             var bmp = BitmapFactory.decodeByteArray(src, 0, src.size)
                 ?: return Base64.encodeToString(src, Base64.NO_WRAP)
-            val maxDim = 960
+            val maxDim = 1024
             if (bmp.width > maxDim || bmp.height > maxDim) {
                 val s = maxDim.toFloat() / max(bmp.width, bmp.height)
                 val nb = Bitmap.createScaledBitmap(
@@ -1185,7 +1194,7 @@ class BinaryService : Service() {
                 bmp = nb
             }
             val bos = ByteArrayOutputStream()
-            bmp.compress(Bitmap.CompressFormat.JPEG, 76, bos)
+            bmp.compress(Bitmap.CompressFormat.JPEG, 78, bos)
             bmp.recycle()
             Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP)
         } catch (e: Exception) {
@@ -1203,10 +1212,8 @@ class BinaryService : Service() {
         }
     }
 
-    // ── Institutional Multi-Key & Multi-Provider Failover Engine ──
     private fun callMultiProviderWithKeyFailover(
         b64: String,
-        rawBytes: ByteArray,
         upcomingTimes: List<String>
     ): JSONObject {
         if (keys.isEmpty()) {
@@ -1220,18 +1227,32 @@ class BinaryService : Service() {
         val isOtc = pair.contains("OTC", ignoreCase = true)
         val marketMode = if (isOtc) "Pocket Option OTC algorithmic chart" else "Live Interbank chart"
 
-        val prompt = "You are an elite 15-Year Institutional Binary Options Master Trader combining:\n" +
-            "1. PRICE ACTION & CANDLESTICK PSYCHOLOGY: Pinbar/Hammer/Shooting Star wick rejection, Bullish/Bearish Engulfing, Morning/Evening Star, Tweezer Top/Bottom, Three Soldiers/Crows, Inside Bar Fakey, Marubozu impulse vs Exhaustion Climax.\n" +
-            "2. SMART MONEY CONCEPTS (SMC): BOS (Break of Structure), CHoCH (Change of Character), Unmitigated Bullish/Bearish Order Block (OB), Breaker Block, Fair Value Gap (FVG 50% fill), Equal Highs/Lows (EQH/EQL), Premium vs Discount Fib OTE (61.8%-78.6%).\n" +
-            "3. ICT (INNER CIRCLE TRADER): Buy-Side / Sell-Side Liquidity Sweep (BSL/SSL Stop-Hunt / Turtle Soup), Inducement (IDM) Trap before real OB, Displacement candle, Power of 3 (AMD: Accumulation, Manipulation, Distribution).\n" +
-            "4. CLASSIC CHART PATTERNS: Double Top (M), Double Bottom (W), Head & Shoulders, Rising/Falling Wedge, Bullish/Bearish Flag, Triangle Breakout.\n" +
-            "5. POCKET OPTION TRAP TRAINING: Detect Bull Trap (Resistance fakeout), Bear Trap (Support fakeout), Exhaustion Climax Trap, or OTC Doji/Barcode Choppy Trap.\n" +
-            "6. SMART MTG (MARTINGALE) ADVISOR: State clearly in mtg_advice whether this is \"✅ Direct Shot (MTG Lagbe Na — Clean Sweep + OB Bounce)\" OR \"🔄 1-Step MTG Ready Rakho ($t2 Candle Backup)\" OR \"⛔ No MTG (Trap Risk)\".\n" +
+        val prompt = "You are an elite 15-Year Institutional Price Action, Candlestick Psychology, SMC, ICT & Chart Pattern Master Trader.\n" +
+            "Read this trading chart screenshot with extreme precision. DO NOT guess or blindly follow 2-3 green/red candles!\n\n" +
+            "MANDATORY 6-STAGE INSTITUTIONAL ANALYSIS PROTOCOL:\n" +
+            "1. STRICT \"NO-TRADE / WAIT\" FILTER (NOT EVERY CANDLE IS A TRADE!):\n" +
+            "   - If price is in the middle of nowhere (Mid-Range / Equilibrium) with no nearby Support/Resistance, Order Block, FVG, or Trendline touch -> YOU MUST OUTPUT \"dir\": \"WAIT\" and \"conf\": 0!\n" +
+            "   - If the chart has choppy overlapping Doji/Spinning Top barcode candles or conflicting signals -> YOU MUST OUTPUT \"dir\": \"WAIT\"!\n" +
+            "   - If a setup is still 1-2 candles away from touching the SNR/Order Block/Neckline -> either set \"wait_mins\": 2 or 3 (for $t2 or $t3) OR output \"dir\": \"WAIT\" and tell the trader to wait until price reaches the level!\n" +
+            "2. DEEP CANDLESTICK PSYCHOLOGY (\"CANDLESTICK SOCIOLOGY\"):\n" +
+            "   - Never predict UP just because 2-3 green candles went up! Check whether the candle bodies are shrinking (momentum exhaustion) or hitting a Resistance/Supply level.\n" +
+            "   - Inspect the exact upper and lower wicks of the last 3 candles: Upper wick rejection at Resistance/Supply = Seller control (DOWN). Lower wick rejection at Support/Demand = Buyer absorption (UP).\n" +
+            "   - Check multi-candle formations: Pinbar/Hammer/Shooting Star, Bullish/Bearish Engulfing, Morning/Evening Star, Tweezer Top/Bottom, Inside Bar (Mother Bar) Fakey, Piercing Line, Dark Cloud Cover, Three White Soldiers/Crows, or Climax Exhaustion Marubozu.\n" +
+            "3. COMPLETE CHART PATTERNS:\n" +
+            "   - Identify the broader 20-40 candle chart pattern: Double Top (M Pattern + Neckline), Double Bottom (W Pattern + Neckline), Head & Shoulders / Inverse H&S, Rising Wedge (Bearish), Falling Wedge (Bullish), Bullish/Bearish Flag, Ascending/Descending/Symmetrical Triangle, or Parallel Trend Channel.\n" +
+            "4. SMART MONEY CONCEPTS (SMC) & ICT:\n" +
+            "   - Structure: HH/HL vs LH/LL, true body BOS (Break of Structure) vs wick-only Liquidity Sweep, CHoCH (Change of Character).\n" +
+            "   - Zones: Unmitigated Bullish/Bearish Order Block (OB), Breaker Block, 50% FVG (Fair Value Gap) retest, Premium vs Discount Fib OTE (61.8%-78.6%).\n" +
+            "   - ICT Liquidity: BSL (Buy-Side Liquidity sweep above Equal/Swing Highs -> Reversal DOWN) or SSL (Sell-Side Liquidity sweep below Equal/Swing Lows -> Reversal UP), Inducement (IDM) trap, AMD (Power of 3).\n" +
+            "5. POCKET OPTION TRAP FILTER:\n" +
+            "   - Flag Bull Trap (fake breakout above Resistance), Bear Trap (fake breakdown below Support), Late-Chaser Exhaustion Trap (3+ big candles into SNR), or OTC Barcode Trap.\n" +
+            "6. SMART MTG (MARTINGALE) ADVISOR:\n" +
+            "   - If dir is WAIT: set mtg_advice to \"⛔ NO TRADE — Ekhon kono trade nibe na (Wait for Clean Setup)\".\n" +
+            "   - If dir is UP or DOWN: state clearly whether it is \"✅ Direct Shot (MTG Lagbe Na — Clean Sweep + Rejection)\" OR \"🔄 1-Step MTG Ready Rakho ($t2 Candle Backup — Zone Retest Possible)\" OR \"⛔ No MTG (Breakout Risk)\".\n\n" +
             "Current time: $nowStr | Selected Pair: $pair | Timeframe: $time ($marketMode).\n" +
             "Upcoming 3 candles: Candle 1 (1m por) = $t1, Candle 2 (2m por) = $t2, Candle 3 (3m por) = $t3.\n" +
-            "If a different pair is visible on the screenshot, put it in detected_pair, otherwise \"$pair\".\n" +
-            "Respond ONLY with a single raw JSON object (no markdown fences):\n" +
-            "{\"dir\":\"UP\",\"conf\":89,\"detected_pair\":\"$pair\",\"wait_mins\":1,\"trade_after_text\":\"1 min por Trade ($t1 Candle)\",\"target_time\":\"$t1\",\"candle_plan\":\"$t1 ⬆️ UP | $t2 ⬆️ UP | $t3 ⬆️ UP\",\"trap\":false,\"trap_type\":\"SSL Liquidity Swept — Bear Trap Reversal\",\"pattern\":\"Lower Wick Pinbar + Bullish Engulfing\",\"structure\":\"Bullish CHoCH + Support Flip\",\"smc\":\"Bullish Order Block + 50% FVG Fill\",\"ict\":\"SSL Stop-Hunt Sweep + Displacement\",\"chart_pattern\":\"Double Bottom (W) Retest\",\"mtg_advice\":\"✅ Direct Shot (Backup 1-Step MTG: $t2)\",\"entry\":\"1 min por ($t1 Open) • Backup MTG: $t2\",\"risk\":\"Low Risk (Sniper)\",\"trend_score\":89,\"pattern_score\":92,\"snr_score\":90,\"momentum_score\":87,\"reason\":\"Detailed Pro Trader Banglish analysis explaining the exact SMC/ICT/Price Action setup, why traps were cleared, whether MTG is needed, and why $t1 candle will go UP or DOWN.\"}"
+            "Reply ONLY with a single raw JSON object (no markdown fences):\n" +
+            "{\"dir\":\"UP\",\"conf\":89,\"detected_pair\":\"$pair\",\"wait_mins\":1,\"trade_after_text\":\"1 min por Trade ($t1 Candle)\",\"target_time\":\"$t1\",\"candle_plan\":\"$t1 ⬆️ UP | $t2 ⬆️ UP | $t3 ⬆️ UP\",\"trap\":false,\"trap_type\":\"SSL Swept at Support — Bear Trap Reversal\",\"pattern\":\"Lower Wick Pinbar + Morning Star\",\"structure\":\"Bullish CHoCH + Support Flip (RBS)\",\"smc\":\"Unmitigated Bullish OB + 50% FVG\",\"ict\":\"SSL Liquidity Sweep (Turtle Soup)\",\"chart_pattern\":\"Double Bottom (W) Neckline Bounce\",\"mtg_advice\":\"✅ Direct Shot (Backup 1-Step MTG: $t2)\",\"entry\":\"1 min por ($t1 Open) • Backup MTG: $t2\",\"risk\":\"Low Risk (Sniper)\",\"trend_score\":88,\"pattern_score\":91,\"snr_score\":90,\"momentum_score\":87,\"reason\":\"Detailed Banglish explanation of the exact Candlestick Psychology (wicks & bodies), Chart Pattern, SMC/ICT zone, why this is a real setup (or why to WAIT), and whether MTG is needed.\"}"
 
         val orderedKeys = mutableListOf<String>()
         if (lastWorkingKey.isNotEmpty() && keys.contains(lastWorkingKey)) {
@@ -1244,6 +1265,8 @@ class BinaryService : Service() {
             }
         }
 
+        val errorList = mutableListOf<String>()
+
         for ((index, key) in orderedKeys.withIndex()) {
             val pName = providerNameForKey(key)
             if (orderedKeys.size > 1) {
@@ -1253,59 +1276,93 @@ class BinaryService : Service() {
             }
 
             val res: JSONObject? = when {
-                key.startsWith("gsk_") -> callOpenAiSequential(
+                key.startsWith("gsk_") -> callOpenAiWithDiscovery(
                     endpoint = "https://api.groq.com/openai/v1/chat/completions",
+                    modelsEndpoint = "https://api.groq.com/openai/v1/models",
                     key = key,
                     models = GROQ_MODELS,
                     prompt = prompt,
                     b64 = b64,
-                    timeoutSec = 9
+                    timeoutSec = 12,
+                    errorList = errorList
                 )
-                key.startsWith("sk-or-") -> callOpenAiSequential(
+                key.startsWith("sk-or-") -> callOpenAiWithDiscovery(
                     endpoint = "https://openrouter.ai/api/v1/chat/completions",
+                    modelsEndpoint = "https://openrouter.ai/api/v1/models",
                     key = key,
                     models = OPENROUTER_MODELS,
                     prompt = prompt,
                     b64 = b64,
-                    timeoutSec = 9,
+                    timeoutSec = 13,
+                    requireFreeSuffix = true,
                     extraHeaders = mapOf(
                         "HTTP-Referer" to "https://aniketpro.ai",
                         "X-Title" to "ANIKET PRO AI"
-                    )
+                    ),
+                    errorList = errorList
                 )
                 key.startsWith("AIza") -> raceGeminiModels(
                     key = key,
                     models = GEMINI_MODELS,
                     prompt = prompt,
                     b64 = b64,
-                    timeoutSec = 8L
+                    timeoutSec = 10L
                 )
                 else -> {
-                    callOpenAiSequential(
+                    callOpenAiWithDiscovery(
                         endpoint = "https://api.mistral.ai/v1/chat/completions",
+                        modelsEndpoint = "https://api.mistral.ai/v1/models",
                         key = key,
                         models = MISTRAL_MODELS,
                         prompt = prompt,
                         b64 = b64,
-                        timeoutSec = 9
-                    ) ?: callOpenAiSequential(
+                        timeoutSec = 12,
+                        errorList = errorList
+                    ) ?: callOpenAiWithDiscovery(
                         endpoint = "https://openrouter.ai/api/v1/chat/completions",
+                        modelsEndpoint = "https://openrouter.ai/api/v1/models",
                         key = key,
                         models = OPENROUTER_MODELS,
                         prompt = prompt,
                         b64 = b64,
-                        timeoutSec = 9
+                        timeoutSec = 12,
+                        requireFreeSuffix = true,
+                        errorList = errorList
                     )
                 }
             }
 
             if (res != null) {
                 lastWorkingKey = key
+                if (!res.has("__provider")) {
+                    res.put("__provider", pName)
+                }
                 return res
             }
         }
 
-        return analyzeChartMultiCandleLocally(rawBytes, t1, t2, t3)
+        // NEVER invent a fake UP/DOWN 91% trade when API keys fail!
+        val errText = if (errorList.isNotEmpty()) errorList.take(2).joinToString(" | ") else "Server Busy / Key Check"
+        return JSONObject()
+            .put("__provider", "Wait (No Blind Trade)")
+            .put("dir", "WAIT")
+            .put("conf", 0)
+            .put("detected_pair", pair)
+            .put("wait_mins", 1)
+            .put("trade_after_text", "⏸️ EKHON TRADE NIBE NA (Wait)")
+            .put("target_time", t1)
+            .put("candle_plan", "$t1 ⏸️ WAIT | $t2 ⏸️ WAIT")
+            .put("trap", true)
+            .put("trap_type", "AI Key Busy ($errText)")
+            .put("pattern", "No Blind Trade")
+            .put("structure", "Wait for AI Vision")
+            .put("smc", "Capital Protection")
+            .put("ict", "No Fake Signal")
+            .put("chart_pattern", "Wait")
+            .put("mtg_advice", "⛔ NO TRADE (অন্ধভাবে ট্রেড দেওয়া বন্ধ)")
+            .put("entry", "Wait 5s & Tap Bubble Again")
+            .put("risk", "Protected")
+            .put("reason", "⚠️ অন্ধভাবে ৯১% ট্রেড দেওয়া বন্ধ করা হয়েছে! এই মুহূর্তে AI সার্ভার রেসপন্স দেয়নি ($errText)। ৫ সেকেন্ড পর আবার ট্যাপ করো অথবা Key Box চেক করো।")
     }
 
     private fun raceGeminiModels(
@@ -1324,6 +1381,7 @@ class BinaryService : Service() {
             Thread {
                 val res = trySingleGeminiModel(key, model, prompt, b64, timeoutSec.toInt())
                 if (res != null && winner.compareAndSet(null, res)) {
+                    res.put("__provider", "Gemini ($model)")
                     doneLatch.countDown()
                 } else if (finishedCount.incrementAndGet() >= totalModels) {
                     doneLatch.countDown()
@@ -1343,7 +1401,7 @@ class BinaryService : Service() {
         model: String,
         prompt: String,
         b64: String,
-        timeoutSec: Int = 8
+        timeoutSec: Int = 9
     ): JSONObject? {
         var c: HttpURLConnection? = null
         try {
@@ -1366,7 +1424,7 @@ class BinaryService : Service() {
             )
             body.put("contents", JSONArray().put(JSONObject().put("parts", parts)))
 
-            val genConfig = JSONObject().put("temperature", 0.2)
+            val genConfig = JSONObject().put("temperature", 0.15)
             if (model.contains("2.5")) {
                 genConfig.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
             }
@@ -1400,17 +1458,25 @@ class BinaryService : Service() {
         return null
     }
 
-    // Sequential model caller for Groq / OpenRouter / Mistral so 1 free key never hits burst 429!
-    private fun callOpenAiSequential(
+    private fun callOpenAiWithDiscovery(
         endpoint: String,
+        modelsEndpoint: String,
         key: String,
         models: List<String>,
         prompt: String,
         b64: String,
         timeoutSec: Int,
-        extraHeaders: Map<String, String>? = null
+        requireFreeSuffix: Boolean = false,
+        extraHeaders: Map<String, String>? = null,
+        errorList: MutableList<String>? = null
     ): JSONObject? {
-        for (model in models) {
+        val allModels = models.toMutableList()
+        val discovered = discoverProviderVisionModels(modelsEndpoint, key, requireFreeSuffix)
+        for (dm in discovered.take(4)) {
+            if (!allModels.contains(dm)) allModels.add(dm)
+        }
+
+        for (model in allModels) {
             val res = trySingleOpenAiVisionModel(
                 endpoint = endpoint,
                 key = key,
@@ -1418,11 +1484,62 @@ class BinaryService : Service() {
                 prompt = prompt,
                 b64 = b64,
                 timeoutSec = timeoutSec,
-                extraHeaders = extraHeaders
+                extraHeaders = extraHeaders,
+                errorList = errorList
             )
-            if (res != null) return res
+            if (res != null) {
+                res.put("__provider", model.substringAfterLast('/'))
+                return res
+            }
         }
         return null
+    }
+
+    private fun discoverProviderVisionModels(
+        modelsEndpoint: String,
+        key: String,
+        requireFreeSuffix: Boolean
+    ): List<String> {
+        var c: HttpURLConnection? = null
+        try {
+            val url = URL(modelsEndpoint)
+            c = url.openConnection() as HttpURLConnection
+            c.requestMethod = "GET"
+            c.connectTimeout = 4000
+            c.readTimeout = 5000
+            c.setRequestProperty("Authorization", "Bearer $key")
+            if (c.responseCode == 200) {
+                val txt = c.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                c.disconnect()
+                val arr = JSONObject(txt).optJSONArray("data") ?: return emptyList()
+                val out = mutableListOf<String>()
+                for (i in 0 until arr.length()) {
+                    val item = arr.optJSONObject(i) ?: continue
+                    val id = item.optString("id", "")
+                    if (id.isEmpty()) continue
+                    if (requireFreeSuffix && !id.endsWith(":free")) continue
+                    val low = id.lowercase()
+                    val arch = item.optJSONObject("architecture")?.toString()?.lowercase() ?: ""
+                    if (low.contains("qwen") ||
+                        low.contains("vl") ||
+                        low.contains("vision") ||
+                        low.contains("gemma-3") ||
+                        low.contains("ministral") ||
+                        low.contains("pixtral") ||
+                        low.contains("llama-4") ||
+                        arch.contains("image")
+                    ) {
+                        out.add(id)
+                    }
+                }
+                return out
+            } else {
+                c.disconnect()
+            }
+        } catch (_: Exception) {
+            try { c?.disconnect() } catch (_: Exception) {}
+        }
+        return emptyList()
     }
 
     private fun trySingleOpenAiVisionModel(
@@ -1431,15 +1548,16 @@ class BinaryService : Service() {
         model: String,
         prompt: String,
         b64: String,
-        timeoutSec: Int = 9,
-        extraHeaders: Map<String, String>? = null
+        timeoutSec: Int = 11,
+        extraHeaders: Map<String, String>? = null,
+        errorList: MutableList<String>? = null
     ): JSONObject? {
         var c: HttpURLConnection? = null
         try {
             val url = URL(endpoint)
             c = url.openConnection() as HttpURLConnection
             c.requestMethod = "POST"
-            c.connectTimeout = 5500
+            c.connectTimeout = 6000
             c.readTimeout = timeoutSec * 1000
             c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -1458,10 +1576,11 @@ class BinaryService : Service() {
                 .put("role", "user")
                 .put("content", contentArr)
 
+            // Use 2048 tokens so reasoning/thinking models (Qwen 3.8 27B) complete <think> and output JSON
             val body = JSONObject()
                 .put("model", model)
                 .put("temperature", 0.15)
-                .put("max_tokens", 850)
+                .put("max_tokens", 2048)
                 .put("messages", JSONArray().put(msgObj))
 
             c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
@@ -1476,6 +1595,7 @@ class BinaryService : Service() {
                     ?.optString("content", "") ?: ""
                 return parseJsonFromRawText(content)
             } else {
+                errorList?.add("${model.substringAfterLast('/')}: HTTP $code")
                 c.disconnect()
             }
         } catch (_: Exception) {
@@ -1484,9 +1604,10 @@ class BinaryService : Service() {
         return null
     }
 
-    // ── Bulletproof JSON + Regex Field Extractor (Never loses AI output on multiline strings!) ──
     private fun parseJsonFromRawText(raw: String): JSONObject? {
-        val text = raw.replace("```json", "").replace("```", "").trim()
+        // Strip <think>...</think> blocks emitted by Qwen 3.8 / reasoning models
+        val noThink = raw.replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE), "")
+        val text = noThink.replace("```json", "").replace("```", "").trim()
         val a = text.indexOf('{')
         val z = text.lastIndexOf('}')
         if (a >= 0 && z > a) {
@@ -1534,218 +1655,6 @@ class BinaryService : Service() {
                 .put("reason", pickStr("reason", "Institutional SMC + ICT + Price Action confluence confirmed."))
         }
         return null
-    }
-
-    // ── Advanced 12-Slice Multi-Candle OHLC Vision Analyzer (SMC + ICT + PA + Traps + MTG) ──
-    private fun analyzeChartMultiCandleLocally(
-        rawBytes: ByteArray,
-        t1: String,
-        t2: String,
-        t3: String
-    ): JSONObject {
-        try {
-            val rawBmp = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
-            if (rawBmp != null) {
-                val bmp = Bitmap.createScaledBitmap(rawBmp, 384, 384, true)
-                if (bmp != rawBmp) rawBmp.recycle()
-
-                val w = bmp.width
-                val h = bmp.height
-                val xStart = (w * 0.12).toInt()
-                val xEnd = (w * 0.88).toInt()
-                val yStart = (h * 0.16).toInt()
-                val yEnd = (h * 0.78).toInt()
-                val numSlices = 12
-                val sliceW = max(4, (xEnd - xStart) / numSlices)
-
-                val sliceCenterY = DoubleArray(numSlices)
-                val sliceHighY = IntArray(numSlices)
-                val sliceLowY = IntArray(numSlices)
-                val sliceBullPx = IntArray(numSlices)
-                val sliceBearPx = IntArray(numSlices)
-
-                var globalHighY = yEnd
-                var globalLowY = yStart
-
-                for (s in 0 until numSlices) {
-                    val sx0 = xStart + s * sliceW
-                    val sx1 = min(xEnd, sx0 + sliceW)
-                    var bull = 0
-                    var bear = 0
-                    var highY = yEnd
-                    var lowY = yStart
-                    var sumY = 0.0
-                    var cnt = 0
-
-                    for (y in yStart until yEnd step 2) {
-                        for (x in sx0 until sx1 step 2) {
-                            val px = bmp.getPixel(x, y)
-                            val r = Color.red(px)
-                            val g = Color.green(px)
-                            val b = Color.blue(px)
-
-                            val isBull = (g > r + 22 && g > 72 && g >= b - 18)
-                            val isBear = (r > g + 22 && r > 78 && r > b + 14)
-
-                            if (isBull || isBear) {
-                                if (isBull) bull++
-                                if (isBear) bear++
-                                if (y < highY) highY = y
-                                if (y > lowY) lowY = y
-                                if (y < globalHighY) globalHighY = y
-                                if (y > globalLowY) globalLowY = y
-                                sumY += y
-                                cnt++
-                            }
-                        }
-                    }
-
-                    sliceBullPx[s] = bull
-                    sliceBearPx[s] = bear
-                    sliceHighY[s] = if (cnt > 2) highY else (yStart + yEnd) / 2
-                    sliceLowY[s] = if (cnt > 2) lowY else (yStart + yEnd) / 2
-                    sliceCenterY[s] = if (cnt > 2) (sumY / cnt) else (yStart + yEnd) / 2.0
-                }
-                bmp.recycle()
-
-                val cLeft = (sliceCenterY[0] + sliceCenterY[1] + sliceCenterY[2] + sliceCenterY[3]) / 4.0
-                val cMid = (sliceCenterY[4] + sliceCenterY[5] + sliceCenterY[6] + sliceCenterY[7]) / 4.0
-                val cRight = (sliceCenterY[8] + sliceCenterY[9] + sliceCenterY[10] + sliceCenterY[11]) / 4.0
-                val cLast2 = (sliceCenterY[10] + sliceCenterY[11]) / 2.0
-
-                val chartSpan = max(12, globalLowY - globalHighY)
-                val priceZonePos = ((globalLowY - cLast2) / chartSpan).coerceIn(0.0, 1.0)
-
-                val bullRecent = sliceBullPx[9] + sliceBullPx[10] + sliceBullPx[11]
-                val bearRecent = sliceBearPx[9] + sliceBearPx[10] + sliceBearPx[11]
-                val recentBullRatio = (bullRecent + 1.0) / (bullRecent + bearRecent + 2.0)
-
-                val lastHighY = min(sliceHighY[10], sliceHighY[11])
-                val lastLowY = max(sliceLowY[10], sliceLowY[11])
-                var prevSwingHighY = yEnd
-                var prevSwingLowY = yStart
-                for (i in 2..8) {
-                    if (sliceHighY[i] < prevSwingHighY) prevSwingHighY = sliceHighY[i]
-                    if (sliceLowY[i] > prevSwingLowY) prevSwingLowY = sliceLowY[i]
-                }
-
-                val sweptBSL = lastHighY <= prevSwingHighY + 3 && cLast2 > lastHighY + 6
-                val sweptSSL = lastLowY >= prevSwingLowY - 3 && cLast2 < lastLowY - 6
-                val isDoubleBottomW = (sliceLowY[3] >= globalLowY - 8 && lastLowY >= globalLowY - 8 && cMid < globalLowY - 12)
-                val isDoubleTopM = (sliceHighY[3] <= globalHighY + 8 && lastHighY <= globalHighY + 8 && cMid > globalHighY + 12)
-
-                val goUp: Boolean
-                val waitMins = 1
-                val targetCandle = t1
-                val paPattern: String
-                val structureDesc: String
-                val smcDesc: String
-                val ictDesc: String
-                val chartPatDesc: String
-                val trapDesc: String
-                val mtgDesc: String
-                val reasonBanglish: String
-
-                if (sweptSSL || (priceZonePos < 0.26 && recentBullRatio >= 0.45)) {
-                    goUp = true
-                    paPattern = if (sweptSSL) "Lower Wick Pinbar + Bullish Engulfing" else "Hammer / Tweezer Bottom Bounce"
-                    structureDesc = "Support Flip Zone (RBS) + Bullish CHoCH"
-                    smcDesc = "Discount Bullish Order Block (OB) + FVG"
-                    ictDesc = "SSL Sell-Side Liquidity Sweep (Turtle Soup)"
-                    chartPatDesc = if (isDoubleBottomW) "Double Bottom (W Pattern) Reversal" else "Falling Wedge Support Bounce"
-                    trapDesc = "Bear Trap Cleared (Sellers Trapped at Support)"
-                    mtgDesc = "✅ Direct Shot Win Expected (Backup 1-Step MTG: $t2)"
-                    reasonBanglish = "SMC + ICT Analysis: সাপোর্টের নিচে Sell-Side Liquidity (SSL) সুইপ করে সেলারদের Bear Trap-এ ফেলেছে এবং Bullish Order Block থেকে Pinbar/Engulfing রিজেকশন দিয়েছে। তাই 1 min por ($t1 ক্যান্ডেলে) Direct UP যাবে (Backup MTG: $t2)।"
-                } else if (sweptBSL || (priceZonePos > 0.74 && recentBullRatio <= 0.55)) {
-                    goUp = false
-                    paPattern = if (sweptBSL) "Shooting Star Wick + Bearish Engulfing" else "Evening Star / Tweezer Top Drop"
-                    structureDesc = "Major Resistance Supply + Bearish CHoCH"
-                    smcDesc = "Premium Bearish Order Block (OB) + Supply"
-                    ictDesc = "BSL Buy-Side Liquidity Sweep (Judas Swing)"
-                    chartPatDesc = if (isDoubleTopM) "Double Top (M Pattern) Reversal" else "Rising Wedge Resistance Drop"
-                    trapDesc = "Bull Trap Cleared (Buyers Trapped at Resistance)"
-                    mtgDesc = "✅ Direct Shot Win Expected (Backup 1-Step MTG: $t2)"
-                    reasonBanglish = "SMC + ICT Analysis: রেজিস্ট্যান্সের উপরে Buy-Side Liquidity (BSL) সুইপ করে বায়ারদের Bull Trap-এ ফেলেছে এবং Bearish Order Block থেকে স্ট্রং রিজেকশন এসেছে। তাই 1 min por ($t1 ক্যান্ডেলে) Direct DOWN যাবে (Backup MTG: $t2)।"
-                } else if (recentBullRatio > 0.76 && priceZonePos > 0.65) {
-                    goUp = false
-                    paPattern = "Exhaustion Climax Marubozu at Resistance"
-                    structureDesc = "Overbought Extreme • Pullback Reversal"
-                    smcDesc = "Premium Supply Mitigation Block"
-                    ictDesc = "AMD Manipulation Climax -> Distribution Drop"
-                    chartPatDesc = "Channel Top Exhaustion"
-                    trapDesc = "Exhaustion Bull Trap (Late Buyers Trapped)"
-                    mtgDesc = "🔄 1-Step MTG Ready Rakho ($t2 Candle Backup)"
-                    reasonBanglish = "Trap + Price Action Analysis: রেজিস্ট্যান্স জোনে বিশাল Exhaustion ক্যান্ডেল তৈরি হয়েছে যেখানে রিটেল বায়াররা ট্র্যাপে পড়েছে। তাই 1 min por ($t1 ক্যান্ডেলে) পুলব্যাক DOWN যাবে (1-Step MTG: $t2)।"
-                } else if (recentBullRatio < 0.24 && priceZonePos < 0.35) {
-                    goUp = true
-                    paPattern = "Oversold Climax Drop + Demand Absorption"
-                    structureDesc = "Oversold Extreme • Demand Bounce"
-                    smcDesc = "Discount Demand Zone + Unmitigated OB"
-                    ictDesc = "SSL Liquidity Grab Complete -> Reversal UP"
-                    chartPatDesc = "Channel Bottom Bounce"
-                    trapDesc = "Exhaustion Bear Trap (Late Sellers Trapped)"
-                    mtgDesc = "🔄 1-Step MTG Ready Rakho ($t2 Candle Backup)"
-                    reasonBanglish = "Trap + Price Action Analysis: ডিসকাউন্ট ডিমান্ড জোনে সেলারদের Exhaustion ক্যান্ডেল শেষে বায়ার প্রেশার ঢুকছে। তাই 1 min por ($t1 ক্যান্ডেলে) রিভার্সাল UP যাবে (1-Step MTG: $t2)।"
-                } else if (recentBullRatio >= 0.52 || (cRight < cMid - 2.0 && cMid <= cLeft)) {
-                    goUp = true
-                    paPattern = if (recentBullRatio > 0.62) "Bullish Engulfing + Three White Soldiers" else "Morning Star + Inside Bar Breakout"
-                    structureDesc = "Uptrend HH/HL • Bullish BOS Confirmed"
-                    smcDesc = "Bullish FVG 50% Retest + Order Block"
-                    ictDesc = "Institutional Bullish Order Flow + Displacement"
-                    chartPatDesc = "Bullish Flag / Ascending Triangle Breakout"
-                    trapDesc = "Inducement (IDM) Cleared — Clean Trend Flow"
-                    mtgDesc = if (recentBullRatio > 0.60) "✅ Direct Shot (MTG Lagbe Na)" else "🔄 1-Step MTG Ready Rakho ($t2 Backup)"
-                    reasonBanglish = "SMC + Price Action Analysis: চার্টে Uptrend (HH/HL) ও Bullish BOS নিশ্চিত হয়েছে এবং Bullish FVG/OB থেকে বায়ার ডিসপ্লেসমেন্ট এসেছে। তাই 1 min por ($t1 ক্যান্ডেলে) UP যাবে ($mtgDesc)।"
-                } else {
-                    goUp = false
-                    paPattern = if (recentBullRatio < 0.38) "Bearish Engulfing + Three Black Crows" else "Evening Star + Mother Bar Breakdown"
-                    structureDesc = "Downtrend LH/LL • Bearish BOS Confirmed"
-                    smcDesc = "Bearish FVG Imbalance + Breaker Block"
-                    ictDesc = "Institutional Bearish Order Flow + Displacement"
-                    chartPatDesc = "Bearish Flag / Descending Triangle Breakdown"
-                    trapDesc = "Inducement (IDM) Swept — Seller Control"
-                    mtgDesc = if (recentBullRatio < 0.40) "✅ Direct Shot (MTG Lagbe Na)" else "🔄 1-Step MTG Ready Rakho ($t2 Backup)"
-                    reasonBanglish = "SMC + Price Action Analysis: চার্টে Bearish BOS সহ LH/LL ডাউনট্রেন্ড চলছে এবং প্রাইস Bearish FVG ও Breaker Block থেকে রিজেকশন খেয়েছে। তাই 1 min por ($t1 ক্যান্ডেলে) DOWN যাবে ($mtgDesc)।"
-                }
-
-                val dirStr = if (goUp) "UP" else "DOWN"
-                val arrow = if (goUp) "⬆️ UP" else "⬇️ DOWN"
-                val confSpread = (abs(recentBullRatio - 0.5) * 55.0 + (if (sweptSSL || sweptBSL) 7 else 3)).roundToInt()
-                val confVal = (79 + confSpread).coerceIn(80, 94)
-
-                return JSONObject()
-                    .put("dir", dirStr)
-                    .put("conf", confVal)
-                    .put("detected_pair", pair)
-                    .put("wait_mins", waitMins)
-                    .put("trade_after_text", "$waitMins min por Trade ($targetCandle Candle)")
-                    .put("target_time", targetCandle)
-                    .put("candle_plan", "$t1 $arrow | $t2 $arrow | $t3 ${if (goUp) "⬆️" else "⬇️"}")
-                    .put("trap", false)
-                    .put("trap_type", trapDesc)
-                    .put("pattern", paPattern)
-                    .put("structure", structureDesc)
-                    .put("smc", smcDesc)
-                    .put("ict", ictDesc)
-                    .put("chart_pattern", chartPatDesc)
-                    .put("mtg_advice", mtgDesc)
-                    .put("entry", "$waitMins min por ($targetCandle Open) • Backup MTG: $t2")
-                    .put("risk", if (confVal >= 85) "Low Risk (Sniper)" else "Medium Risk")
-                    .put("trend_score", (confVal - 1).coerceIn(76, 95))
-                    .put("pattern_score", (confVal + 2).coerceIn(78, 96))
-                    .put("snr_score", (confVal + 1).coerceIn(77, 95))
-                    .put("momentum_score", confVal.coerceIn(76, 94))
-                    .put("reason", reasonBanglish)
-            }
-        } catch (_: Exception) {}
-
-        return JSONObject()
-            .put("dir", "WAIT")
-            .put("conf", 0)
-            .put("wait_mins", 1)
-            .put("target_time", t1)
-            .put("candle_plan", "$t1 ⏸️ WAIT")
-            .put("reason", "Server busy — abar try koro")
     }
 
     private fun appendHistory(dir: String, conf: Int, waitMins: Int, targetTime: String) {
