@@ -199,7 +199,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         try {
           final sp = await SharedPreferences.getInstance();
           if (_mode == 'binary' || (sp.getBool('bin_float') ?? false)) {
-            BinarySignalScreen.onExternalScreenshot?.call(path);
+            BinarySignalScreen.onExternalScreenshot?.call(id, path);
             if (_mode == 'binary') return;
           }
         } catch (_) {}
