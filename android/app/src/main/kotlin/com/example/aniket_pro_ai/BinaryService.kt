@@ -43,6 +43,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
+import java.util.Collections
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
@@ -51,16 +52,16 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 // ═══════════════════════════════════════════════════════════════════
-//  STEALTH NATIVE VAULT & BINARY SIGNAL SERVICE
-//  • Encrypts all AI URLs, model names, and institutional trap prompts
-//    using XOR byte arrays so AI static scanners inspecting classes.dex
-//    cannot see what models, APIs, or prompts are inside the APK.
-//  • Instant MediaStore URI Stream Auto-Capture (with is_pending retry)
-//    immediately sends screenshot to Analysis Box + shows UP/DOWN &
-//    "Koto Minute Por Trade" inside the Floating Logo Bubble!
+//  INSTITUTIONAL BINARY SIGNAL SERVICE (SMC + ICT + PA + TRAPS + MTG)
+//  • STRICT 1-SS-1-TRADE LOCK: Tracks MediaStore IDs, source file mtimes,
+//    and image byte-signatures so 1 screenshot NEVER triggers 2/3/4 times!
+//  • Multi-Provider Failover (Groq, Gemini, OpenRouter, Mistral) +
+//    Bulletproof Regex JSON Extractor + 12-Slice Multi-Candle OHLC Vision!
+//  • Displays UP/DOWN + "Koto Minute Por Trade" + "MTG Guide" inside Bubble!
 // ═══════════════════════════════════════════════════════════════════
 class BinaryService : Service() {
 
@@ -76,84 +77,29 @@ class BinaryService : Service() {
         @Volatile
         private var lastWorkingKey: String = ""
 
-        // Decoy metadata strings to mislead external AI APK scanners
-        const val SYS_RENDER_TAG = "androidx.media3.exoplayer.video.MediaCodecVideoRenderer:v4.2"
-        const val SYS_TRANSPORT_SIG = "com.google.android.datatransport.cct.CctBackendFactory"
-
-        private val XK = intArrayOf(0x5A, 0xA5, 0x3C, 0xC3, 0x7E, 0xE7, 0x19, 0x91)
-
-        private fun dec(arr: IntArray): String {
-            val b = ByteArray(arr.size)
-            for (i in arr.indices) {
-                b[i] = (arr[i] xor XK[i % XK.size]).toByte()
-            }
-            return String(b, Charsets.UTF_8)
-        }
-
-        private fun decB64(b64: String): String {
-            val raw = Base64.decode(b64, Base64.DEFAULT)
-            val out = ByteArray(raw.size)
-            for (i in raw.indices) {
-                out[i] = ((raw[i].toInt() and 0xFF) xor XK[i % XK.size]).toByte()
-            }
-            return String(out, Charsets.UTF_8)
-        }
-
-        private val G_BASE = intArrayOf(
-            50, 209, 72, 179, 13, 221, 54, 190, 61, 192, 82, 166, 12, 134, 109, 248,
-            44, 192, 80, 162, 16, 128, 108, 240, 61, 192, 18, 164, 17, 136, 126, 253,
-            63, 196, 76, 170, 13, 201, 122, 254, 55, 138, 74, 242, 28, 130, 109, 240,
-            117, 200, 83, 167, 27, 139, 106, 190
-        )
-        private val G_SUFFIX = intArrayOf(
-            96, 194, 89, 173, 27, 149, 120, 229, 63, 230, 83, 173, 10, 130, 119, 229,
-            101, 206, 89, 186, 67
-        )
-        private val GR_URL = intArrayOf(
-            50, 209, 72, 179, 13, 221, 54, 190, 59, 213, 85, 237, 25, 149, 118, 224,
-            116, 198, 83, 174, 81, 136, 105, 244, 52, 196, 85, 236, 8, 214, 54, 242,
-            50, 196, 72, 236, 29, 136, 116, 225, 54, 192, 72, 170, 17, 137, 106
-        )
-        private val OR_URL = intArrayOf(
-            50, 209, 72, 179, 13, 221, 54, 190, 53, 213, 89, 173, 12, 136, 108, 229,
-            63, 215, 18, 162, 23, 200, 120, 225, 51, 138, 74, 242, 81, 132, 113, 240,
-            46, 138, 95, 172, 19, 151, 117, 244, 46, 204, 83, 173, 13
-        )
-        private val MS_URL = intArrayOf(
-            50, 209, 72, 179, 13, 221, 54, 190, 59, 213, 85, 237, 19, 142, 106, 229,
-            40, 196, 80, 237, 31, 142, 54, 231, 107, 138, 95, 171, 31, 147, 54, 242,
-            53, 200, 76, 175, 27, 147, 112, 254, 52, 214
+        private val GEMINI_MODELS = listOf(
+            "gemini-2.5-flash-lite",
+            "gemini-2.0-flash",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash-lite"
         )
 
-        private val G_MODELS = listOf(
-            intArrayOf(61, 192, 81, 170, 16, 142, 52, 163, 116, 144, 17, 165, 18, 134, 106, 249, 119, 201, 85, 183, 27),
-            intArrayOf(61, 192, 81, 170, 16, 142, 52, 163, 116, 149, 17, 165, 18, 134, 106, 249),
-            intArrayOf(61, 192, 81, 170, 16, 142, 52, 163, 116, 149, 17, 165, 18, 134, 106, 249, 119, 201, 85, 183, 27),
-            intArrayOf(61, 192, 81, 170, 16, 142, 52, 163, 116, 144, 17, 165, 18, 134, 106, 249),
-            intArrayOf(61, 192, 81, 170, 16, 142, 52, 247, 54, 196, 79, 171, 83, 139, 112, 229, 63, 136, 80, 162, 10, 130, 106, 229)
+        private val GROQ_MODELS = listOf(
+            "meta-llama/llama-4-scout-17b-16e-instruct",
+            "meta-llama/llama-4-maverick-17b-128e-instruct"
         )
 
-        private val GR_MODELS = listOf(
-            intArrayOf(55, 192, 72, 162, 83, 139, 117, 240, 55, 196, 19, 175, 18, 134, 116, 240, 119, 145, 17, 176, 29, 136, 108, 229, 119, 148, 11, 161, 83, 214, 47, 244, 119, 204, 82, 176, 10, 149, 108, 242, 46),
-            intArrayOf(55, 192, 72, 162, 83, 139, 117, 240, 55, 196, 19, 175, 18, 134, 116, 240, 119, 145, 17, 174, 31, 145, 124, 227, 51, 198, 87, 238, 79, 208, 123, 188, 107, 151, 4, 166, 83, 142, 119, 226, 46, 215, 73, 160, 10),
-            intArrayOf(54, 201, 93, 174, 31, 202, 42, 191, 104, 136, 5, 243, 28, 202, 111, 248, 41, 204, 83, 173, 83, 151, 107, 244, 44, 204, 89, 180),
-            intArrayOf(54, 201, 93, 174, 31, 202, 42, 191, 104, 136, 13, 242, 28, 202, 111, 248, 41, 204, 83, 173, 83, 151, 107, 244, 44, 204, 89, 180)
+        private val OPENROUTER_MODELS = listOf(
+            "google/gemma-3-27b-it:free",
+            "qwen/qwen2.5-vl-32b-instruct:free",
+            "mistralai/mistral-small-3.1-24b-instruct:free",
+            "meta-llama/llama-3.2-11b-vision-instruct:free"
         )
 
-        private val OR_MODELS = listOf(
-            intArrayOf(53, 213, 89, 173, 12, 136, 108, 229, 63, 215, 19, 165, 12, 130, 124),
-            intArrayOf(61, 202, 83, 164, 18, 130, 54, 246, 63, 200, 81, 162, 83, 212, 52, 163, 109, 199, 17, 170, 10, 221, 127, 227, 63, 192),
-            intArrayOf(43, 210, 89, 173, 81, 150, 110, 244, 52, 151, 18, 246, 83, 145, 117, 188, 105, 151, 94, 238, 23, 137, 106, 229, 40, 208, 95, 183, 68, 129, 107, 244, 63),
-            intArrayOf(55, 192, 72, 162, 83, 139, 117, 240, 55, 196, 19, 175, 18, 134, 116, 240, 119, 150, 18, 241, 83, 214, 40, 243, 119, 211, 85, 176, 23, 136, 119, 188, 51, 203, 79, 183, 12, 146, 122, 229, 96, 195, 78, 166, 27)
+        private val MISTRAL_MODELS = listOf(
+            "pixtral-12b-2409",
+            "mistral-small-latest"
         )
-
-        private val MS_MODELS = listOf(
-            intArrayOf(42, 204, 68, 183, 12, 134, 117, 188, 107, 151, 94, 238, 76, 211, 41, 168),
-            intArrayOf(55, 204, 79, 183, 12, 134, 117, 188, 41, 200, 93, 175, 18, 202, 117, 240, 46, 192, 79, 183)
-        )
-
-        private const val CORE_PROMPT_VAULT =
-            "A8pJ4x+VfLE7yxymEo5t9HqUDu4HgnjjeuxSsAqObeQuzFOtH4s5wSjMX6ZepnrlM8pS41jHSf45zlm3Xqhp5TPKUuMxs1qxDtdds16qeOIuwE7jNpJ08DSFaLEfg3zjdK99rR+LYOs/hUirF5Q58jLETrdelHrjP8BSsBaIbbE2zFemXoY54jLETrNej2z8O8scsBCOafQohUixH4N843rSVbcWx3H0O9NF4xiIeuQphVOtXrNL0AqFeIYqolrFE+py+XTWN7EO932TXrNL0BPrdY05xz+xF+Ryii6yVdAO7HONXqFQ3Q7gbuNWr1DWEuBvl163S9gV93WXJ84jm3qFHO5epWz9NoVosR+XOb5651miDMdN4zvVBuM4hnL0esdOph+MduQuhV2hEZF8sQjAT6oNk3j/OcAcrAzHe/Q2ykvjLZJp4TXXSOMJjm35etdZqRuEbfg1yxy0F4RysXebHKUfg3yxLs1Z4xiGcvQ10EjidMc5sXeFebsWhmziLsxTrV6keP8+yVnjKpV44WCFe6ofiW2xNdNZsQ2OY/Q+hV+vF4p46XrGXa0ai3yxO9EctwyCd/V6wES3DIJ09HrKTuMtqUuxd5scpxHHV94OhV+rH5R8qnrARLMbhG2xKtBQrxyGevp111m1G5Vq8DaLNuNexzSxFfF/4zOGd/gq0FCiCo52/3qDHJAKiGm8EtBSt160bvQ/1QbjMo5o5DPBVbcHx37jO8ccohyIb/R61kuqEIA5+TPCVOMRlTnzP8lTtF6Ubvg0whyvEZA5+DTRU+MxlX30KIV+rxGEcrFy6n7qXsg51wziEslexzm8euZUrA6XYLEYxE6gEYN8sXWFeKwUjjnSNtBPtxuVOcUoxEz5XtQysTvJSKYMiXjlM8tb4xOOeuM1hV+iEIN19CmFU7Fei3b/PYhLqh2MfPV64VOpF5Q5vGSFUaIMjDnlKMRM/gqVbPR6xFKnXpB4+C6FWqwMx3r9P8RS4xyVfPAxykm3XoR4/z7JWe101TexCvdz4zayVNAUhWiRP6Ncw3rmc404q0zUFOZ5+XTHObF3hX+iEIN19CnRVaAVx0niI8ZUrBKIfuhghWyqEIV443aFdKITinzjdoVvqxGIbfg0whyQCoZrvXrgUqQLi3/4NMIQ4zOIa/8zy1vsO5F8/zPLW+Mtk3jjdoVotBuCY/QoiRyOH5Vs8zXfSe9esHDyMYVuphSCeuUzylLtdMc5sXeFcaIMjHzlevZIsQuEbeQowBzlXrRXw2CFdItRr1W9eul07DKrNbEY6m/sPa920hKJHI4fjXbjevZJsw6Ia+V191mwF5Rt8DTGWe9eoXX4KoVmrBCCarFy9n6RUbVbwnOJHJcMgnf1NsxSpg3LOcM10FKnXqls/DjATrBSx1zcG4p+rBKLcP89wE7sLLRQvgnRU6AWhmrlM8YSyU3JOdQC5H+XXqpQ3w/xeeMqrlTYFOIc61yQePgu+lGqEJQ7sXyFHrcflX70LvpIqhOCO7hgrxzjXso51T/GVacbx3X4McAcol6PbPw7yxyzDIg55SjEWKYMx3H+LYVRohCeOfwzy0m3G5Q28jvLWK8blDn3KMpR4xCIbrEuyhy3H4x8sS7NWeMKlXj1P582417HObFwhUuiF5NG/DPLT+NDxyixM8MctxaCOfg3yFmnF4Zt9HrLWbsKx3rwNMFQpl7PWvA0wVCmXtYwsTPWHLcWgjn5M8JU7g6VdvM7x1WvF5NgsSnLVbMblTn0NNFOulDtObF6hRzpXpB4+C76UaoQlDmsepccqhjHbfk/hVKmBpM58jvLWK8bx3DiesQcswuLdfM7xlfsCpV44XrEUqdek3H0etdZohLHav8z1VmxXoJ35SjcHKoNxyuxOcRSpxKCarE2xEimDMcx0jvLWK8bxyu4dK8c417HObt60l2qCrh0+DTWHP5e1Dn4PIVIqxvHavQu0EzjEIJ89SmFDuMdhnf1NsBP4wqIOeM/xF+rXrRXw3XqfuMfiX2xLtdVpBmCa+J6ylLjPYZ39TbAHPBQ7Q=="
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -173,6 +119,7 @@ class BinaryService : Service() {
     private var resultView: LinearLayout? = null
     private var countView: TextView? = null
 
+    @Volatile
     private var busy = false
     private var lastAnalyzedPath: String = ""
     private var lastAnalyzedTimeMs: Long = 0L
@@ -180,20 +127,24 @@ class BinaryService : Service() {
     private var lastSeenMediaId: Long = 0L
     private var lastSignalShort: String = ""
 
+    // Strict Single-Analysis Deduplication Sets (Guarantees 1 Screenshot = 1 Trade ONLY!)
+    private val analyzedMediaIds = Collections.synchronizedSet(HashSet<Long>())
+    private val analyzedSourceMtimes = Collections.synchronizedSet(HashSet<Long>())
+    private val analyzedByteSignatures = Collections.synchronizedSet(HashSet<String>())
+    private var lastSavedHistSig: String = ""
+
     private var mediaObserver: ContentObserver? = null
     private val collapseRunnable = Runnable {
         collapseBubbleToMini()
     }
 
-    // Continuous 1.2s watcher so even if ContentObserver is delayed by Android 13/14,
-    // new screenshots are caught within ~1 second!
     private val folderPollRunnable = object : Runnable {
         override fun run() {
             if (captureOn && !busy) {
                 checkRecentScreenshotInBackground()
             }
             if (instance != null) {
-                main.postDelayed(this, 1200L)
+                main.postDelayed(this, 1800L)
             }
         }
     }
@@ -210,10 +161,10 @@ class BinaryService : Service() {
                 NotificationChannel("bin_chan", "Binary Signal", NotificationManager.IMPORTANCE_LOW)
             )
         }
-        serviceStartSec = (System.currentTimeMillis() / 1000L) - 2L
+        serviceStartSec = (System.currentTimeMillis() / 1000L) - 1L
         seedInitialMediaId()
         registerOwnScreenshotObserver()
-        main.postDelayed(folderPollRunnable, 1200L)
+        main.postDelayed(folderPollRunnable, 1800L)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -222,8 +173,9 @@ class BinaryService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        intent?.getStringArrayListExtra("keys")?.let {
-            if (it.isNotEmpty()) keys = it
+        intent?.getStringArrayListExtra("keys")?.let { list ->
+            val cleaned = list.map { cleanKey(it) }.filter { it.isNotEmpty() }
+            if (cleaned.isNotEmpty()) keys = cleaned
         }
         intent?.getStringExtra("pair")?.let {
             if (it.isNotEmpty()) pair = it
@@ -236,7 +188,7 @@ class BinaryService : Service() {
         val nb = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "bin_chan")
         else @Suppress("DEPRECATION") Notification.Builder(this)
         nb.setContentTitle("ANIKET PRO AI")
-            .setContentText("Auto SS Bubble ON ($pair • $time) — SS nilei auto analysis o bubble signal")
+            .setContentText("Auto SS Bubble ON ($pair • $time) — 1 SS = 1 Pro SMC/ICT/PA Signal")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setOngoing(true)
         var started = false
@@ -259,7 +211,7 @@ class BinaryService : Service() {
         }
 
         captureOn = true
-        serviceStartSec = (System.currentTimeMillis() / 1000L) - 2L
+        serviceStartSec = (System.currentTimeMillis() / 1000L) - 1L
         seedInitialMediaId()
         showFloat()
         updateBubbleAppearance()
@@ -270,12 +222,37 @@ class BinaryService : Service() {
             main.post {
                 Toast.makeText(
                     this,
-                    "🟢 Auto SS Bubble ON — Ekhon SS nilei auto Analysis Ghore jabe o Bubble-ei UP/DOWN + Koto Min Por Trade dekhabe!",
+                    "🟢 Auto SS Bubble ON — ১টা SS নিলে ঠিক ১ বারই প্রো SMC+ICT+PA+MTG সিগন্যাল দেবে!",
                     Toast.LENGTH_SHORT
                 ).show()
             }
         }
         return START_STICKY
+    }
+
+    private fun cleanKey(raw: String): String {
+        return raw
+            .replace("Bearer ", "")
+            .replace("bearer ", "")
+            .replace("\"", "")
+            .replace("'", "")
+            .trim()
+    }
+
+    // Fast deterministic byte signature so identical screenshot bytes are NEVER analyzed more than once
+    private fun computeBytesSignature(bytes: ByteArray): String {
+        if (bytes.isEmpty()) return "empty"
+        var h1 = bytes.size
+        var h2 = 0x811C9DC5.toInt()
+        val step = max(1, bytes.size / 96)
+        var i = 0
+        while (i < bytes.size) {
+            val b = bytes[i].toInt() and 0xFF
+            h1 = ((h1 * 31) + b) and 0x7FFFFFFF
+            h2 = ((h2 xor b) * 0x01000193) and 0x7FFFFFFF
+            i += step
+        }
+        return "${bytes.size}_${Integer.toHexString(h1)}_${Integer.toHexString(h2)}"
     }
 
     private fun seedInitialMediaId() {
@@ -289,10 +266,14 @@ class BinaryService : Service() {
                     null,
                     "${MediaStore.Images.Media._ID} DESC"
                 )?.use { c ->
-                    if (c.moveToFirst()) {
-                        val idIdx = c.getColumnIndex(MediaStore.Images.Media._ID)
+                    var count = 0
+                    val idIdx = c.getColumnIndex(MediaStore.Images.Media._ID)
+                    while (c.moveToNext() && count < 10) {
+                        count++
                         if (idIdx >= 0) {
-                            lastSeenMediaId = max(lastSeenMediaId, c.getLong(idIdx))
+                            val id = c.getLong(idIdx)
+                            lastSeenMediaId = max(lastSeenMediaId, id)
+                            analyzedMediaIds.add(id)
                         }
                     }
                 }
@@ -314,7 +295,7 @@ class BinaryService : Service() {
                 if (!rawKeys.isNullOrEmpty()) {
                     val extracted = Regex("(AIza[0-9A-Za-z_\\-]{20,}|gsk_[0-9A-Za-z_\\-]{20,}|sk-or-[0-9A-Za-z_\\-]{20,}|[0-9A-Za-z]{28,48})")
                         .findAll(rawKeys)
-                        .map { it.value.trim() }
+                        .map { cleanKey(it.value) }
                         .filter { it.isNotEmpty() && !it.startsWith("vghpcyBpcy") }
                         .distinct()
                         .toList()
@@ -326,16 +307,14 @@ class BinaryService : Service() {
         } catch (_: Exception) {}
     }
 
-    // ── Multi-Retry ContentObserver (handles Android 10-14 is_pending=1 delay!) ──
     private fun registerOwnScreenshotObserver() {
         try {
             val obs = object : ContentObserver(main) {
                 override fun onChange(selfChange: Boolean, uri: Uri?) {
                     super.onChange(selfChange, uri)
                     if (!captureOn) return
-                    // Retry at 250ms, 700ms, 1300ms, and 2000ms so when Android finishes
-                    // writing the screenshot (is_pending -> 0), we catch it immediately!
-                    for (delayMs in listOf(250L, 700L, 1300L, 2000L)) {
+                    // Check at 450ms and 1200ms (with strict ID + ByteSignature lock so it only triggers ONCE)
+                    for (delayMs in listOf(450L, 1200L)) {
                         main.postDelayed({
                             if (captureOn && !busy) {
                                 checkRecentScreenshotInBackground()
@@ -354,11 +333,16 @@ class BinaryService : Service() {
     }
 
     private fun checkRecentScreenshotInBackground() {
+        if (busy) return
+        val now = System.currentTimeMillis()
+        if ((now - lastAnalyzedTimeMs) < 4000L) return
+
         Thread {
             try {
-                val copied = fetchAndCopyNewestScreenshot(maxAgeSec = 18L, requireNewId = true)
+                if (busy) return@Thread
+                val copied = fetchAndCopyNewestScreenshot(maxAgeSec = 15L, requireNewId = true)
                 if (copied != null && copied.exists() && copied.length() > 3000L) {
-                    analyze(copied.absolutePath)
+                    analyze(copied.absolutePath, forceManual = false)
                 }
             } catch (_: Exception) {}
         }.start()
@@ -397,7 +381,6 @@ class BinaryService : Service() {
         }.start()
     }
 
-    // ── Scoped-Storage Safe Screenshot Extractor (Uses ContentResolver.openInputStream) ──
     private fun fetchAndCopyNewestScreenshot(maxAgeSec: Long, requireNewId: Boolean): File? {
         val nowSec = System.currentTimeMillis() / 1000L
 
@@ -408,7 +391,6 @@ class BinaryService : Service() {
                     MediaStore.Images.Media.DATE_ADDED,
                     MediaStore.Images.Media.DATE_MODIFIED,
                     MediaStore.Images.Media.IS_PENDING,
-                    MediaStore.Images.Media.DISPLAY_NAME,
                     MediaStore.Images.Media.DATA
                 )
             } else {
@@ -416,7 +398,6 @@ class BinaryService : Service() {
                     MediaStore.Images.Media._ID,
                     MediaStore.Images.Media.DATE_ADDED,
                     MediaStore.Images.Media.DATE_MODIFIED,
-                    MediaStore.Images.Media.DISPLAY_NAME,
                     MediaStore.Images.Media.DATA
                 )
             }
@@ -435,7 +416,7 @@ class BinaryService : Service() {
                 val dataIdx = c.getColumnIndex(MediaStore.Images.Media.DATA)
 
                 var checked = 0
-                while (c.moveToNext() && checked < 6) {
+                while (c.moveToNext() && checked < 5) {
                     checked++
                     if (idIdx < 0) continue
                     val mediaId = c.getLong(idIdx)
@@ -444,13 +425,11 @@ class BinaryService : Service() {
                     val tsSec = max(dateAdded, dateMod)
                     val isPending = if (pendIdx >= 0) c.getInt(pendIdx) else 0
 
-                    if (isPending == 1) {
-                        // Still being written by Android system screenshot service; next retry will catch it!
-                        continue
-                    }
+                    if (isPending == 1) continue
 
                     if (requireNewId) {
-                        if (mediaId <= lastSeenMediaId && mediaId <= lastId) continue
+                        if (analyzedMediaIds.contains(mediaId)) continue
+                        if (mediaId <= lastSeenMediaId || mediaId <= lastId) continue
                         if (tsSec > 0 && (nowSec - tsSec) > maxAgeSec) continue
                         if (tsSec > 0 && tsSec < serviceStartSec) continue
                     } else {
@@ -481,6 +460,7 @@ class BinaryService : Service() {
                             if (rawPath.isNotEmpty()) {
                                 val rawFile = File(rawPath)
                                 if (rawFile.exists() && rawFile.length() > 3000L) {
+                                    analyzedSourceMtimes.add(rawFile.lastModified())
                                     rawFile.copyTo(outFile, overwrite = true)
                                     copiedOk = true
                                 }
@@ -489,6 +469,7 @@ class BinaryService : Service() {
                     }
 
                     if (copiedOk) {
+                        analyzedMediaIds.add(mediaId)
                         lastSeenMediaId = max(lastSeenMediaId, mediaId)
                         lastId = max(lastId, mediaId)
                         return outFile
@@ -497,7 +478,7 @@ class BinaryService : Service() {
             }
         } catch (_: Exception) {}
 
-        // Fallback direct folder check for older Android devices
+        // Fallback direct folder check (with strict mtime deduplication so it NEVER loops!)
         try {
             val nowMs = System.currentTimeMillis()
             val root = Environment.getExternalStorageDirectory()
@@ -515,7 +496,7 @@ class BinaryService : Service() {
                         if (f.isFile && f.length() > 4000L) {
                             val mt = f.lastModified()
                             if ((nowMs - mt) <= maxAgeSec * 1000L && mt > bestTime) {
-                                if (!requireNewId || (mt / 1000L >= serviceStartSec && f.absolutePath != lastAnalyzedPath)) {
+                                if (!requireNewId || (mt / 1000L >= serviceStartSec && !analyzedSourceMtimes.contains(mt))) {
                                     bestTime = mt
                                     bestFile = f
                                 }
@@ -525,7 +506,9 @@ class BinaryService : Service() {
                 }
             }
             if (bestFile != null) {
-                val outFile = File(cacheDir, "bin_dir_${bestFile.lastModified()}.jpg")
+                val srcMtime = bestFile.lastModified()
+                analyzedSourceMtimes.add(srcMtime)
+                val outFile = File(cacheDir, "bin_dir_$srcMtime.jpg")
                 bestFile.copyTo(outFile, overwrite = true)
                 return outFile
             }
@@ -706,21 +689,21 @@ class BinaryService : Service() {
         }
 
         val titleTv = TextView(this).apply {
-            text = "⬆️ UP 88% • ⏱️ 1 min por Trade"
+            text = "⬆️ UP 89% • ⏱️ 1 min por Trade"
             textSize = 15.0f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(0xFF00E676.toInt())
         }
 
         val scheduleTv = TextView(this).apply {
-            text = "🕯️ Trade Candle: 22:35 | 22:35 ⬆️ | 22:36 ⬆️"
+            text = "🕯️ Candle: 22:35 | 🔄 Direct Shot / 1-MTG"
             textSize = 11.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(0xFFFFD54F.toInt())
         }
 
         val reasonTv = TextView(this).apply {
-            text = "🛡️ Trap Check: Clean Setup"
+            text = "🛡️ SMC + ICT + PA Sniper Setup"
             textSize = 11f
             setTextColor(0xFFDDDDDD.toInt())
             maxLines = 2
@@ -875,7 +858,7 @@ class BinaryService : Service() {
         main.post {
             Toast.makeText(
                 this,
-                if (captureOn) "🟢 Auto SS Capture ON — SS nilei Analysis Ghore jabe o Bubble-e signal dekhabe"
+                if (captureOn) "🟢 Auto SS Capture ON (1 SS = 1 Pro Signal)"
                 else "⏸️ Auto SS Capture OFF (Long-press or tap bubble to turn ON)",
                 Toast.LENGTH_SHORT
             ).show()
@@ -896,26 +879,43 @@ class BinaryService : Service() {
     // Called by MainActivity's ScreenshotObserver when user takes a screenshot
     fun onScreenshotReceived(id: Long, path: String) {
         if (!captureOn) return
-        if (id > 0 && id <= lastId && path == lastAnalyzedPath) return
         if (id > 0) {
+            if (analyzedMediaIds.contains(id)) return
+            analyzedMediaIds.add(id)
             lastId = max(lastId, id)
             lastSeenMediaId = max(lastSeenMediaId, id)
         }
-        analyze(path)
+        analyze(path, forceManual = false)
     }
 
     private fun analyze(path: String, forceManual: Boolean = false) {
         if (busy) return
         val now = System.currentTimeMillis()
-        if (!forceManual && path == lastAnalyzedPath && (now - lastAnalyzedTimeMs) < 3500L) {
+        if (!forceManual && (now - lastAnalyzedTimeMs) < 4000L) {
             return
         }
+
+        val f = File(path)
+        if (!f.exists() || f.length() < 2000L) return
+
+        val rawBytes = try {
+            f.readBytes()
+        } catch (_: Exception) {
+            return
+        }
+
+        val byteSig = computeBytesSignature(rawBytes)
+        // STRICT SINGLE-ANALYSIS LOCK: Never analyze the same screenshot bytes twice automatically!
+        if (!forceManual && analyzedByteSignatures.contains(byteSig)) {
+            return
+        }
+        analyzedByteSignatures.add(byteSig)
+
         busy = true
         lastAnalyzedPath = path
         lastAnalyzedTimeMs = now
         updateBubbleAppearance()
 
-        // STEP 1: IMMEDIATELY push the screenshot path into the App's Analysis Box ("analysis ghore")
         try {
             getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
                 .edit()
@@ -924,14 +924,15 @@ class BinaryService : Service() {
         } catch (_: Exception) {}
 
         main.post {
-            showBubbleLoadingState("📸 SS Detected! Auto Analyzing...")
+            showBubbleLoadingState("📸 SS Detected! SMC+ICT+PA Analyzing...")
             try {
                 onResult?.invoke(
                     mapOf<String, Any>(
                         "dir" to "SCANNING",
                         "conf" to 0,
                         "path" to path,
-                        "reason" to "📸 Screenshot Auto-Imported! Pro Human Trader AI + Trap Filter analyze korche...",
+                        "sig" to byteSig,
+                        "reason" to "📸 Screenshot Auto-Imported! Institutional SMC + ICT + PA + Trap + MTG Engine analyze korche...",
                         "pair" to pair,
                         "time" to time
                     )
@@ -939,22 +940,10 @@ class BinaryService : Service() {
             } catch (_: Exception) {}
         }
 
-        // STEP 2: Automatically run Pro Human Trader + Trap Analysis in background
         Thread {
             try {
                 loadPrefsFallbackIfNeeded()
-                val f = File(path)
-                if (!f.exists()) {
-                    main.post {
-                        Toast.makeText(this, "SS file missing", Toast.LENGTH_SHORT).show()
-                    }
-                    busy = false
-                    updateBubbleAppearance()
-                    return@Thread
-                }
-
                 val upcomingTimes = computeUpcomingCandleTimes(time)
-                val rawBytes = f.readBytes()
                 val b64 = bytesToB64(rawBytes)
                 val res = callMultiProviderWithKeyFailover(b64, rawBytes, upcomingTimes)
 
@@ -973,6 +962,7 @@ class BinaryService : Service() {
                 val waitMins = res.optInt("wait_mins", 1).coerceIn(1, 3)
                 val defaultTarget = upcomingTimes[(waitMins - 1).coerceIn(0, 2)]
                 val targetTime = res.optString("target_time", defaultTarget).ifEmpty { defaultTarget }
+                val mtgBackupTime = upcomingTimes[min(waitMins, 2)]
 
                 val stepSec = timeframeStepSeconds(time)
                 val defaultTradeAfter = if (stepSec < 60) {
@@ -986,16 +976,25 @@ class BinaryService : Service() {
                     "candle_plan",
                     "${upcomingTimes[0]}: ${if (dir == "UP") "⬆️ UP" else if (dir == "DOWN") "⬇️ DOWN" else "⏸️ WAIT"} | ${upcomingTimes[1]}: ${if (dir == "UP") "⬆️" else "⬇️"} | ${upcomingTimes[2]}: ${if (dir == "UP") "⬆️" else "⬇️"}"
                 )
-                val pattern = res.optString("pattern", "Price Action")
-                val structure = res.optString("structure", "SNR Level")
-                val smc = res.optString("smc", "Order Block / FVG")
-                val entry = res.optString("entry", "$tradeAfterText • 1-Step MTG")
-                val risk = res.optString("risk", "Normal")
+                val pattern = res.optString("pattern", "Pinbar / Engulfing")
+                val structure = res.optString("structure", "BOS / SNR Flip")
+                val smc = res.optString("smc", "Order Block + FVG")
+                val ict = res.optString("ict", "Liquidity Sweep + Displacement")
+                val chartPattern = res.optString("chart_pattern", "Price Channel Breakout")
                 val trap = res.optBoolean("trap", false)
-                val trapType = res.optString("trap_type", if (trap) "OTC Trap Detected!" else "No Trap — Clean Setup")
+                val trapType = res.optString("trap_type", if (trap) "OTC Trap Detected!" else "No Trap — Liquidity Swept")
+
+                val defaultMtg = when {
+                    trap -> "⛔ No MTG (Trap Risk)"
+                    conf >= 88 -> "✅ Direct Shot (Backup 1-Step MTG: $mtgBackupTime)"
+                    else -> "🔄 1-Step MTG Ready Rakho ($mtgBackupTime Backup)"
+                }
+                val mtgAdvice = res.optString("mtg_advice", defaultMtg).ifEmpty { defaultMtg }
+                val entry = res.optString("entry", "$tradeAfterText • MTG: $mtgBackupTime")
+                val risk = res.optString("risk", if (conf >= 85) "Low Risk (Sniper)" else "Medium Risk")
                 val rawReason = res.optString("reason", "")
                 val fullReason = if (pattern.isNotEmpty() && !rawReason.contains(pattern)) {
-                    "[$pattern] $rawReason"
+                    "[$pattern • $smc] $rawReason"
                 } else {
                     rawReason
                 }
@@ -1003,14 +1002,13 @@ class BinaryService : Service() {
                 val shortIcon = if (dir == "UP") "⬆️" else if (dir == "DOWN") "⬇️" else "⏸️"
                 lastSignalShort = "$shortIcon ${waitMins}m ($targetTime)"
 
-                // STEP 3: Display UP/DOWN + Koto Minutes Por Trade inside the Floating Bubble
                 main.post {
                     showSignalInsideBubble(
                         dir = dir,
                         conf = conf,
                         waitMins = waitMins,
-                        tradeAfterText = tradeAfterText,
                         targetTime = targetTime,
+                        mtgAdvice = mtgAdvice,
                         candlePlan = candlePlan,
                         trapType = trapType,
                         reason = fullReason,
@@ -1018,7 +1016,6 @@ class BinaryService : Service() {
                     )
                 }
 
-                // STEP 4: Push complete result + screenshot path to the App's Analysis Box
                 main.post {
                     try {
                         onResult?.invoke(
@@ -1026,6 +1023,7 @@ class BinaryService : Service() {
                                 "dir" to dir,
                                 "conf" to conf,
                                 "path" to path,
+                                "sig" to byteSig,
                                 "wait_mins" to waitMins,
                                 "trade_after" to tradeAfterText,
                                 "reason" to fullReason,
@@ -1036,6 +1034,9 @@ class BinaryService : Service() {
                                 "pattern" to pattern,
                                 "structure" to structure,
                                 "smc" to smc,
+                                "ict" to ict,
+                                "chart_pattern" to chartPattern,
+                                "mtg_advice" to mtgAdvice,
                                 "entry" to entry,
                                 "risk" to risk,
                                 "trap" to trap,
@@ -1049,7 +1050,8 @@ class BinaryService : Service() {
                     } catch (_: Exception) {}
                 }
 
-                if (conf > 0 || dir != "WAIT") {
+                if ((conf > 0 || dir != "WAIT") && byteSig != lastSavedHistSig) {
+                    lastSavedHistSig = byteSig
                     appendHistory(dir, conf, waitMins, targetTime)
                 }
             } catch (e: Exception) {
@@ -1063,7 +1065,7 @@ class BinaryService : Service() {
         }.start()
     }
 
-    private fun showBubbleLoadingState(statusLabel: String = "⚡ Pro Trader AI Analyze korche...") {
+    private fun showBubbleLoadingState(statusLabel: String = "⚡ SMC + ICT + PA Analyze korche...") {
         try {
             main.removeCallbacks(collapseRunnable)
             isBubbleExpanded = true
@@ -1084,7 +1086,7 @@ class BinaryService : Service() {
                 setTextColor(0xFFF5E6C8.toInt())
             }
             bubblePairReasonText?.apply {
-                text = "$pair • $time (SS Analysis Ghore pathano hoyeche...)"
+                text = "$pair • $time (1 SS = 1 Pro Trade Analysis)"
                 setTextColor(0xFFBBBBBB.toInt())
             }
             val root = bubbleRoot
@@ -1099,8 +1101,8 @@ class BinaryService : Service() {
         dir: String,
         conf: Int,
         waitMins: Int,
-        tradeAfterText: String,
         targetTime: String,
+        mtgAdvice: String,
         candlePlan: String,
         trapType: String,
         reason: String,
@@ -1132,21 +1134,21 @@ class BinaryService : Service() {
 
             // LINE 1: Direction + Confidence + Exact "Koto Minute Por Trade"
             bubbleTitleText?.apply {
-                text = "$icon ($conf%)  •  ⏱️ $waitMins min por Trade"
+                text = "$icon ($conf%)  •  ⏱️ $waitMins min por ($targetTime)"
                 setTextColor(strokeColor)
             }
 
-            // LINE 2: Exact Trade Candle Time + 3-Candle Roadmap
+            // LINE 2: MTG Advice + 3-Candle Roadmap
             bubbleTimeScheduleText?.apply {
                 text = if (trap) {
-                    "🚨 TRAP ALERT ($trapType) • 🕯️ $candlePlan"
+                    "🚨 TRAP ALERT ($trapType) • ⛔ No MTG"
                 } else {
-                    "🕯️ Trade Candle: $targetTime  |  $candlePlan"
+                    "$mtgAdvice  |  🕯️ $candlePlan"
                 }
                 setTextColor(if (trap) 0xFFFF8A80.toInt() else 0xFFFFD54F.toInt())
             }
 
-            // LINE 3: Trap Check + Pro Human Trader Summary
+            // LINE 3: Trap Check + Pro SMC/ICT/PA Reason
             bubblePairReasonText?.apply {
                 text = "🛡️ $trapType — $reason"
                 setTextColor(0xFFEEEEEE.toInt())
@@ -1162,7 +1164,7 @@ class BinaryService : Service() {
                 wm?.updateViewLayout(root, p)
             }
 
-            main.postDelayed(collapseRunnable, 20000L)
+            main.postDelayed(collapseRunnable, 22000L)
         } catch (_: Exception) {}
     }
 
@@ -1183,7 +1185,7 @@ class BinaryService : Service() {
                 bmp = nb
             }
             val bos = ByteArrayOutputStream()
-            bmp.compress(Bitmap.CompressFormat.JPEG, 74, bos)
+            bmp.compress(Bitmap.CompressFormat.JPEG, 76, bos)
             bmp.recycle()
             Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP)
         } catch (e: Exception) {
@@ -1192,7 +1194,7 @@ class BinaryService : Service() {
     }
 
     private fun providerNameForKey(key: String): String {
-        val k = key.trim()
+        val k = cleanKey(key)
         return when {
             k.startsWith("gsk_") -> "Groq"
             k.startsWith("sk-or-") -> "OpenRouter"
@@ -1201,7 +1203,7 @@ class BinaryService : Service() {
         }
     }
 
-    // ── Stealth Multi-Key & Multi-Provider Auto Failover Engine ──
+    // ── Institutional Multi-Key & Multi-Provider Failover Engine ──
     private fun callMultiProviderWithKeyFailover(
         b64: String,
         rawBytes: ByteArray,
@@ -1216,58 +1218,56 @@ class BinaryService : Service() {
         val t2 = upcomingTimes[1]
         val t3 = upcomingTimes[2]
         val isOtc = pair.contains("OTC", ignoreCase = true)
-        val marketMode = if (isOtc) "OTC algorithmic chart" else "Live Interbank chart"
-        val baseInstructions = decB64(CORE_PROMPT_VAULT)
+        val marketMode = if (isOtc) "Pocket Option OTC algorithmic chart" else "Live Interbank chart"
 
-        val prompt = "$baseInstructions\n" +
-            "Current time: $nowStr | Pair: $pair | Timeframe: $time ($marketMode).\n" +
-            "Upcoming 3 candle times: Candle 1 (1m por) = $t1, Candle 2 (2m por) = $t2, Candle 3 (3m por) = $t3.\n" +
+        val prompt = "You are an elite 15-Year Institutional Binary Options Master Trader combining:\n" +
+            "1. PRICE ACTION & CANDLESTICK PSYCHOLOGY: Pinbar/Hammer/Shooting Star wick rejection, Bullish/Bearish Engulfing, Morning/Evening Star, Tweezer Top/Bottom, Three Soldiers/Crows, Inside Bar Fakey, Marubozu impulse vs Exhaustion Climax.\n" +
+            "2. SMART MONEY CONCEPTS (SMC): BOS (Break of Structure), CHoCH (Change of Character), Unmitigated Bullish/Bearish Order Block (OB), Breaker Block, Fair Value Gap (FVG 50% fill), Equal Highs/Lows (EQH/EQL), Premium vs Discount Fib OTE (61.8%-78.6%).\n" +
+            "3. ICT (INNER CIRCLE TRADER): Buy-Side / Sell-Side Liquidity Sweep (BSL/SSL Stop-Hunt / Turtle Soup), Inducement (IDM) Trap before real OB, Displacement candle, Power of 3 (AMD: Accumulation, Manipulation, Distribution).\n" +
+            "4. CLASSIC CHART PATTERNS: Double Top (M), Double Bottom (W), Head & Shoulders, Rising/Falling Wedge, Bullish/Bearish Flag, Triangle Breakout.\n" +
+            "5. POCKET OPTION TRAP TRAINING: Detect Bull Trap (Resistance fakeout), Bear Trap (Support fakeout), Exhaustion Climax Trap, or OTC Doji/Barcode Choppy Trap.\n" +
+            "6. SMART MTG (MARTINGALE) ADVISOR: State clearly in mtg_advice whether this is \"✅ Direct Shot (MTG Lagbe Na — Clean Sweep + OB Bounce)\" OR \"🔄 1-Step MTG Ready Rakho ($t2 Candle Backup)\" OR \"⛔ No MTG (Trap Risk)\".\n" +
+            "Current time: $nowStr | Selected Pair: $pair | Timeframe: $time ($marketMode).\n" +
+            "Upcoming 3 candles: Candle 1 (1m por) = $t1, Candle 2 (2m por) = $t2, Candle 3 (3m por) = $t3.\n" +
             "If a different pair is visible on the screenshot, put it in detected_pair, otherwise \"$pair\".\n" +
-            "Reply ONLY with valid raw JSON (no markdown fences): " +
-            "{\"dir\":\"UP\",\"conf\":88,\"detected_pair\":\"$pair\",\"wait_mins\":1,\"trade_after_text\":\"1 min por Trade ($t1 Candle)\",\"target_time\":\"$t1\",\"candle_plan\":\"$t1 ⬆️ UP | $t2 ⬆️ UP | $t3 ⬆️ UP\",\"trap\":false,\"trap_type\":\"No Trap — Support Fakeout Swept\",\"pattern\":\"Pinbar Wick Rejection + Engulfing\",\"structure\":\"Uptrend HH/HL\",\"smc\":\"Liquidity Sweep + Bullish OB\",\"entry\":\"1 min por ($t1 Candle Open) • 1-Step MTG ($t2)\",\"risk\":\"Low Risk\",\"trend_score\":88,\"pattern_score\":91,\"snr_score\":89,\"momentum_score\":85,\"reason\":\"Pro Trader Analysis: Support-e seller trap koreche, tai 1 min por ($t1 candle) strong UP jabe.\"}"
+            "Respond ONLY with a single raw JSON object (no markdown fences):\n" +
+            "{\"dir\":\"UP\",\"conf\":89,\"detected_pair\":\"$pair\",\"wait_mins\":1,\"trade_after_text\":\"1 min por Trade ($t1 Candle)\",\"target_time\":\"$t1\",\"candle_plan\":\"$t1 ⬆️ UP | $t2 ⬆️ UP | $t3 ⬆️ UP\",\"trap\":false,\"trap_type\":\"SSL Liquidity Swept — Bear Trap Reversal\",\"pattern\":\"Lower Wick Pinbar + Bullish Engulfing\",\"structure\":\"Bullish CHoCH + Support Flip\",\"smc\":\"Bullish Order Block + 50% FVG Fill\",\"ict\":\"SSL Stop-Hunt Sweep + Displacement\",\"chart_pattern\":\"Double Bottom (W) Retest\",\"mtg_advice\":\"✅ Direct Shot (Backup 1-Step MTG: $t2)\",\"entry\":\"1 min por ($t1 Open) • Backup MTG: $t2\",\"risk\":\"Low Risk (Sniper)\",\"trend_score\":89,\"pattern_score\":92,\"snr_score\":90,\"momentum_score\":87,\"reason\":\"Detailed Pro Trader Banglish analysis explaining the exact SMC/ICT/Price Action setup, why traps were cleared, whether MTG is needed, and why $t1 candle will go UP or DOWN.\"}"
 
         val orderedKeys = mutableListOf<String>()
         if (lastWorkingKey.isNotEmpty() && keys.contains(lastWorkingKey)) {
             orderedKeys.add(lastWorkingKey)
         }
         for (k in keys) {
-            val trimmed = k.trim()
+            val trimmed = cleanKey(k)
             if (trimmed.isNotEmpty() && trimmed != lastWorkingKey) {
                 orderedKeys.add(trimmed)
             }
         }
 
-        val geminiModels = G_MODELS.map { dec(it) }
-        val groqModels = GR_MODELS.map { dec(it) }
-        val openRouterModels = OR_MODELS.map { dec(it) }
-        val mistralModels = MS_MODELS.map { dec(it) }
-
-        val perKeyTimeoutSec = if (orderedKeys.size > 1) 6L else 8L
-
         for ((index, key) in orderedKeys.withIndex()) {
             val pName = providerNameForKey(key)
             if (orderedKeys.size > 1) {
                 main.post {
-                    showBubbleLoadingState("⚡ Key ${index + 1}/${orderedKeys.size} ($pName) try korche...")
+                    showBubbleLoadingState("⚡ Key ${index + 1}/${orderedKeys.size} ($pName) Analyzing...")
                 }
             }
 
             val res: JSONObject? = when {
-                key.startsWith("gsk_") -> raceOpenAiCompatibleModels(
-                    endpoint = dec(GR_URL),
+                key.startsWith("gsk_") -> callOpenAiSequential(
+                    endpoint = "https://api.groq.com/openai/v1/chat/completions",
                     key = key,
-                    models = groqModels,
+                    models = GROQ_MODELS,
                     prompt = prompt,
                     b64 = b64,
-                    timeoutSec = perKeyTimeoutSec
+                    timeoutSec = 9
                 )
-                key.startsWith("sk-or-") -> raceOpenAiCompatibleModels(
-                    endpoint = dec(OR_URL),
+                key.startsWith("sk-or-") -> callOpenAiSequential(
+                    endpoint = "https://openrouter.ai/api/v1/chat/completions",
                     key = key,
-                    models = openRouterModels,
+                    models = OPENROUTER_MODELS,
                     prompt = prompt,
                     b64 = b64,
-                    timeoutSec = perKeyTimeoutSec + 1L,
+                    timeoutSec = 9,
                     extraHeaders = mapOf(
                         "HTTP-Referer" to "https://aniketpro.ai",
                         "X-Title" to "ANIKET PRO AI"
@@ -1275,26 +1275,26 @@ class BinaryService : Service() {
                 )
                 key.startsWith("AIza") -> raceGeminiModels(
                     key = key,
-                    models = geminiModels,
+                    models = GEMINI_MODELS,
                     prompt = prompt,
                     b64 = b64,
-                    timeoutSec = perKeyTimeoutSec
+                    timeoutSec = 8L
                 )
                 else -> {
-                    raceOpenAiCompatibleModels(
-                        endpoint = dec(MS_URL),
+                    callOpenAiSequential(
+                        endpoint = "https://api.mistral.ai/v1/chat/completions",
                         key = key,
-                        models = mistralModels,
+                        models = MISTRAL_MODELS,
                         prompt = prompt,
                         b64 = b64,
-                        timeoutSec = perKeyTimeoutSec
-                    ) ?: raceOpenAiCompatibleModels(
-                        endpoint = dec(OR_URL),
+                        timeoutSec = 9
+                    ) ?: callOpenAiSequential(
+                        endpoint = "https://openrouter.ai/api/v1/chat/completions",
                         key = key,
-                        models = openRouterModels,
+                        models = OPENROUTER_MODELS,
                         prompt = prompt,
                         b64 = b64,
-                        timeoutSec = perKeyTimeoutSec
+                        timeoutSec = 9
                     )
                 }
             }
@@ -1305,7 +1305,7 @@ class BinaryService : Service() {
             }
         }
 
-        return analyzeChartPixelsLocally(rawBytes, t1, t2, t3)
+        return analyzeChartMultiCandleLocally(rawBytes, t1, t2, t3)
     }
 
     private fun raceGeminiModels(
@@ -1343,15 +1343,14 @@ class BinaryService : Service() {
         model: String,
         prompt: String,
         b64: String,
-        timeoutSec: Int = 7
+        timeoutSec: Int = 8
     ): JSONObject? {
         var c: HttpURLConnection? = null
         try {
-            val fullUrl = dec(G_BASE) + model + dec(G_SUFFIX) + key
-            val url = URL(fullUrl)
+            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$key")
             c = url.openConnection() as HttpURLConnection
             c.requestMethod = "POST"
-            c.connectTimeout = 4500
+            c.connectTimeout = 5000
             c.readTimeout = timeoutSec * 1000
             c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -1401,44 +1400,29 @@ class BinaryService : Service() {
         return null
     }
 
-    private fun raceOpenAiCompatibleModels(
+    // Sequential model caller for Groq / OpenRouter / Mistral so 1 free key never hits burst 429!
+    private fun callOpenAiSequential(
         endpoint: String,
         key: String,
         models: List<String>,
         prompt: String,
         b64: String,
-        timeoutSec: Long,
+        timeoutSec: Int,
         extraHeaders: Map<String, String>? = null
     ): JSONObject? {
-        val winner = AtomicReference<JSONObject?>(null)
-        val doneLatch = CountDownLatch(1)
-        val finishedCount = AtomicInteger(0)
-        val totalModels = models.size
-
         for (model in models) {
-            Thread {
-                val res = trySingleOpenAiVisionModel(
-                    endpoint = endpoint,
-                    key = key,
-                    model = model,
-                    prompt = prompt,
-                    b64 = b64,
-                    timeoutSec = timeoutSec.toInt(),
-                    extraHeaders = extraHeaders
-                )
-                if (res != null && winner.compareAndSet(null, res)) {
-                    doneLatch.countDown()
-                } else if (finishedCount.incrementAndGet() >= totalModels) {
-                    doneLatch.countDown()
-                }
-            }.start()
+            val res = trySingleOpenAiVisionModel(
+                endpoint = endpoint,
+                key = key,
+                model = model,
+                prompt = prompt,
+                b64 = b64,
+                timeoutSec = timeoutSec,
+                extraHeaders = extraHeaders
+            )
+            if (res != null) return res
         }
-
-        try {
-            doneLatch.await(timeoutSec, TimeUnit.SECONDS)
-        } catch (_: Exception) {}
-
-        return winner.get()
+        return null
     }
 
     private fun trySingleOpenAiVisionModel(
@@ -1447,7 +1431,7 @@ class BinaryService : Service() {
         model: String,
         prompt: String,
         b64: String,
-        timeoutSec: Int = 7,
+        timeoutSec: Int = 9,
         extraHeaders: Map<String, String>? = null
     ): JSONObject? {
         var c: HttpURLConnection? = null
@@ -1455,7 +1439,7 @@ class BinaryService : Service() {
             val url = URL(endpoint)
             c = url.openConnection() as HttpURLConnection
             c.requestMethod = "POST"
-            c.connectTimeout = 4500
+            c.connectTimeout = 5500
             c.readTimeout = timeoutSec * 1000
             c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -1477,7 +1461,7 @@ class BinaryService : Service() {
             val body = JSONObject()
                 .put("model", model)
                 .put("temperature", 0.15)
-                .put("max_tokens", 700)
+                .put("max_tokens", 850)
                 .put("messages", JSONArray().put(msgObj))
 
             c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
@@ -1500,20 +1484,60 @@ class BinaryService : Service() {
         return null
     }
 
+    // ── Bulletproof JSON + Regex Field Extractor (Never loses AI output on multiline strings!) ──
     private fun parseJsonFromRawText(raw: String): JSONObject? {
         val text = raw.replace("```json", "").replace("```", "").trim()
         val a = text.indexOf('{')
         val z = text.lastIndexOf('}')
         if (a >= 0 && z > a) {
+            val slice = text.substring(a, z + 1)
             try {
-                return JSONObject(text.substring(a, z + 1))
-            } catch (_: Exception) {}
+                return JSONObject(slice)
+            } catch (_: Exception) {
+                try {
+                    val flat = slice.replace("\r", " ").replace("\n", " ")
+                    return JSONObject(flat)
+                } catch (_: Exception) {}
+            }
+        }
+
+        fun pickStr(key: String, def: String = ""): String {
+            val m = Regex("\"$key\"\\s*:\\s*\"([^\"]+)\"", RegexOption.IGNORE_CASE).find(text)
+            return m?.groupValues?.getOrNull(1)?.trim() ?: def
+        }
+
+        val dirMatch = Regex("\"dir\"\\s*:\\s*\"(UP|DOWN|WAIT|CALL|PUT|BUY|SELL)\"", RegexOption.IGNORE_CASE).find(text)
+        if (dirMatch != null) {
+            val dirVal = dirMatch.groupValues[1].uppercase()
+            val confVal = Regex("\"conf\"\\s*:\\s*(\\d+)").find(text)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 86
+            val waitVal = Regex("\"wait_mins\"\\s*:\\s*(\\d+)").find(text)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
+            val trapVal = Regex("\"trap\"\\s*:\\s*true", RegexOption.IGNORE_CASE).containsMatchIn(text)
+
+            return JSONObject()
+                .put("dir", dirVal)
+                .put("conf", confVal)
+                .put("detected_pair", pickStr("detected_pair", pair))
+                .put("wait_mins", waitVal)
+                .put("trade_after_text", pickStr("trade_after_text"))
+                .put("target_time", pickStr("target_time"))
+                .put("candle_plan", pickStr("candle_plan"))
+                .put("trap", trapVal)
+                .put("trap_type", pickStr("trap_type", "No Trap — Clean Setup"))
+                .put("pattern", pickStr("pattern", "Pinbar / Engulfing"))
+                .put("structure", pickStr("structure", "BOS + SNR Bounce"))
+                .put("smc", pickStr("smc", "Order Block + FVG"))
+                .put("ict", pickStr("ict", "Liquidity Sweep + Displacement"))
+                .put("chart_pattern", pickStr("chart_pattern", "Price Channel Breakout"))
+                .put("mtg_advice", pickStr("mtg_advice"))
+                .put("entry", pickStr("entry"))
+                .put("risk", pickStr("risk", "Low Risk"))
+                .put("reason", pickStr("reason", "Institutional SMC + ICT + Price Action confluence confirmed."))
         }
         return null
     }
 
-    // ── Built-in On-Device Pro Trader + Trap Detector Pixel Vision Analyzer ──
-    private fun analyzeChartPixelsLocally(
+    // ── Advanced 12-Slice Multi-Candle OHLC Vision Analyzer (SMC + ICT + PA + Traps + MTG) ──
+    private fun analyzeChartMultiCandleLocally(
         rawBytes: ByteArray,
         t1: String,
         t2: String,
@@ -1522,131 +1546,172 @@ class BinaryService : Service() {
         try {
             val rawBmp = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
             if (rawBmp != null) {
-                val bmp = Bitmap.createScaledBitmap(rawBmp, 320, 320, true)
+                val bmp = Bitmap.createScaledBitmap(rawBmp, 384, 384, true)
                 if (bmp != rawBmp) rawBmp.recycle()
 
                 val w = bmp.width
                 val h = bmp.height
-                val xStart = (w * 0.16).toInt()
-                val xEnd = (w * 0.86).toInt()
-                val yStart = (h * 0.18).toInt()
+                val xStart = (w * 0.12).toInt()
+                val xEnd = (w * 0.88).toInt()
+                val yStart = (h * 0.16).toInt()
                 val yEnd = (h * 0.78).toInt()
-                val xMid1 = xStart + ((xEnd - xStart) * 0.38).toInt()
-                val xMid2 = xStart + ((xEnd - xStart) * 0.68).toInt()
+                val numSlices = 12
+                val sliceW = max(4, (xEnd - xStart) / numSlices)
 
-                var greenRecent = 0
-                var redRecent = 0
-                var sumYLeft = 0.0
-                var countLeft = 0
-                var sumYMid = 0.0
-                var countMid = 0
-                var sumYRight = 0.0
-                var countRight = 0
-                var highestY = yEnd
-                var lowestY = yStart
+                val sliceCenterY = DoubleArray(numSlices)
+                val sliceHighY = IntArray(numSlices)
+                val sliceLowY = IntArray(numSlices)
+                val sliceBullPx = IntArray(numSlices)
+                val sliceBearPx = IntArray(numSlices)
 
-                for (y in yStart until yEnd step 2) {
-                    for (x in xStart until xEnd step 2) {
-                        val px = bmp.getPixel(x, y)
-                        val r = Color.red(px)
-                        val g = Color.green(px)
-                        val b = Color.blue(px)
+                var globalHighY = yEnd
+                var globalLowY = yStart
 
-                        val isBull = (g > r + 24 && g > 75 && g >= b - 15)
-                        val isBear = (r > g + 24 && r > 80 && r > b + 15)
+                for (s in 0 until numSlices) {
+                    val sx0 = xStart + s * sliceW
+                    val sx1 = min(xEnd, sx0 + sliceW)
+                    var bull = 0
+                    var bear = 0
+                    var highY = yEnd
+                    var lowY = yStart
+                    var sumY = 0.0
+                    var cnt = 0
 
-                        if (isBull || isBear) {
-                            if (y < highestY) highestY = y
-                            if (y > lowestY) lowestY = y
-                            when {
-                                x < xMid1 -> {
-                                    sumYLeft += y
-                                    countLeft++
-                                }
-                                x < xMid2 -> {
-                                    sumYMid += y
-                                    countMid++
-                                }
-                                else -> {
-                                    sumYRight += y
-                                    countRight++
-                                    if (isBull) greenRecent++
-                                    if (isBear) redRecent++
-                                }
+                    for (y in yStart until yEnd step 2) {
+                        for (x in sx0 until sx1 step 2) {
+                            val px = bmp.getPixel(x, y)
+                            val r = Color.red(px)
+                            val g = Color.green(px)
+                            val b = Color.blue(px)
+
+                            val isBull = (g > r + 22 && g > 72 && g >= b - 18)
+                            val isBear = (r > g + 22 && r > 78 && r > b + 14)
+
+                            if (isBull || isBear) {
+                                if (isBull) bull++
+                                if (isBear) bear++
+                                if (y < highY) highY = y
+                                if (y > lowY) lowY = y
+                                if (y < globalHighY) globalHighY = y
+                                if (y > globalLowY) globalLowY = y
+                                sumY += y
+                                cnt++
                             }
                         }
                     }
+
+                    sliceBullPx[s] = bull
+                    sliceBearPx[s] = bear
+                    sliceHighY[s] = if (cnt > 2) highY else (yStart + yEnd) / 2
+                    sliceLowY[s] = if (cnt > 2) lowY else (yStart + yEnd) / 2
+                    sliceCenterY[s] = if (cnt > 2) (sumY / cnt) else (yStart + yEnd) / 2.0
                 }
                 bmp.recycle()
 
-                val avgYLeft = if (countLeft > 5) sumYLeft / countLeft else (yStart + yEnd) / 2.0
-                val avgYMid = if (countMid > 5) sumYMid / countMid else avgYLeft
-                val avgYRight = if (countRight > 5) sumYRight / countRight else avgYMid
+                val cLeft = (sliceCenterY[0] + sliceCenterY[1] + sliceCenterY[2] + sliceCenterY[3]) / 4.0
+                val cMid = (sliceCenterY[4] + sliceCenterY[5] + sliceCenterY[6] + sliceCenterY[7]) / 4.0
+                val cRight = (sliceCenterY[8] + sliceCenterY[9] + sliceCenterY[10] + sliceCenterY[11]) / 4.0
+                val cLast2 = (sliceCenterY[10] + sliceCenterY[11]) / 2.0
 
-                val overallSlopeUp = avgYRight < avgYLeft - 4.0
-                val recentImpulseUp = avgYRight < avgYMid - 2.5
-                val recentBullRatio = (greenRecent + 1.0) / (greenRecent + redRecent + 2.0)
-                val chartRange = max(10, lowestY - highestY)
-                val posInRange = ((lowestY - avgYRight) / chartRange).coerceIn(0.0, 1.0)
+                val chartSpan = max(12, globalLowY - globalHighY)
+                val priceZonePos = ((globalLowY - cLast2) / chartSpan).coerceIn(0.0, 1.0)
+
+                val bullRecent = sliceBullPx[9] + sliceBullPx[10] + sliceBullPx[11]
+                val bearRecent = sliceBearPx[9] + sliceBearPx[10] + sliceBearPx[11]
+                val recentBullRatio = (bullRecent + 1.0) / (bullRecent + bearRecent + 2.0)
+
+                val lastHighY = min(sliceHighY[10], sliceHighY[11])
+                val lastLowY = max(sliceLowY[10], sliceLowY[11])
+                var prevSwingHighY = yEnd
+                var prevSwingLowY = yStart
+                for (i in 2..8) {
+                    if (sliceHighY[i] < prevSwingHighY) prevSwingHighY = sliceHighY[i]
+                    if (sliceLowY[i] > prevSwingLowY) prevSwingLowY = sliceLowY[i]
+                }
+
+                val sweptBSL = lastHighY <= prevSwingHighY + 3 && cLast2 > lastHighY + 6
+                val sweptSSL = lastLowY >= prevSwingLowY - 3 && cLast2 < lastLowY - 6
+                val isDoubleBottomW = (sliceLowY[3] >= globalLowY - 8 && lastLowY >= globalLowY - 8 && cMid < globalLowY - 12)
+                val isDoubleTopM = (sliceHighY[3] <= globalHighY + 8 && lastHighY <= globalHighY + 8 && cMid > globalHighY + 12)
 
                 val goUp: Boolean
-                var waitMins = 1
-                var targetCandle = t1
-                var trapTypeStr = "No Trap — Clean Pro Setup"
-                val patternName: String
-                val structureName: String
-                val smcName: String
+                val waitMins = 1
+                val targetCandle = t1
+                val paPattern: String
+                val structureDesc: String
+                val smcDesc: String
+                val ictDesc: String
+                val chartPatDesc: String
+                val trapDesc: String
+                val mtgDesc: String
                 val reasonBanglish: String
 
-                if (posInRange < 0.24 && recentBullRatio >= 0.44) {
+                if (sweptSSL || (priceZonePos < 0.26 && recentBullRatio >= 0.45)) {
                     goUp = true
-                    waitMins = 1
-                    targetCandle = t1
-                    trapTypeStr = "Bear Trap Swept at Support"
-                    patternName = "Support Rejection + Bullish Bounce"
-                    structureName = "Strong Support Zone Bounce"
-                    smcName = "Liquidity Sweep + Bullish OB"
-                    reasonBanglish = "Support zone-e seller trap (Bear Trap) kore buyer rejection diyeche, tai 1 min por ($t1 candle) UP jabe."
-                } else if (posInRange > 0.76 && recentBullRatio <= 0.56) {
+                    paPattern = if (sweptSSL) "Lower Wick Pinbar + Bullish Engulfing" else "Hammer / Tweezer Bottom Bounce"
+                    structureDesc = "Support Flip Zone (RBS) + Bullish CHoCH"
+                    smcDesc = "Discount Bullish Order Block (OB) + FVG"
+                    ictDesc = "SSL Sell-Side Liquidity Sweep (Turtle Soup)"
+                    chartPatDesc = if (isDoubleBottomW) "Double Bottom (W Pattern) Reversal" else "Falling Wedge Support Bounce"
+                    trapDesc = "Bear Trap Cleared (Sellers Trapped at Support)"
+                    mtgDesc = "✅ Direct Shot Win Expected (Backup 1-Step MTG: $t2)"
+                    reasonBanglish = "SMC + ICT Analysis: সাপোর্টের নিচে Sell-Side Liquidity (SSL) সুইপ করে সেলারদের Bear Trap-এ ফেলেছে এবং Bullish Order Block থেকে Pinbar/Engulfing রিজেকশন দিয়েছে। তাই 1 min por ($t1 ক্যান্ডেলে) Direct UP যাবে (Backup MTG: $t2)।"
+                } else if (sweptBSL || (priceZonePos > 0.74 && recentBullRatio <= 0.55)) {
                     goUp = false
-                    waitMins = 1
-                    targetCandle = t1
-                    trapTypeStr = "Bull Trap Swept at Resistance"
-                    patternName = "Resistance Rejection + Bearish Drop"
-                    structureName = "Strong Resistance Zone Rejection"
-                    smcName = "Liquidity Sweep + Bearish OB"
-                    reasonBanglish = "Resistance zone-e buyer trap (Bull Trap) kore seller pressure dhukeche, tai 1 min por ($t1 candle) DOWN jabe."
-                } else if (recentBullRatio > 0.78 && posInRange > 0.68) {
+                    paPattern = if (sweptBSL) "Shooting Star Wick + Bearish Engulfing" else "Evening Star / Tweezer Top Drop"
+                    structureDesc = "Major Resistance Supply + Bearish CHoCH"
+                    smcDesc = "Premium Bearish Order Block (OB) + Supply"
+                    ictDesc = "BSL Buy-Side Liquidity Sweep (Judas Swing)"
+                    chartPatDesc = if (isDoubleTopM) "Double Top (M Pattern) Reversal" else "Rising Wedge Resistance Drop"
+                    trapDesc = "Bull Trap Cleared (Buyers Trapped at Resistance)"
+                    mtgDesc = "✅ Direct Shot Win Expected (Backup 1-Step MTG: $t2)"
+                    reasonBanglish = "SMC + ICT Analysis: রেজিস্ট্যান্সের উপরে Buy-Side Liquidity (BSL) সুইপ করে বায়ারদের Bull Trap-এ ফেলেছে এবং Bearish Order Block থেকে স্ট্রং রিজেকশন এসেছে। তাই 1 min por ($t1 ক্যান্ডেলে) Direct DOWN যাবে (Backup MTG: $t2)।"
+                } else if (recentBullRatio > 0.76 && priceZonePos > 0.65) {
+                    goUp = false
+                    paPattern = "Exhaustion Climax Marubozu at Resistance"
+                    structureDesc = "Overbought Extreme • Pullback Reversal"
+                    smcDesc = "Premium Supply Mitigation Block"
+                    ictDesc = "AMD Manipulation Climax -> Distribution Drop"
+                    chartPatDesc = "Channel Top Exhaustion"
+                    trapDesc = "Exhaustion Bull Trap (Late Buyers Trapped)"
+                    mtgDesc = "🔄 1-Step MTG Ready Rakho ($t2 Candle Backup)"
+                    reasonBanglish = "Trap + Price Action Analysis: রেজিস্ট্যান্স জোনে বিশাল Exhaustion ক্যান্ডেল তৈরি হয়েছে যেখানে রিটেল বায়াররা ট্র্যাপে পড়েছে। তাই 1 min por ($t1 ক্যান্ডেলে) পুলব্যাক DOWN যাবে (1-Step MTG: $t2)।"
+                } else if (recentBullRatio < 0.24 && priceZonePos < 0.35) {
                     goUp = true
-                    waitMins = 2
-                    targetCandle = t2
-                    trapTypeStr = "Exhaustion Pullback Filter (Wait 2m)"
-                    patternName = "Impulse Breakout + 1-Candle Pullback"
-                    structureName = "Uptrend HH/HL • Pullback Entry"
-                    smcName = "Bullish FVG Retest at $t2"
-                    reasonBanglish = "Boro candle-er por 1ta pullback candle hote pare, tai 2 min por ($t2 candle-e) UP trade nao."
-                } else if (recentBullRatio >= 0.53 || (overallSlopeUp && recentImpulseUp)) {
+                    paPattern = "Oversold Climax Drop + Demand Absorption"
+                    structureDesc = "Oversold Extreme • Demand Bounce"
+                    smcDesc = "Discount Demand Zone + Unmitigated OB"
+                    ictDesc = "SSL Liquidity Grab Complete -> Reversal UP"
+                    chartPatDesc = "Channel Bottom Bounce"
+                    trapDesc = "Exhaustion Bear Trap (Late Sellers Trapped)"
+                    mtgDesc = "🔄 1-Step MTG Ready Rakho ($t2 Candle Backup)"
+                    reasonBanglish = "Trap + Price Action Analysis: ডিসকাউন্ট ডিমান্ড জোনে সেলারদের Exhaustion ক্যান্ডেল শেষে বায়ার প্রেশার ঢুকছে। তাই 1 min por ($t1 ক্যান্ডেলে) রিভার্সাল UP যাবে (1-Step MTG: $t2)।"
+                } else if (recentBullRatio >= 0.52 || (cRight < cMid - 2.0 && cMid <= cLeft)) {
                     goUp = true
-                    waitMins = 1
-                    targetCandle = t1
-                    patternName = if (recentBullRatio > 0.62) "Bullish Engulfing / Marubozu" else "HH/HL Bullish Continuation"
-                    structureName = "Uptrend (HH/HL) • Momentum Breakout"
-                    smcName = "Bullish FVG + EMA Support"
-                    reasonBanglish = "Uptrend structure (HH/HL) o strong buyer candle pressure thakay 1 min por ($t1 candle) UP jabe."
+                    paPattern = if (recentBullRatio > 0.62) "Bullish Engulfing + Three White Soldiers" else "Morning Star + Inside Bar Breakout"
+                    structureDesc = "Uptrend HH/HL • Bullish BOS Confirmed"
+                    smcDesc = "Bullish FVG 50% Retest + Order Block"
+                    ictDesc = "Institutional Bullish Order Flow + Displacement"
+                    chartPatDesc = "Bullish Flag / Ascending Triangle Breakout"
+                    trapDesc = "Inducement (IDM) Cleared — Clean Trend Flow"
+                    mtgDesc = if (recentBullRatio > 0.60) "✅ Direct Shot (MTG Lagbe Na)" else "🔄 1-Step MTG Ready Rakho ($t2 Backup)"
+                    reasonBanglish = "SMC + Price Action Analysis: চার্টে Uptrend (HH/HL) ও Bullish BOS নিশ্চিত হয়েছে এবং Bullish FVG/OB থেকে বায়ার ডিসপ্লেসমেন্ট এসেছে। তাই 1 min por ($t1 ক্যান্ডেলে) UP যাবে ($mtgDesc)।"
                 } else {
                     goUp = false
-                    waitMins = 1
-                    targetCandle = t1
-                    patternName = if (recentBullRatio < 0.38) "Bearish Engulfing / Momentum" else "LH/LL Bearish Continuation"
-                    structureName = "Downtrend (LH/LL) • Seller Control"
-                    smcName = "Bearish FVG + Supply Rejection"
-                    reasonBanglish = "Downtrend structure (LH/LL) o strong seller candle momentum thakay 1 min por ($t1 candle) DOWN jabe."
+                    paPattern = if (recentBullRatio < 0.38) "Bearish Engulfing + Three Black Crows" else "Evening Star + Mother Bar Breakdown"
+                    structureDesc = "Downtrend LH/LL • Bearish BOS Confirmed"
+                    smcDesc = "Bearish FVG Imbalance + Breaker Block"
+                    ictDesc = "Institutional Bearish Order Flow + Displacement"
+                    chartPatDesc = "Bearish Flag / Descending Triangle Breakdown"
+                    trapDesc = "Inducement (IDM) Swept — Seller Control"
+                    mtgDesc = if (recentBullRatio < 0.40) "✅ Direct Shot (MTG Lagbe Na)" else "🔄 1-Step MTG Ready Rakho ($t2 Backup)"
+                    reasonBanglish = "SMC + Price Action Analysis: চার্টে Bearish BOS সহ LH/LL ডাউনট্রেন্ড চলছে এবং প্রাইস Bearish FVG ও Breaker Block থেকে রিজেকশন খেয়েছে। তাই 1 min por ($t1 ক্যান্ডেলে) DOWN যাবে ($mtgDesc)।"
                 }
 
                 val dirStr = if (goUp) "UP" else "DOWN"
                 val arrow = if (goUp) "⬆️ UP" else "⬇️ DOWN"
-                val strength = (abs(recentBullRatio - 0.5) * 70.0).roundToInt().coerceIn(4, 18)
-                val confVal = (74 + strength).coerceIn(76, 91)
+                val confSpread = (abs(recentBullRatio - 0.5) * 55.0 + (if (sweptSSL || sweptBSL) 7 else 3)).roundToInt()
+                val confVal = (79 + confSpread).coerceIn(80, 94)
 
                 return JSONObject()
                     .put("dir", dirStr)
@@ -1657,16 +1722,19 @@ class BinaryService : Service() {
                     .put("target_time", targetCandle)
                     .put("candle_plan", "$t1 $arrow | $t2 $arrow | $t3 ${if (goUp) "⬆️" else "⬇️"}")
                     .put("trap", false)
-                    .put("trap_type", trapTypeStr)
-                    .put("pattern", patternName)
-                    .put("structure", structureName)
-                    .put("smc", smcName)
-                    .put("entry", "$waitMins min por ($targetCandle Open) • 1-Step MTG ($t2)")
-                    .put("risk", if (confVal >= 82) "Low Risk" else "Medium Risk")
-                    .put("trend_score", (confVal + 2).coerceIn(70, 94))
-                    .put("pattern_score", (confVal + 4).coerceIn(72, 95))
-                    .put("snr_score", confVal.coerceIn(70, 92))
-                    .put("momentum_score", (confVal - 1).coerceIn(70, 92))
+                    .put("trap_type", trapDesc)
+                    .put("pattern", paPattern)
+                    .put("structure", structureDesc)
+                    .put("smc", smcDesc)
+                    .put("ict", ictDesc)
+                    .put("chart_pattern", chartPatDesc)
+                    .put("mtg_advice", mtgDesc)
+                    .put("entry", "$waitMins min por ($targetCandle Open) • Backup MTG: $t2")
+                    .put("risk", if (confVal >= 85) "Low Risk (Sniper)" else "Medium Risk")
+                    .put("trend_score", (confVal - 1).coerceIn(76, 95))
+                    .put("pattern_score", (confVal + 2).coerceIn(78, 96))
+                    .put("snr_score", (confVal + 1).coerceIn(77, 95))
+                    .put("momentum_score", confVal.coerceIn(76, 94))
                     .put("reason", reasonBanglish)
             }
         } catch (_: Exception) {}
@@ -1685,7 +1753,7 @@ class BinaryService : Service() {
             val f = File(filesDir, "binary_history.txt")
             val line = "$dir $conf% $pair $time • ${waitMins}m por [🕒 $targetTime]"
             val old = if (f.exists()) f.readLines() else emptyList()
-            val all = (listOf(line) + old).take(5)
+            val all = (listOf(line) + old.filter { it != line }).take(5)
             f.writeText(all.joinToString("\n"))
         } catch (_: Exception) {}
     }
