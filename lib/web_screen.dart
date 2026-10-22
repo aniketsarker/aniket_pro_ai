@@ -103,6 +103,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       setState(() {});
       _seedCounts();
       _flush();
+      _syncMultiKeysToForexWeb();
       _sheetRefresh?.call();
     } else if (state == AppLifecycleState.paused) {
       _fg = false;
@@ -207,7 +208,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         if (_seenIds.contains(id)) return;
         _seenIds.add(id);
         if (_seenIds.length > 500) _seenIds.removeRange(0, _seenIds.length - 500);
-        _round.add('$id|$path');
+        _round.add('$id\vert{}$path');
         await _saveState();
         if (_activeBox == 'none') { _errPop('SS disabled — select a box first'); return; }
         if (_sentIds.contains(id) ||
@@ -216,7 +217,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         final box = _activeBox;
         final m   = _max[box] ?? 0;
         if (_countOf(box) >= m) { _toast('${box.toUpperCase()} FULL — select another box'); return; }
-        setState(() { _queue.add('$id|$box|$path'); _ledger.add('$id|$box|$path'); });
+        setState(() { _queue.add('$id\vert{}$box|$path'); _ledger.add('$id|$box\vert{}$path'); });
         await _saveState();
         _pushState();
         final c = _countOf(box);
@@ -484,9 +485,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       if (list.isEmpty) { _toast('No screenshot selected'); return; }
       int ok = 0;
       for (final path in list) {
-        if (await _sendOne('pick${DateTime.now().millisecondsSinceEpoch}$ok|$box|$path')) ok++;
+        if (await _sendOne('pick${DateTime.now().millisecondsSinceEpoch}$ok|$box\vert{}$path')) ok++;
       }
-      ok > 0 ? _toast('$ok screenshot(s) added to ${box.toUpperCase()}') : _toast('Could not add to box');
+      ok > 0 ? _toast('$ok screenshot(s) added to${box.toUpperCase()}') : _toast('Could not add to box');
     } catch (_) { _toast('Picker unavailable'); }
   }
 
@@ -501,7 +502,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       final path = await Navigator.push<String>(
           context, MaterialPageRoute(builder: (_) => const CamCaptureScreen()));
       if (path == null || path.isEmpty) return;
-      final ok = await _sendOne('cam${DateTime.now().millisecondsSinceEpoch}|$box|$path');
+      final ok = await _sendOne('cam${DateTime.now().millisecondsSinceEpoch}|$box\vert{}$path');
       _toast(ok ? 'Photo added to ${box.toUpperCase()} box' : 'Could not add photo');
     } catch (_) {
       _toast('Camera unavailable');
@@ -575,6 +576,436 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         MaterialPageRoute(builder: (_) => const GateScreen()), (_) => false);
   }
 
+  // ═══════════════════════════════════════════════════════════════════
+  //  ADD-ONLY MULTI-AI FOREX BRIDGE (100% SAFE FOR ALL 20 FOREX KEY SLOTS!)
+  //  • Leaves all existing 20 Forex key slots in `localStorage` untouched
+  //    if you already added keys there; only pre-fills if Forex has 0 keys.
+  //  • Supports Gemini (`AIza...`), Groq (`gsk_...`), OpenRouter (`sk-or-...`),
+  //    and Mistral keys with automatic failover when a key's quota is full!
+  // ═══════════════════════════════════════════════════════════════════
+  Future<void> _syncMultiKeysToForexWeb() async {
+    if (!_siteReady) return;
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.reload();
+      final savedKeys = (p.getStringList('bin_keys') ?? [])
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .toList();
+      final keysJson = jsonEncode(savedKeys);
+      await _controller.runJavaScript(_buildForexMultiAiBridgeJs(keysJson));
+    } catch (_) {}
+  }
+
+  String _buildForexMultiAiBridgeJs(String flutterKeysJson) {
+    return '''
+(function(){
+  try {
+    var incomingKeys = $flutterKeysJson || [];
+    if (!window.__aniketAllKeys) window.__aniketAllKeys = [];
+
+    function cleanKey(k) {
+      if (!k || typeof k !== 'string') return '';
+      return k.replace(/^Bearer\\s+/i, '').replace(/["']/g, '').trim();
+    }
+
+    function deobfKey(s) {
+      if (!s || typeof s !== 'string') return '';
+      try {
+        var d = decodeURIComponent(atob(s));
+        if (d && d.length >= 16) return cleanKey(d);
+      } catch(e) {}
+      return cleanKey(s);
+    }
+
+    function obfKey(s) {
+      try {
+        return btoa(encodeURIComponent(cleanKey(s)));
+      } catch(e) {
+        return cleanKey(s);
+      }
+    }
+
+    function readSiteKeys() {
+      var out = [];
+      try {
+        var raw = localStorage.getItem('gemini_keys');
+        if (raw) {
+          var arr = JSON.parse(raw);
+          if (Array.isArray(arr)) {
+            for (var i = 0; i < arr.length; i++) {
+              var k = deobfKey(arr[i]);
+              if (k && k.length >= 16 && out.indexOf(k) < 0) {
+                out.push(k);
+              }
+            }
+          }
+        }
+      } catch(e) {}
+      try {
+        var single = localStorage.getItem('gemini_key_v1');
+        if (single) {
+          var ks = deobfKey(single);
+          if (ks && ks.length >= 16 && out.indexOf(ks) < 0) {
+            out.push(ks);
+          }
+        }
+      } catch(e) {}
+      return out;
+    }
+
+    var siteKeys = readSiteKeys();
+    var merged = [];
+    for (var i = 0; i < siteKeys.length; i++) {
+      if (merged.indexOf(siteKeys[i]) < 0) merged.push(siteKeys[i]);
+    }
+    for (var j = 0; j < incomingKeys.length; j++) {
+      var ck = cleanKey(incomingKeys[j]);
+      if (ck && ck.length >= 16 && merged.indexOf(ck) < 0) merged.push(ck);
+    }
+
+    window.__aniketAllKeys = merged;
+
+    // Only pre-populate localStorage if Forex currently has 0 keys saved,
+    // so your 20-key slot layout in the Forex Key tab is never overwritten!
+    if (siteKeys.length === 0 && merged.length > 0) {
+      var encodedArr = merged.map(obfKey);
+      localStorage.setItem('gemini_keys', JSON.stringify(encodedArr));
+      localStorage.setItem('gemini_key_v1', encodedArr[0]);
+      if (!localStorage.getItem('gemini_key_idx')) {
+        localStorage.setItem('gemini_key_idx', '0');
+      }
+      try {
+        if (typeof window.updateKeyStatus === 'function') window.updateKeyStatus();
+        if (typeof window.renderKeySlots === 'function') window.renderKeySlots();
+      } catch(e) {}
+    } else if (siteKeys.length > incomingKeys.length && window.FlutterBridge) {
+      try {
+        window.FlutterBridge.postMessage('SYNC_KEYS:' + JSON.stringify(merged));
+      } catch(e) {}
+    }
+
+    if (window.__aniketMultiAiFetchHooked) return;
+    window.__aniketMultiAiFetchHooked = true;
+
+    var origSetItem = localStorage.setItem.bind(localStorage);
+    localStorage.setItem = function(k, v) {
+      origSetItem(k, v);
+      if (k === 'gemini_keys' || k === 'gemini_key_v1') {
+        setTimeout(function(){
+          var updated = readSiteKeys();
+          if (updated.length > 0) {
+            for (var u = 0; u < updated.length; u++) {
+              if (window.__aniketAllKeys.indexOf(updated[u]) < 0) {
+                window.__aniketAllKeys.push(updated[u]);
+              }
+            }
+            if (window.FlutterBridge) {
+              try {
+                window.FlutterBridge.postMessage('SYNC_KEYS:' + JSON.stringify(window.__aniketAllKeys));
+              } catch(e) {}
+            }
+          }
+        }, 100);
+      }
+    };
+
+    function stripThinkTags(txt) {
+      if (!txt) return '';
+      return txt.replace(/<think>[\\s\\S]*?<\\/think>/gi, '').trim();
+    }
+
+    async function stitchImagesToDataUrl(imgList) {
+      if (!imgList || imgList.length === 0) return null;
+      if (imgList.length === 1) {
+        return 'data:' + (imgList[0].mime || 'image/jpeg') + ';base64,' + imgList[0].b64;
+      }
+      return new Promise(function(resolve) {
+        var loaded = [];
+        var remaining = imgList.length;
+        for (var i = 0; i < imgList.length; i++) {
+          (function(idx){
+            var im = new Image();
+            im.onload = function() {
+              loaded[idx] = im;
+              remaining--;
+              if (remaining <= 0) finishStitch();
+            };
+            im.onerror = function() {
+              loaded[idx] = null;
+              remaining--;
+              if (remaining <= 0) finishStitch();
+            };
+            im.src = 'data:' + (imgList[idx].mime || 'image/jpeg') + ';base64,' + imgList[idx].b64;
+          })(i);
+        }
+        function finishStitch() {
+          var valid = loaded.filter(Boolean);
+          if (valid.length === 0) {
+            resolve('data:' + (imgList[0].mime || 'image/jpeg') + ';base64,' + imgList[0].b64);
+            return;
+          }
+          var targetW = 1024;
+          var pad = 28;
+          var totalH = 0;
+          var scaledDims = [];
+          for (var k = 0; k < valid.length; k++) {
+            var s = targetW / Math.max(valid[k].width, 1);
+            var sh = Math.round(valid[k].height * s);
+            scaledDims.push({ w: targetW, h: sh });
+            totalH += sh + pad;
+          }
+          var canvas = document.createElement('canvas');
+          canvas.width = targetW;
+          canvas.height = Math.min(totalH, 4096);
+          var ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#0D0E15';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          var y = 0;
+          var vScale = canvas.height / Math.max(totalH, 1);
+          for (var m = 0; m < valid.length; m++) {
+            var drawH = Math.round(scaledDims[m].h * vScale);
+            var barH = Math.round(pad * vScale);
+            ctx.fillStyle = '#181B2C';
+            ctx.fillRect(0, y, targetW, barH);
+            ctx.fillStyle = '#FFD54F';
+            ctx.font = 'bold 15px sans-serif';
+            ctx.fillText('FOREX CHART #' + (m + 1) + ' OF ' + valid.length, 12, y + Math.max(14, barH - 6));
+            y += barH;
+            ctx.drawImage(valid[m], 0, y, targetW, drawH);
+            y += drawH;
+          }
+          resolve(canvas.toDataURL('image/jpeg', 0.84));
+        }
+      });
+    }
+
+    var origFetch = window.fetch.bind(window);
+
+    async function callOpenAiVisionProvider(endpoint, modelsUrl, key, defaultModels, promptText, imgList, requireFree, extraHeaders) {
+      var models = defaultModels.slice();
+      try {
+        var mResp = await origFetch(modelsUrl, {
+          method: 'GET',
+          headers: { 'Authorization': 'Bearer ' + key }
+        });
+        if (mResp && mResp.ok) {
+          var mJson = await mResp.json();
+          var data = (mJson && mJson.data) || [];
+          for (var d = 0; d < data.length; d++) {
+            var id = (data[d] && data[d].id) || '';
+            if (!id) continue;
+            if (requireFree && id.indexOf(':free') < 0) continue;
+            var low = id.toLowerCase();
+            if (low.indexOf('qwen') >= 0 || low.indexOf('vl') >= 0 || low.indexOf('vision') >= 0 ||
+                low.indexOf('gemma-3') >= 0 || low.indexOf('ministral') >= 0 || low.indexOf('pixtral') >= 0 ||
+                low.indexOf('llama-4') >= 0) {
+              if (models.indexOf(id) < 0) models.push(id);
+            }
+          }
+        }
+      } catch(e) {}
+
+      var combinedDataUrl = await stitchImagesToDataUrl(imgList);
+
+      for (var i = 0; i < models.length; i++) {
+        var model = models[i];
+        try {
+          var userContent = [{ type: 'text', text: promptText }];
+          if (combinedDataUrl) {
+            userContent.push({
+              type: 'image_url',
+              image_url: { url: combinedDataUrl }
+            });
+          }
+          var headers = {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + key
+          };
+          if (extraHeaders) {
+            for (var hk in extraHeaders) headers[hk] = extraHeaders[hk];
+          }
+          var resp = await origFetch(endpoint, {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify({
+              model: model,
+              temperature: 0.2,
+              max_tokens: 2048,
+              messages: [{ role: 'user', content: userContent }]
+            })
+          });
+          if (resp && resp.ok) {
+            var j = await resp.json();
+            var rawTxt = (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
+            var cleaned = stripThinkTags(rawTxt);
+            if (cleaned && cleaned.length > 10) {
+              return cleaned;
+            }
+          }
+        } catch(e) {}
+      }
+      return null;
+    }
+
+    async function callGeminiProvider(key, rawBodyStr, origUrlStr) {
+      // Extract the original model requested by the Forex site if present
+      var origModelMatch = /models\\/([^/:?]+):generateContent/.exec(origUrlStr || '');
+      var origModel = origModelMatch ? origModelMatch[1] : 'gemini-2.0-flash';
+      var models = [origModel, 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+      var uniqueModels = [];
+      for (var u = 0; u < models.length; u++) {
+        if (uniqueModels.indexOf(models[u]) < 0) uniqueModels.push(models[u]);
+      }
+
+      for (var i = 0; i < uniqueModels.length; i++) {
+        var m = uniqueModels[i];
+        try {
+          var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + m + ':generateContent?key=' + encodeURIComponent(key);
+          var resp = await origFetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: rawBodyStr
+          });
+          if (resp && resp.ok) {
+            var j = await resp.json();
+            var parts = j && j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts;
+            if (parts && parts.length > 0) {
+              var finalTxt = '';
+              for (var p = 0; p < parts.length; p++) {
+                if (parts[p] && !parts[p].thought && parts[p].text) {
+                  finalTxt += parts[p].text;
+                }
+              }
+              if (finalTxt.length > 5) {
+                return new Response(JSON.stringify({
+                  candidates: [{ content: { parts: [{ text: finalTxt }] }, finishReason: 'STOP' }]
+                }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+              }
+            }
+          }
+        } catch(e) {}
+      }
+      return null;
+    }
+
+    window.fetch = async function(input, init) {
+      var urlStr = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+      if (urlStr.indexOf('generativelanguage.googleapis.com') >= 0 && urlStr.indexOf(':generateContent') >= 0) {
+        var rawBodyStr = (init && init.body) ? init.body.toString() : '{}';
+        var promptText = '';
+        var imgList = [];
+        try {
+          var parsedBody = JSON.parse(rawBodyStr);
+          var contents = (parsedBody && parsedBody.contents) || [];
+          for (var c = 0; c < contents.length; c++) {
+            var parts = (contents[c] && contents[c].parts) || [];
+            for (var p = 0; p < parts.length; p++) {
+              var pt = parts[p];
+              if (pt.text) {
+                promptText += (promptText ? '\\n\\n' : '') + pt.text;
+              }
+              var inl = pt.inlineData || pt.inline_data;
+              if (inl && inl.data) {
+                imgList.push({
+                  mime: inl.mimeType || inl.mime_type || 'image/jpeg',
+                  b64: inl.data
+                });
+              }
+            }
+          }
+        } catch(e) {}
+
+        var urlKeyMatch = /[?&]key=([^&]+)/.exec(urlStr);
+        var urlKey = urlKeyMatch ? cleanKey(decodeURIComponent(urlKeyMatch[1])) : '';
+        var siteNow = readSiteKeys();
+        var candidateKeys = [];
+
+        if (urlKey && urlKey.length >= 16) {
+          candidateKeys.push(urlKey);
+        }
+        if (window.__lastWorkingForexKey && window.__lastWorkingForexKey.length >= 16 && candidateKeys.indexOf(window.__lastWorkingForexKey) < 0) {
+          candidateKeys.push(window.__lastWorkingForexKey);
+        }
+        for (var s = 0; s < siteNow.length; s++) {
+          if (candidateKeys.indexOf(siteNow[s]) < 0) candidateKeys.push(siteNow[s]);
+        }
+        for (var a = 0; a < (window.__aniketAllKeys || []).length; a++) {
+          var ak = window.__aniketAllKeys[a];
+          if (ak && candidateKeys.indexOf(ak) < 0) candidateKeys.push(ak);
+        }
+
+        for (var idx = 0; idx < candidateKeys.length; idx++) {
+          var k = candidateKeys[idx];
+          if (!k) continue;
+
+          if (k.indexOf('AIza') === 0) {
+            var gemResp = await callGeminiProvider(k, rawBodyStr, urlStr);
+            if (gemResp) {
+              window.__lastWorkingForexKey = k;
+              return gemResp;
+            }
+          } else if (k.indexOf('gsk_') === 0) {
+            var groqTxt = await callOpenAiVisionProvider(
+              'https://api.groq.com/openai/v1/chat/completions',
+              'https://api.groq.com/openai/v1/models',
+              k,
+              ['qwen/qwen3.8-27b', 'meta-models/muse-spark-open', 'meta-llama/llama-4-scout-17b-16e-instruct', 'meta-llama/llama-4-maverick-17b-128e-instruct'],
+              promptText,
+              imgList,
+              false,
+              null
+            );
+            if (groqTxt) {
+              window.__lastWorkingForexKey = k;
+              return new Response(JSON.stringify({
+                candidates: [{ content: { parts: [{ text: groqTxt }] }, finishReason: 'STOP' }]
+              }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+          } else if (k.indexOf('sk-or-') === 0) {
+            var orTxt = await callOpenAiVisionProvider(
+              'https://openrouter.ai/api/v1/chat/completions',
+              'https://openrouter.ai/api/v1/models',
+              k,
+              ['openrouter/free', 'google/gemma-3-27b-it:free', 'qwen/qwen2.5-vl-72b-instruct:free', 'qwen/qwen2.5-vl-32b-instruct:free', 'mistralai/mistral-small-3.1-24b-instruct:free'],
+              promptText,
+              imgList,
+              true,
+              { 'HTTP-Referer': 'https://aniketpro.ai', 'X-Title': 'ANIKET PRO AI' }
+            );
+            if (orTxt) {
+              window.__lastWorkingForexKey = k;
+              return new Response(JSON.stringify({
+                candidates: [{ content: { parts: [{ text: orTxt }] }, finishReason: 'STOP' }]
+              }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+          } else {
+            var misTxt = await callOpenAiVisionProvider(
+              'https://api.mistral.ai/v1/chat/completions',
+              'https://api.mistral.ai/v1/models',
+              k,
+              ['mistral-small-latest', 'ministral-14b-latest', 'ministral-8b-latest', 'mistral-medium-latest', 'mistral-large-latest'],
+              promptText,
+              imgList,
+              false,
+              null
+            );
+            if (misTxt) {
+              window.__lastWorkingForexKey = k;
+              return new Response(JSON.stringify({
+                candidates: [{ content: { parts: [{ text: misTxt }] }, finishReason: 'STOP' }]
+              }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+          }
+        }
+      }
+      return origFetch(input, init);
+    };
+  } catch(e) {}
+})();
+''';
+  }
+
   void _initWebView() {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -597,6 +1028,19 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         } else if (m.startsWith('TAB:')) {
           final t = m.substring(4).trim().toUpperCase();
           if (mounted) setState(() => _camVisible = (t == 'SS'));
+        } else if (m.startsWith('SYNC_KEYS:')) {
+          try {
+            final rawList = jsonDecode(m.substring(10)) as List;
+            final cleaned = rawList
+                .map((e) => e.toString().trim())
+                .where((e) => e.isNotEmpty)
+                .toSet()
+                .toList();
+            if (cleaned.isNotEmpty) {
+              final p = await SharedPreferences.getInstance();
+              await p.setStringList('bin_keys', cleaned);
+            }
+          } catch (_) {}
         }
       })
       ..setNavigationDelegate(NavigationDelegate(
@@ -619,6 +1063,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           _progressN.value = 1;
           await _controller.runJavaScript(_netlifyHideJs());
           await _controller.runJavaScript(_pageHookJs());
+          await _syncMultiKeysToForexWeb();
           _seedCounts();
           _flush();
         },
@@ -676,7 +1121,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     final on = _mode == key;
     return Expanded(
       child: InkWell(
-        onTap: () => setState(() => _mode = key),
+        onTap: () {
+          setState(() => _mode = key);
+          if (key == 'forex') {
+            _syncMultiKeysToForexWeb();
+          }
+        },
         borderRadius: BorderRadius.circular(12),
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 10),
@@ -713,7 +1163,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           _modeBar(),
           Expanded(
             child: Stack(children: [
-              // FOREX side — পুরানো সব অক্ষত
+              // FOREX side — পুরানো সব অক্ষত + 4-Key Multi-AI Auto-Failover Bridge
               Offstage(
                 offstage: _mode != 'forex',
                 child: Stack(children: [
