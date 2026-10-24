@@ -30,7 +30,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   bool   _fg         = true;
   bool   _flushing   = false;
   bool   _okayBusy   = false;
-  bool   _picking    = false;
   bool   _captureOn  = false;
   bool   _autoDelete = false;
   bool   _overlayShown = false;
@@ -103,9 +102,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       _syncBubble();
       setState(() {});
       _seedCounts();
-      if (!_picking) {
-        _flush();
-      }
+      _flush();
       _syncMultiKeysToForexWeb();
       _sheetRefresh?.call();
     } else if (state == AppLifecycleState.paused) {
@@ -125,39 +122,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     } catch (_) {}
   }
 
-  bool _isValidQueueEntry(String e) {
-    try {
-      final parts = e.split('|');
-      if (parts.length < 3) return false;
-      final p = _pathOf(e);
-      if (p.isEmpty) return false;
-      final f = File(p);
-      return f.existsSync() && f.lengthSync() > 0;
-    } catch (_) {
-      return false;
-    }
-  }
-
   Future<void> _loadPrefs() async {
     final p = await SharedPreferences.getInstance();
-    try { await p.reload(); } catch (_) {}
-    final rawQueue  = p.getStringList('queue')   ?? [];
-    final rawLedger = p.getStringList('ledger')  ?? [];
-    final rawRound  = p.getStringList('round')   ?? [];
-
-    // Automatically prune dead/missing cache files so old deleted screenshots
-    // never clog the queue with "upload pending — will retry on next open" or "FULL"!
-    final cleanQueue  = rawQueue.where(_isValidQueueEntry).toList();
-    final cleanLedger = rawLedger.where(_isValidQueueEntry).toList();
-    final cleanRound  = rawRound.where((r) {
-      try {
-        final rp = _roundPath(r);
-        return rp.isNotEmpty && File(rp).existsSync();
-      } catch (_) {
-        return false;
-      }
-    }).toList();
-
     setState(() {
       _captureOn    = p.getBool('cap')    ?? false;
       _autoDelete   = p.getBool('ad')     ?? false;
@@ -165,17 +131,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       _owner        = p.getBool('owner')  ?? false;
       _activeBox    = p.getString('abox') ?? 'none';
       if (_activeBox.isEmpty || _activeBox == 'corr') _activeBox = 'none';
-      _queue  ..clear()..addAll(cleanQueue);
-      _ledger ..clear()..addAll(cleanLedger);
+      _queue  ..clear()..addAll(p.getStringList('queue')   ?? []);
+      _ledger ..clear()..addAll(p.getStringList('ledger')  ?? []);
       _sentIds..clear()..addAll(p.getStringList('sentIds') ?? []);
       _seenIds..clear()..addAll(p.getStringList('seenIds') ?? []);
-      _round  ..clear()..addAll(cleanRound);
+      _round  ..clear()..addAll(p.getStringList('round')   ?? []);
     });
-    if (cleanQueue.length != rawQueue.length ||
-        cleanLedger.length != rawLedger.length ||
-        cleanRound.length != rawRound.length) {
-      await _saveState();
-    }
     _pushState();
   }
 
@@ -236,19 +197,13 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         final id   = (args['id'] as num?)?.toInt().toString() ?? '';
         final path = (args['path'] as String?) ?? '';
         if (id.isEmpty || path.isEmpty) return;
-
-        // Only route to Binary when the user is on the BINARY tab (or when Forex capture is OFF)
         try {
           final sp = await SharedPreferences.getInstance();
-          if (_mode == 'binary') {
+          if (_mode == 'binary' || (!_captureOn && (sp.getBool('bin_float') ?? false))) {
             BinarySignalScreen.onExternalScreenshot?.call(id, path);
-            return;
-          } else if (!_captureOn && !_overlayShown && (sp.getBool('bin_float') ?? false)) {
-            BinarySignalScreen.onExternalScreenshot?.call(id, path);
-            return;
+            if (_mode == 'binary') return;
           }
         } catch (_) {}
-
         if (!_captureOn) return;
         if (_seenIds.contains(id)) return;
         _seenIds.add(id);
@@ -259,11 +214,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         if (_sentIds.contains(id) ||
             _queue.any((q) => q.startsWith('$id|')) ||
             _ledger.any((q) => q.startsWith('$id|'))) return;
-
-        // Prune any dead files from queue before checking box count
-        _queue.removeWhere((q) => !_isValidQueueEntry(q));
-        _ledger.removeWhere((q) => !_isValidQueueEntry(q));
-
         final box = _activeBox;
         final m   = _max[box] ?? 0;
         if (_countOf(box) >= m) { _toast('${box.toUpperCase()} FULL — select another box'); return; }
@@ -280,15 +230,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         _toast(_captureOn ? 'Capture ON — screenshots will be captured' : 'Capture OFF');
       } else if (call.method == 'onBubbleSelect') {
         final sel = (call.arguments as String) == 'corr' ? 'none' : call.arguments as String;
-        // Prune dead files first so count is accurate
-        _queue.removeWhere((q) => !_isValidQueueEntry(q));
-        _ledger.removeWhere((q) => !_isValidQueueEntry(q));
         setState(() {
           _activeBox = sel;
           if (sel != 'none') _captureOn = true;
         });
         if (sel != 'none') {
           await (await SharedPreferences.getInstance()).setBool('cap', true);
+          if (_fg) {
+            try { await [Permission.photos, Permission.videos].request(); } catch (_) {}
+          }
         }
         await _saveState();
         _pushState();
@@ -299,12 +249,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           _countOf(_activeBox) >= m
               ? _toast('${_activeBox.toUpperCase()} FULL — select another box')
               : _toast('${_activeBox.toUpperCase()} selected — capture + auto upload ON');
-        }
-        // Only request permissions if app is currently in foreground (never hang background bubble tap!)
-        if (sel != 'none' && _fg) {
-          try {
-            await [Permission.photos, Permission.videos, Permission.storage].request();
-          } catch (_) {}
         }
       } else if (call.method == 'onBubbleOk') {
         await _onOkay();
@@ -399,36 +343,21 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     } catch (_) { return bytes; }
   }
 
-  String _injectJs(String box, String b64, String name) {
-    final safeName = name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
-    return '''
+  String _injectJs(String box, String b64, String name) => '''
   (function(){
     function byId(b){if(b==='htf')return document.getElementById('htfInput');if(b==='entry')return document.getElementById('entryInput');if(b==='corr')return document.getElementById('dxyInput');return null;}
     function headOf(inp){var host=inp;for(var up=0;up<6&&host;up++){var t=(host.innerText||'').toUpperCase();if(t.length>=10&&t.length<=400){if(t.indexOf('CORRELATION')>=0||t.indexOf('DXY')>=0||t.indexOf('ENTRY')>=0||t.indexOf('HTF')>=0)return t;}host=host.parentElement;}return '';}
     function pickInputFallback(b){var inputs=document.querySelectorAll('input[type=file]');var i;for(i=0;i<inputs.length;i++){var h=headOf(inputs[i]);if(b==='corr'&&(h.indexOf('CORRELATION')>=0||h.indexOf('DXY')>=0))return inputs[i];if(b==='entry'&&h.indexOf('ENTRY')>=0)return inputs[i];if(b==='htf'&&h.indexOf('HTF')>=0)return inputs[i];}if(b==='corr'){for(i=0;i<inputs.length;i++){if(!inputs[i].multiple)return inputs[i];}return null;}var muls=[];for(i=0;i<inputs.length;i++){if(inputs[i].multiple)muls.push(inputs[i]);}if(b==='entry')return muls[0]||null;if(b==='htf')return muls[muls.length-1]||muls[0]||null;return null;}
-    var inp=byId('$box')||pickInputFallback('$box');
-    if(!inp){
-      var navs=document.querySelectorAll('nav button,nav a,button,a,div[role=button]');
-      for(var n=0;n<navs.length;n++){
-        if((navs[n].innerText||'').trim().toUpperCase()==='SS'){try{navs[n].click();}catch(e){}break;}
-      }
-      inp=byId('$box')||pickInputFallback('$box');
-    }
-    if(!inp)return 'fail';
+    var inp=byId('$box')||pickInputFallback('$box');if(!inp)return 'fail';
     window.__ak=window.__ak||{};var key='$box';var list=window.__ak[key];
     if(!list){list=[];window.__ak[key]=list;}
-    if(key==='corr'){list.length=0;}
-    else{
-      if(list.length===0&&inp.files){for(var e2=0;e2<inp.files.length;e2++)list.push(inp.files[e2]);}
-      for(var r2=list.length-1;r2>=0;r2--){if(list[r2].name==='$safeName')list.splice(r2,1);}
-      while(list.length>=4){list.shift();}
-    }
+    if(list.length===0&&inp.files){for(var e2=0;e2<inp.files.length;e2++)list.push(inp.files[e2]);}
+    for(var r2=list.length-1;r2>=0;r2--){if(list[r2].name==='$name')list.splice(r2,1);}
     var bin=atob('$b64');var arr=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
-    list.push(new File([arr],'$safeName',{type:'image/jpeg'}));
+    list.push(new File([arr],'$name',{type:'image/jpeg'}));
     var dt=new DataTransfer();for(var q2=0;q2<list.length;q2++)dt.items.add(list[q2]);
     inp.files=dt.files;inp.dispatchEvent(new Event('change',{bubbles:true}));return 'ok:'+list.length;
   })();''';
-  }
 
   Future<int?> _injectAt(String box, String b64, String name) async {
     try {
@@ -439,16 +368,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 
   Future<bool> _sendOne(String entry) async {
-    final parts = entry.split('|');
-    if (parts.length < 3) {
-      setState(() {
-        _queue.remove(entry);
-        _ledger.remove(entry);
-      });
-      await _saveState();
-      return false;
-    }
-    final id   = parts[0];
+    final id   = entry.split('|')[0];
     final box  = _boxOf(entry);
     final path = _pathOf(entry);
     if (_sentIds.contains(id)) {
@@ -456,28 +376,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       await _saveState();
       return true;
     }
-    final file = File(path);
-    if (!await file.exists()) {
-      // Remove missing/deleted file from queue so it never blocks future uploads!
-      setState(() {
-        _queue.remove(entry);
-        _ledger.remove(entry);
-      });
+    if (!await File(path).exists()) {
+      setState(() => _queue.remove(entry));
       await _saveState();
       _pushState();
-      return false;
+      return true;
     }
     try {
-      final rawBytes = await file.readAsBytes();
-      if (rawBytes.isEmpty) {
-        setState(() {
-          _queue.remove(entry);
-          _ledger.remove(entry);
-        });
-        await _saveState();
-        _pushState();
-        return false;
-      }
+      final rawBytes = await File(path).readAsBytes();
       var bytes = await _compress(rawBytes);
       final name = path.split('/').last;
       int? count = await _injectAt(box, base64Encode(bytes), name);
@@ -493,7 +399,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       setState(() {
         _queue.remove(entry);
         if (!_sentIds.contains(id)) _sentIds.add(id);
-        _siteCount[box] = count ?? ((_siteCount[box] ?? 0) + 1);
+        _siteCount[box] = (_siteCount[box] ?? 0) + 1;
       });
       await _saveState();
       _pushState();
@@ -502,24 +408,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 
   Future<void> _flush({bool force = false}) async {
-    if (_flushing) return;
-    // Prune dead files before flushing
-    final beforeLen = _queue.length;
-    _queue.removeWhere((q) => !_isValidQueueEntry(q));
-    _ledger.removeWhere((q) => !_isValidQueueEntry(q));
-    if (_queue.length != beforeLen) {
-      await _saveState();
-      _pushState();
-    }
-    if (_queue.isEmpty) return;
+    if (_flushing || _queue.isEmpty) return;
     if (!force && !_fg) return;
     _flushing = true;
     int failed = 0;
-    for (final it in List<String>.from(_queue)) {
-      if (!await _sendOne(it)) {
-        if (_queue.contains(it)) failed++;
-      }
-    }
+    for (final it in List<String>.from(_queue)) { if (!await _sendOne(it)) failed++; }
     _flushing = false;
     if (failed > 0 && !force) _toast('$failed upload pending — will retry on next open');
   }
@@ -587,39 +480,23 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
   // ── PERMISSION: Choose File chaple photos chaibe (jodi age na neya thake) ──
   Future<void> _pickAndInject(String box) async {
-    if (_picking) return;
-    _picking = true;
+    final st = await Permission.photos.status;
+    if (!st.isGranted) {
+      final r = await Permission.photos.request();
+      if (!r.isGranted) { _toast('Gallery permission denied — cannot pick'); return; }
+    }
     try {
-      try {
-        final st = await Permission.photos.status;
-        if (!st.isGranted && !st.isLimited) {
-          await [Permission.photos, Permission.storage].request();
-        }
-      } catch (_) {}
-
-      final res  = await galleryChannel.invokeMethod<List<Object?>>('pickFiles', {'max': box == 'corr' ? 1 : 4});
-      final list = (res ?? []).map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+      final res  = await galleryChannel.invokeMethod<List<Object?>>('pickFiles', {'max': box == 'corr' ? 1 : 6});
+      final list = (res ?? []).map((e) => e.toString()).toList();
       if (list.isEmpty) { _toast('No screenshot selected'); return; }
-
-      // Give WebView 300ms to resume after returning from Android system file picker Activity
       _fg = true;
-      await Future.delayed(const Duration(milliseconds: 300));
-
+      await Future.delayed(const Duration(milliseconds: 250));
       int ok = 0;
       for (final path in list) {
         if (await _sendOne('pick${DateTime.now().millisecondsSinceEpoch}$ok|$box|$path')) ok++;
       }
-      if (ok > 0) {
-        await _seedCounts();
-        _toast('$ok screenshot(s) added to ${box.toUpperCase()}');
-      } else {
-        _toast('Could not add to box');
-      }
-    } catch (_) {
-      _toast('Picker unavailable');
-    } finally {
-      _picking = false;
-    }
+      ok > 0 ? _toast('$ok screenshot(s) added to ${box.toUpperCase()}') : _toast('Could not add to box');
+    } catch (_) { _toast('Picker unavailable'); }
   }
 
   // ── PERMISSION: Camera button chaple camera chaibe ──
@@ -634,9 +511,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           context, MaterialPageRoute(builder: (_) => const CamCaptureScreen()));
       if (path == null || path.isEmpty) return;
       _fg = true;
-      await Future.delayed(const Duration(milliseconds: 250));
+      await Future.delayed(const Duration(milliseconds: 200));
       final ok = await _sendOne('cam${DateTime.now().millisecondsSinceEpoch}|$box|$path');
-      if (ok) await _seedCounts();
       _toast(ok ? 'Photo added to ${box.toUpperCase()} box' : 'Could not add photo');
     } catch (_) {
       _toast('Camera unavailable');
@@ -1273,9 +1149,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       _overlayShown = false;
     } else {
       // PERMISSION FIX: bubble ON mane SS capture suru — photos permission ekhanei
-      try {
-        await [Permission.photos, Permission.videos, Permission.storage].request();
-      } catch (_) {}
+      await [Permission.photos, Permission.videos].request();
       await galleryChannel.invokeMethod('showBubble');
       _overlayShown = true;
       _pushState();
@@ -1441,33 +1315,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                 const Text('App Settings',
                     style: TextStyle(color: kGold, fontSize: 18, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Active: ${_activeBox == 'none' ? 'NO BOX' : _activeBox.toUpperCase()}'
-                        '  •  HTF ${_countOf('htf')}/${_max['htf']}'
-                        '  •  ENTRY ${_countOf('entry')}/${_max['entry']}'
-                        '  •  Queue: ${_queue.length}',
-                        style: const TextStyle(color: Colors.white70, fontSize: 13),
-                      ),
-                    ),
-                    if (_queue.isNotEmpty)
-                      TextButton(
-                        onPressed: () async {
-                          setState(() {
-                            _queue.clear();
-                            _ledger.clear();
-                            _round.clear();
-                          });
-                          await _saveState();
-                          _pushState();
-                          setModal(() {});
-                          _toast('Pending queue cleared');
-                        },
-                        child: const Text('Clear Queue', style: TextStyle(color: Colors.orangeAccent, fontSize: 12)),
-                      ),
-                  ],
+                Text(
+                  'Active: ${_activeBox == 'none' ? 'NO BOX' : _activeBox.toUpperCase()}'
+                  '  •  HTF ${_countOf('htf')}/${_max['htf']}'
+                  '  •  ENTRY ${_countOf('entry')}/${_max['entry']}'
+                  '  •  Queue: ${_queue.length}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
                 ),
                 const SizedBox(height: 8),
                 SwitchListTile(
