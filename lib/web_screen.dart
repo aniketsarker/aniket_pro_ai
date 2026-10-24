@@ -763,7 +763,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
     window.__aniketSkillCfg = loadSkillCfg();
 
-    // Read user's Risk per Trade (%), Account Balance ($), Daily Loss Limit (%), Max Daily Trades, ATR Multiplier from Mode tab inputs
+    // Read user's Risk per Trade (%), Account Balance (USD), Daily Loss Limit (%), Max Daily Trades, ATR Multiplier from Mode tab inputs
     function readModeFormNumbers() {
       var res = {
         riskPct: 1.0,
@@ -952,8 +952,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         : (sym.indexOf('=X') >= 0 ? Math.max(0.01, rawUnits / 100000.0) : Math.max(0.01, rawUnits));
       var riskPass = (riskUsd <= dailyMaxLossUsd) && (targetR >= 1.0);
       var riskVerdict = riskPass
-        ? 'PASS (Max Risk $' + riskUsd.toFixed(2) + ' fits Daily Limit $' + dailyMaxLossUsd.toFixed(2) + ')'
-        : 'BLOCK (Risk $' + riskUsd.toFixed(2) + ' exceeds Daily Limit $' + dailyMaxLossUsd.toFixed(2) + ')';
+        ? 'PASS (Max Risk USD ' + riskUsd.toFixed(2) + ' fits Daily Limit USD ' + dailyMaxLossUsd.toFixed(2) + ')'
+        : 'BLOCK (Risk USD ' + riskUsd.toFixed(2) + ' exceeds Daily Limit USD ' + dailyMaxLossUsd.toFixed(2) + ')';
 
       // 9. trader-alerts Clock (BD Time + NYSE Status)
       var nowUtc = new Date();
@@ -1416,7 +1416,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
               + '• trader-exit (LONG Plan): Entry=' + r.livePx.toFixed(d) + ' | SL=' + r.longSL.toFixed(d) + ' | TP1(1R)=' + r.longTP1.toFixed(d) + ' | TP2(' + r.targetR + 'R)=' + r.longTP2.toFixed(d) + ' | TP3(3R)=' + r.longTP3.toFixed(d) + '\\n'
               + '• trader-exit (SHORT Plan): Entry=' + r.livePx.toFixed(d) + ' | SL=' + r.shortSL.toFixed(d) + ' | TP1(1R)=' + r.shortTP1.toFixed(d) + ' | TP2(' + r.targetR + 'R)=' + r.shortTP2.toFixed(d) + ' | TP3(3R)=' + r.shortTP3.toFixed(d) + '\\n'
               + '• trader-timemachine (2,000x Monte Carlo Replay): Win Rate=' + r.winPct.toFixed(1) + '% (Breakeven ' + r.bePct.toFixed(0) + '%) | Verdict=' + r.tmVerdict + '\\n'
-              + '• trader-budget & trader-risk: Recommended Lot Size=' + r.lots.toFixed(2) + ' Lots (Balance $' + r.balance.toFixed(0) + ', Risk $' + r.riskUsd.toFixed(2) + ') | Risk Gate=' + r.riskVerdict + '\\n'
+              + '• trader-budget & trader-risk: Recommended Lot Size=' + r.lots.toFixed(2) + ' Lots (Balance USD ' + r.balance.toFixed(0) + ', Risk USD ' + r.riskUsd.toFixed(2) + ') | Risk Gate=' + r.riskVerdict + '\\n'
               + 'Combine the uploaded screenshots (HTF, ENTRY, CORRELATION) with these exact 11-Skill numbers and include the Monte Carlo Win Rate %, Recommended Lot Size, and Risk Gate PASS/BLOCK in your response.';
 
             promptText += telemetryBlock;
