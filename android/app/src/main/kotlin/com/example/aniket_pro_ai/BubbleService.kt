@@ -8,9 +8,17 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.BitmapShader
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.Shader
 import android.graphics.Typeface
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -20,12 +28,16 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import kotlin.math.max
 
 class BubbleService : Service() {
 
     private var wm: WindowManager? = null
+    private var bubbleRoot: LinearLayout? = null
+    private var logoView: ImageView? = null
     private var bubbleView: TextView? = null
     private var errorView: TextView? = null
     private var menuDialog: AlertDialog? = null
@@ -72,7 +84,7 @@ class BubbleService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (bubbleView == null) handler.post { buildBubble() }
+        if (bubbleRoot == null) handler.post { buildBubble() }
         return START_STICKY
     }
 
@@ -81,10 +93,11 @@ class BubbleService : Service() {
             val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             val ch = NotificationChannel("bubble_ch", "Bubble", NotificationManager.IMPORTANCE_LOW)
             nm.createNotificationChannel(ch)
+            val iconRes = if (applicationInfo.icon != 0) applicationInfo.icon else android.R.drawable.ic_menu_camera
             val n = Notification.Builder(this, "bubble_ch")
                 .setContentTitle("ANIKET PRO AI")
                 .setContentText("Bubble active")
-                .setSmallIcon(android.R.drawable.ic_menu_camera)
+                .setSmallIcon(iconRes)
                 .build()
             if (Build.VERSION.SDK_INT >= 34) {
                 startForeground(9001, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -111,12 +124,84 @@ class BubbleService : Service() {
         super.onDestroy()
     }
 
+    private fun buildLogoBubbleBitmap(sizePx: Int, active: Boolean): Bitmap {
+        val out = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val cx = sizePx / 2f
+        val cy = sizePx / 2f
+        val radius = sizePx / 2f - 4f
+
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#F010121E")
+            style = Paint.Style.FILL
+        }
+        canvas.drawCircle(cx, cy, radius, bgPaint)
+
+        var rawLogo: Bitmap? = null
+        try {
+            assets.open("flutter_assets/assets/logo.png").use { stream ->
+                rawLogo = BitmapFactory.decodeStream(stream)
+            }
+        } catch (_: Exception) {
+        }
+
+        if (rawLogo == null) {
+            try {
+                val drawable = packageManager.getApplicationIcon(packageName)
+                if (drawable is BitmapDrawable && drawable.bitmap != null) {
+                    rawLogo = drawable.bitmap
+                } else {
+                    val bmp = Bitmap.createBitmap(
+                        max(drawable.intrinsicWidth, 96),
+                        max(drawable.intrinsicHeight, 96),
+                        Bitmap.Config.ARGB_8888
+                    )
+                    val c = Canvas(bmp)
+                    drawable.setBounds(0, 0, c.width, c.height)
+                    drawable.draw(c)
+                    rawLogo = bmp
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        rawLogo?.let { src ->
+            val innerSize = (sizePx - 12).coerceAtLeast(32)
+            val scaled = Bitmap.createScaledBitmap(src, innerSize, innerSize, true)
+            val shaderBmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+            val sc = Canvas(shaderBmp)
+            sc.drawBitmap(scaled, 6f, 6f, null)
+            val shaderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = BitmapShader(shaderBmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            }
+            canvas.drawCircle(cx, cy, radius - 4f, shaderPaint)
+        }
+
+        val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = if (active) Color.parseColor("#C6A962") else Color.parseColor("#777777")
+            style = Paint.Style.STROKE
+            strokeWidth = 5.5f
+        }
+        canvas.drawCircle(cx, cy, radius - 2f, ringPaint)
+
+        val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = if (active) Color.parseColor("#00E676") else Color.parseColor("#888888")
+            style = Paint.Style.FILL
+        }
+        canvas.drawCircle(sizePx - 14f, sizePx - 14f, 8f, dotPaint)
+
+        return out
+    }
+
     fun refresh() {
         handler.post {
+            val density = resources.displayMetrics.density
+            val logoSizePx = (52 * density).toInt().coerceAtLeast(100)
+            logoView?.setImageBitmap(buildLogoBubbleBitmap(logoSizePx, bCapture))
             bubbleView?.let { v ->
                 v.text = bText
-                v.alpha = if (bCapture) 1.0f else 0.45f
             }
+            bubbleRoot?.alpha = if (bCapture) 1.0f else 0.55f
         }
     }
 
@@ -157,12 +242,14 @@ class BubbleService : Service() {
     }
 
     private fun removeBubble() {
-        bubbleView?.let { v ->
+        bubbleRoot?.let { v ->
             try {
                 wm?.removeView(v)
             } catch (e: Exception) {
             }
         }
+        bubbleRoot = null
+        logoView = null
         bubbleView = null
         errorView?.let { v ->
             try {
@@ -176,20 +263,50 @@ class BubbleService : Service() {
     }
 
     private fun buildBubble() {
-        if (bubbleView != null) return
+        if (bubbleRoot != null) return
         if (!Settings.canDrawOverlays(this)) {
             stopSelf()
             return
         }
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        val view = TextView(this)
-        view.text = bText
-        view.setTextColor(Color.parseColor("#F5E6C8"))
-        view.textSize = 24f
-        view.gravity = Gravity.CENTER
-        view.setShadowLayer(10f, 0f, 0f, Color.BLACK)
-        view.setPadding(24, 12, 24, 12)
-        view.alpha = if (bCapture) 1.0f else 0.45f
+
+        val density = resources.displayMetrics.density
+        val logoSizePx = (52 * density).toInt().coerceAtLeast(100)
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            alpha = if (bCapture) 1.0f else 0.55f
+        }
+
+        val iv = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setImageBitmap(buildLogoBubbleBitmap(logoSizePx, bCapture))
+        }
+
+        val view = TextView(this).apply {
+            text = bText
+            setTextColor(Color.parseColor("#F5E6C8"))
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#E6141626"))
+                cornerRadius = 22f
+                setStroke(2, Color.parseColor("#C6A962"))
+            }
+            setPadding(16, 4, 16, 4)
+        }
+
+        root.addView(iv, LinearLayout.LayoutParams(logoSizePx, logoSizePx))
+        root.addView(
+            view,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 4 }
+        )
+
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -200,11 +317,20 @@ class BubbleService : Service() {
         params.gravity = Gravity.TOP or Gravity.END
         params.x = 24
         params.y = 140
-        view.setOnTouchListener(DragListener(params, view))
+
+        val dragListener = DragListener(params, root)
+        root.setOnTouchListener(dragListener)
+        iv.setOnTouchListener(dragListener)
+        view.setOnTouchListener(dragListener)
+
+        bubbleRoot = root
+        logoView = iv
         bubbleView = view
         try {
-            wm?.addView(view, params)
+            wm?.addView(root, params)
         } catch (e: Exception) {
+            bubbleRoot = null
+            logoView = null
             bubbleView = null
             stopSelf()
         }
@@ -281,7 +407,7 @@ class BubbleService : Service() {
 
     private inner class DragListener(
         private val params: WindowManager.LayoutParams,
-        private val view: View
+        private val targetView: View
     ) : View.OnTouchListener {
         private val h = Handler(Looper.getMainLooper())
         private var initialX = 0
@@ -318,7 +444,7 @@ class BubbleService : Service() {
                         params.x = initialX - dx
                         params.y = initialY + dy
                         try {
-                            wm?.updateViewLayout(view, params)
+                            wm?.updateViewLayout(targetView, params)
                         } catch (ex: Exception) {
                         }
                     }
