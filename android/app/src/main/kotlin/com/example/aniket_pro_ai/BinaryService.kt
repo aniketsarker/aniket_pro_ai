@@ -193,7 +193,7 @@ class BinaryService : Service() {
         else @Suppress("DEPRECATION") Notification.Builder(this)
         nb.setContentTitle("ANIKET PRO AI")
             .setContentText("Auto SS Bubble ON ($pair • $time) — Trap Sniper + Price Trigger")
-            .setSmallIcon(android.R.drawable.ic_menu_compass)
+            .setSmallIcon(if (applicationInfo.icon != 0) applicationInfo.icon else android.R.drawable.ic_menu_compass)
             .setOngoing(true)
         var started = false
         try {
