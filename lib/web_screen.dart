@@ -718,6 +718,476 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       }
     };
 
+    var origFetch = window.fetch.bind(window);
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  11 DAY-TRADER SKILLS ENGINE DIRECTLY INSIDE FOREX PAGE
+    // ═══════════════════════════════════════════════════════════════════
+    var defaultSkillCfg = {
+      pair: 'GC=F',
+      pairLabel: 'XAU/USD (Gold)',
+      stopRule: 'atr:1.5',
+      targetR: 2.0,
+      s1_scanner: true,
+      s2_news: true,
+      s3_entry: true,
+      s4_exit: true,
+      s5_timemachine: true,
+      s6_budget: true,
+      s7_risk: true,
+      s8_broker: true,
+      s9_alerts: true,
+      s10_analyst: true,
+      s11_pelosi: true
+    };
+
+    function loadSkillCfg() {
+      try {
+        var raw = localStorage.getItem('aniket_11skills_cfg');
+        if (raw) {
+          var p = JSON.parse(raw);
+          for (var k in defaultSkillCfg) {
+            if (p[k] === undefined) p[k] = defaultSkillCfg[k];
+          }
+          return p;
+        }
+      } catch(e) {}
+      return Object.assign({}, defaultSkillCfg);
+    }
+
+    function saveSkillCfg(cfg) {
+      try {
+        origSetItem('aniket_11skills_cfg', JSON.stringify(cfg));
+      } catch(e) {}
+    }
+
+    window.__aniketSkillCfg = loadSkillCfg();
+
+    // Read user's Risk per Trade (%), Account Balance ($), Daily Loss Limit (%), Max Daily Trades, ATR Multiplier from Mode tab inputs
+    function readModeFormNumbers() {
+      var res = {
+        riskPct: 1.0,
+        balance: 5000.0,
+        dailyLossPct: 2.0,
+        maxTrades: 10,
+        atrMult: 1.5,
+        tp1Pct: 50
+      };
+      try {
+        var labels = document.querySelectorAll('label, div, span');
+        for (var i = 0; i < labels.length; i++) {
+          var el = labels[i];
+          if (el.children && el.children.length > 2) continue;
+          var t = (el.innerText || '').trim().toLowerCase();
+          var parent = el.parentElement;
+          if (!parent) continue;
+          var inp = parent.querySelector('input');
+          if (!inp && parent.parentElement) inp = parent.parentElement.querySelector('input');
+          if (!inp) continue;
+          var val = parseFloat(inp.value || inp.placeholder || '');
+          if (isNaN(val) || val <= 0) continue;
+          if (t.indexOf('risk per trade') >= 0) res.riskPct = val;
+          else if (t.indexOf('account balance') >= 0) res.balance = val;
+          else if (t.indexOf('daily loss limit') >= 0) res.dailyLossPct = val;
+          else if (t.indexOf('max daily trades') >= 0) res.maxTrades = val;
+          else if (t.indexOf('atr multiplier') >= 0) res.atrMult = val;
+        }
+      } catch(e) {}
+      return res;
+    }
+
+    // Wilder RSI-14
+    function calcWilderRsi(closes, period) {
+      period = period || 14;
+      if (!closes || closes.length <= period) return 50.0;
+      var gains = 0, losses = 0;
+      for (var i = 1; i <= period; i++) {
+        var d = closes[i] - closes[i - 1];
+        if (d >= 0) gains += d; else losses -= d;
+      }
+      var avgG = gains / period, avgL = losses / period;
+      for (var j = period + 1; j < closes.length; j++) {
+        var d2 = closes[j] - closes[j - 1];
+        var g = d2 > 0 ? d2 : 0;
+        var l = d2 < 0 ? -d2 : 0;
+        avgG = ((avgG * (period - 1)) + g) / period;
+        avgL = ((avgL * (period - 1)) + l) / period;
+      }
+      if (avgL === 0) return 100.0;
+      return 100.0 - (100.0 / (1.0 + (avgG / avgL)));
+    }
+
+    // Run the 11 Day-Trader Skills Engine on a symbol
+    async function run11SkillsEngine(sym, label) {
+      var cfg = window.__aniketSkillCfg || loadSkillCfg();
+      sym = sym || cfg.pair || 'GC=F';
+      label = label || cfg.pairLabel || 'XAU/USD (Gold)';
+      var modeNums = readModeFormNumbers();
+
+      var url5m = 'https://query2.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(sym) + '?range=5d&interval=5m';
+      var resp = await origFetch(url5m, { method: 'GET' });
+      if (!resp || !resp.ok) return null;
+      var j = await resp.json();
+      var res0 = j && j.chart && j.chart.result && j.chart.result[0];
+      if (!res0) return null;
+
+      var meta = res0.meta || {};
+      var q0 = (res0.indicators && res0.indicators.quote && res0.indicators.quote[0]) || {};
+      var cArr = q0.close || [], hArr = q0.high || [], lArr = q0.low || [], oArr = q0.open || [], vArr = q0.volume || [];
+      var bars = [];
+      for (var i = 0; i < cArr.length; i++) {
+        if (cArr[i] != null && hArr[i] != null && lArr[i] != null) {
+          bars.push({
+            o: oArr[i] != null ? oArr[i] : cArr[i],
+            h: hArr[i],
+            l: lArr[i],
+            c: cArr[i],
+            v: vArr[i] || 0
+          });
+        }
+      }
+      if (bars.length < 15) return null;
+
+      var livePx = meta.regularMarketPrice || bars[bars.length - 1].c;
+      var prevClose = meta.chartPreviousClose || meta.previousClose || bars[0].o;
+      var chgPct = prevClose > 0 ? (((livePx - prevClose) / prevClose) * 100.0) : 0.0;
+      var dec = livePx > 100 ? 2 : (livePx > 10 ? 3 : 5);
+
+      // 1. ATR-14
+      var atrN = Math.min(14, bars.length - 1);
+      var trSum = 0;
+      for (var a = bars.length - atrN; a < bars.length; a++) {
+        var cur = bars[a], pv = bars[a - 1].c;
+        trSum += Math.max(cur.h - cur.l, Math.abs(cur.h - pv), Math.abs(cur.l - pv));
+      }
+      var atr14 = trSum / Math.max(1, atrN);
+
+      // 2. RSI-14
+      var closes = bars.map(function(b){ return b.c; });
+      var rsi14 = calcWilderRsi(closes, 14);
+
+      // 3. trader-entry: Opening Range (first 3 bars of recent 24-bar session)
+      var sess = bars.slice(-24);
+      var orBars = sess.slice(0, 3);
+      var orHigh = Math.max.apply(null, orBars.map(function(b){ return b.h; }));
+      var orLow  = Math.min.apply(null, orBars.map(function(b){ return b.l; }));
+      var orMid  = (orHigh + orLow) / 2.0;
+      var entryStatus = livePx > orHigh
+        ? 'TRIGGERED BULLISH (Above OR High ' + orHigh.toFixed(dec) + ')'
+        : (livePx < orLow
+            ? 'TRIGGERED BEARISH (Below OR Low ' + orLow.toFixed(dec) + ')'
+            : 'WAITING INSIDE OR (' + orLow.toFixed(dec) + ' – ' + orHigh.toFixed(dec) + ')');
+
+      // 4. trader-exit: Stop-Loss & 1R/2R/3R Targets
+      var atrMult = modeNums.atrMult > 0 ? modeNums.atrMult : 1.5;
+      var riskDist = cfg.stopRule === 'or_mid' && Math.abs(livePx - orMid) > livePx * 0.0005
+        ? Math.abs(livePx - orMid)
+        : (atrMult * atr14);
+      if (riskDist < livePx * 0.0005) riskDist = livePx * 0.002;
+
+      var targetR = cfg.targetR || 2.0;
+      var longSL  = livePx - riskDist;
+      var longTP1 = livePx + riskDist;
+      var longTP2 = livePx + (targetR * riskDist);
+      var longTP3 = livePx + (3.0 * riskDist);
+
+      var shortSL  = livePx + riskDist;
+      var shortTP1 = livePx - riskDist;
+      var shortTP2 = livePx - (targetR * riskDist);
+      var shortTP3 = livePx - (3.0 * riskDist);
+
+      // 5. trader-timemachine: 2,500 Monte Carlo Intraday Replays
+      var ratios = [];
+      for (var rIdx = 1; rIdx < bars.length; rIdx++) {
+        var pc = bars[rIdx - 1].c;
+        if (pc > 0) {
+          var hr = bars[rIdx].h / pc, lr = bars[rIdx].l / pc, cr = bars[rIdx].c / pc;
+          if (hr > 0.92 && hr < 1.08 && lr > 0.92 && lr < 1.08) ratios.push([hr, lr, cr]);
+        }
+      }
+      var replays = 2000;
+      var hitTP = 0, hitSL = 0, hitFlat = 0, sumR = 0;
+      var seed = 19;
+      function nextRand() {
+        seed = (seed * 1664525 + 1013904223) % 4294967296;
+        return seed / 4294967296;
+      }
+      var isBullBias = livePx >= orMid;
+      for (var s = 0; s < replays; s++) {
+        var px = livePx;
+        var out = 'flat';
+        for (var st = 0; st < 36; st++) {
+          var d = ratios[Math.floor(nextRand() * ratios.length)] || [1.001, 0.999, 1.0];
+          var bh = px * d[0], bl = px * d[1], bc = px * d[2];
+          if (isBullBias) {
+            if (bl <= longSL) { out = 'sl'; px = longSL; break; }
+            if (bh >= longTP2) { out = 'tp'; px = longTP2; break; }
+          } else {
+            if (bh >= shortSL) { out = 'sl'; px = shortSL; break; }
+            if (bl <= shortTP2) { out = 'tp'; px = shortTP2; break; }
+          }
+          px = bc;
+        }
+        if (out === 'tp') { hitTP++; sumR += targetR; }
+        else if (out === 'sl') { hitSL++; sumR -= 1.0; }
+        else {
+          hitFlat++;
+          sumR += ((isBullBias ? (px - livePx) : (livePx - px)) / riskDist);
+        }
+      }
+      var resolved = Math.max(1, hitTP + hitSL);
+      var winPct = (hitTP / resolved) * 100.0;
+      var bePct  = (1.0 / (1.0 + targetR)) * 100.0;
+      var avgR   = sumR / replays;
+      var tmVerdict = winPct >= bePct + 4
+        ? 'POSITIVE EDGE (+' + avgR.toFixed(2) + 'R)'
+        : (Math.abs(winPct - bePct) <= 4 ? 'COIN FLIP (' + winPct.toFixed(1) + '%)' : 'CAUTION (' + avgR.toFixed(2) + 'R)');
+
+      // 6. trader-budget & 7. trader-risk: Lot Sizing & Compliance Gate
+      var riskUsd = modeNums.balance * (modeNums.riskPct / 100.0);
+      var dailyMaxLossUsd = modeNums.balance * (modeNums.dailyLossPct / 100.0);
+      var rawUnits = riskDist > 0 ? (riskUsd / riskDist) : 1;
+      var lots = sym === 'GC=F'
+        ? Math.max(0.01, rawUnits / 100.0)
+        : (sym.indexOf('=X') >= 0 ? Math.max(0.01, rawUnits / 100000.0) : Math.max(0.01, rawUnits));
+      var riskPass = (riskUsd <= dailyMaxLossUsd) && (targetR >= 1.0);
+      var riskVerdict = riskPass
+        ? 'PASS (Max Risk $' + riskUsd.toFixed(2) + ' fits Daily Limit $' + dailyMaxLossUsd.toFixed(2) + ')'
+        : 'BLOCK (Risk $' + riskUsd.toFixed(2) + ' exceeds Daily Limit $' + dailyMaxLossUsd.toFixed(2) + ')';
+
+      // 9. trader-alerts Clock (BD Time + NYSE Status)
+      var nowUtc = new Date();
+      var bdDate = new Date(nowUtc.getTime() + 6 * 3600 * 1000);
+      var bdHr = bdDate.getUTCHours();
+      var kz = (bdHr >= 13 && bdHr < 17) ? 'London Killzone' : ((bdHr >= 18 && bdHr < 23) ? 'New York Killzone' : 'Asia / Transition');
+
+      return {
+        sym: sym,
+        label: label,
+        dec: dec,
+        livePx: livePx,
+        chgPct: chgPct,
+        atr14: atr14,
+        rsi14: rsi14,
+        orHigh: orHigh,
+        orLow: orLow,
+        orMid: orMid,
+        entryStatus: entryStatus,
+        isBullBias: isBullBias,
+        longSL: longSL,
+        longTP1: longTP1,
+        longTP2: longTP2,
+        longTP3: longTP3,
+        shortSL: shortSL,
+        shortTP1: shortTP1,
+        shortTP2: shortTP2,
+        shortTP3: shortTP3,
+        targetR: targetR,
+        winPct: winPct,
+        bePct: bePct,
+        avgR: avgR,
+        tmVerdict: tmVerdict,
+        riskUsd: riskUsd,
+        dailyMaxLossUsd: dailyMaxLossUsd,
+        lots: lots,
+        riskVerdict: riskVerdict,
+        kz: kz,
+        balance: modeNums.balance,
+        riskPct: modeNums.riskPct
+      };
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  CLEAN UP SCREENSHOT 2 & SCREENSHOT 3 IN FOREX 'MODE' TAB +
+    //  INJECT THE 11 DAY-TRADER SKILLS PANEL DIRECTLY INTO FOREX PAGE
+    // ═══════════════════════════════════════════════════════════════════
+    function hideContainingRow(el, maxH, requireInput) {
+      var cur = el;
+      for (var up = 0; up < 5 && cur && cur !== document.body; up++) {
+        var tag = (cur.tagName || '').toUpperCase();
+        if (tag === 'MAIN' || tag === 'BODY' || tag === 'NAV') break;
+        var rect = cur.getBoundingClientRect ? cur.getBoundingClientRect() : { height: 999, width: 999 };
+        var hasInp = !requireInput || (cur.querySelector && cur.querySelector('input, select'));
+        if (hasInp && rect.height > 10 && rect.height <= maxH && (cur.innerText || '').length < 220) {
+          cur.style.setProperty('display', 'none', 'important');
+          return true;
+        }
+        cur = cur.parentElement;
+      }
+      return false;
+    }
+
+    function enhanceForexModeAndAnalysisDom() {
+      try {
+        // 1. Clean up Screenshot 3 (top Mode fields) & Screenshot 2 (redundant Mode switches & guides)
+        var allNodes = document.querySelectorAll('label, span, div, p, summary, details');
+        for (var i = 0; i < allNodes.length; i++) {
+          var el = allNodes[i];
+          if (!el || (el.id && el.id.indexOf('aniket-') === 0)) continue;
+          if (el.children && el.children.length > 3) continue;
+          var txt = (el.innerText || '').trim();
+          if (!txt || txt.length > 120) continue;
+          var low = txt.toLowerCase();
+
+          // Screenshot 3: remove unneeded manual/optional fields replaced by automated 11-skill engine
+          if (low.indexOf('twelve data key') >= 0 ||
+              low === 'atr value (optional)' ||
+              low.indexOf('min wait between analyze') >= 0 ||
+              low.indexOf('live tolerance (auto)') >= 0) {
+            hideContainingRow(el, 115, false);
+            continue;
+          }
+
+          // Screenshot 2: remove quota-wasting / redundant switches & bottom guides
+          if (low.indexOf('news radar (off = quota bache)') >= 0 ||
+              low.indexOf('deep mode (quota khay)') >= 0 ||
+              low.indexOf('cross-check (+1 call)') >= 0 ||
+              low.indexOf('ss guide (perfect screenshot)') >= 0 ||
+              low.indexOf('somossa hole ki korben') >= 0) {
+            hideContainingRow(el, 95, false);
+            continue;
+          }
+        }
+
+        // 2. Inject the 11 Day-Trader Skills Suite inside the 'Mode' tab (under 🎛️ Modes)
+        var modesHeading = null;
+        var headings = document.querySelectorAll('h1, h2, h3, h4, div, span');
+        for (var h = 0; h < headings.length; h++) {
+          var ht = (headings[h].innerText || '').trim();
+          if ((ht === '🎛️ Modes' || ht === 'Modes') && headings[h].children.length <= 1) {
+            modesHeading = headings[h];
+            break;
+          }
+        }
+
+        if (modesHeading && modesHeading.parentElement && !document.getElementById('aniket-11skills-mode-box')) {
+          var hostCard = modesHeading.parentElement;
+          var cfg = window.__aniketSkillCfg || loadSkillCfg();
+
+          var wrap = document.createElement('div');
+          wrap.id = 'aniket-11skills-mode-box';
+          wrap.style.cssText = 'margin-top:14px;padding:14px;border-radius:12px;background:#0B1912;border:1px solid rgba(212,175,55,0.45);color:#F5E6C8;font-family:sans-serif;';
+
+          var pairsHtml = [
+            ['GC=F', 'XAU/USD (Gold)'],
+            ['BTC-USD', 'BTC/USD (Bitcoin)'],
+            ['EURUSD=X', 'EUR/USD'],
+            ['GBPUSD=X', 'GBP/USD'],
+            ['USDJPY=X', 'USD/JPY'],
+            ['AUDUSD=X', 'AUD/USD'],
+            ['USDCAD=X', 'USD/CAD'],
+            ['SI=F', 'XAG/USD (Silver)'],
+            ['CL=F', 'WTI Crude Oil'],
+            ['NQ=F', 'US100 (Nasdaq)'],
+            ['YM=F', 'US30 (Dow)'],
+            ['DX-Y.NYB', 'DXY (Dollar Index)'],
+            ['NVDA', 'NVDA'],
+            ['TSLA', 'TSLA'],
+            ['AAPL', 'AAPL']
+          ].map(function(p) {
+            var sel = cfg.pair === p[0] ? 'selected' : '';
+            return '<option value="' + p[0] + '" data-lbl="' + p[1] + '" ' + sel + '>' + p[1] + '</option>';
+          }).join('');
+
+          var skillsMeta = [
+            ['s1_scanner', '📊 1. Auto Market Scanner (ORB, 20D Breakout, Bull Flag, RSI)'],
+            ['s2_news', '📰 2. Free Live News & SEC 8-K Radar (0 Quota — Auto Filter)'],
+            ['s3_entry', '⏱️ 3. 5m/1m Opening Range Breakout Entry Timer (OR High/Low)'],
+            ['s4_exit', '🎯 4. Smart Exit Planner (Auto 1.5x ATR / OR-Mid SL + 1R/2R/3R TP)'],
+            ['s5_timemachine', '⏳ 5. Time Machine (2,000x Monte Carlo Win-Rate & Expected R)'],
+            ['s6_budget', '💰 6. Budget & Lot Sizer (Auto Forex Lots from Balance & Risk %)'],
+            ['s7_risk', '🛡️ 7. Pre-Trade Risk Gate (PASS / BLOCK Daily Loss Guard)'],
+            ['s8_broker', '🧾 8. Bracket Order Ticket & Flatten by Close Generator'],
+            ['s9_alerts', '🔔 9. NYSE/Killzone Clock & Auto Stop/Target Price Alerts'],
+            ['s10_analyst', '📈 10. Macro 90D Range & SEC EDGAR XBRL Margin Analyst'],
+            ['s11_pelosi', '🏛️ 11. Smart Money & US Congress PTR Institutional Tracker']
+          ];
+
+          var togglesHtml = skillsMeta.map(function(sm) {
+            var checked = cfg[sm[0]] !== false ? 'checked' : '';
+            return '<label style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.07);font-size:13px;cursor:pointer;">'
+              + '<span style="padding-right:10px;line-height:1.35;">' + sm[1] + '</span>'
+              + '<input type="checkbox" data-skill="' + sm[0] + '" ' + checked + ' style="width:18px;height:18px;accent-color:#D4AF37;" />'
+              + '</label>';
+          }).join('');
+
+          wrap.innerHTML = ''
+            + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
+            + '  <div style="font-weight:900;font-size:14px;color:#FFD54F;letter-spacing:0.5px;">⚡ 11 DAY-TRADER PRO SKILLS (ACTIVE IN FOREX)</div>'
+            + '  <span style="font-size:11px;background:rgba(124,252,155,0.18);color:#7CFC9B;padding:3px 8px;border-radius:10px;font-weight:bold;">0 Quota Live</span>'
+            + '</div>'
+            + '<div style="display:flex;gap:8px;margin-bottom:10px;">'
+            + '  <select id="aniket-skill-pair" style="flex:1;padding:9px;border-radius:8px;background:#12261C;color:#fff;border:1px solid rgba(212,175,55,0.4);font-weight:bold;font-size:12px;">'
+            +      pairsHtml
+            + '  </select>'
+            + '  <button id="aniket-skill-run-btn" type="button" style="padding:9px 12px;border-radius:8px;background:#D4AF37;color:#000;font-weight:900;border:none;font-size:12px;cursor:pointer;">⚡ Run 11 Skills</button>'
+            + '  <button id="aniket-skill-full-btn" type="button" style="padding:9px 12px;border-radius:8px;background:#1A3A2A;color:#7CFC9B;font-weight:900;border:1px solid #7CFC9B;font-size:12px;cursor:pointer;">📊 Full 11-Skill Tools</button>'
+            + '</div>'
+            + '<div id="aniket-skill-live-out" style="display:none;margin-bottom:10px;padding:10px;border-radius:8px;background:#07120D;border:1px solid rgba(124,252,155,0.35);font-size:12px;line-height:1.45;color:#E2F1E8;"></div>'
+            + '<div>' + togglesHtml + '</div>';
+
+          hostCard.appendChild(wrap);
+
+          var selEl = document.getElementById('aniket-skill-pair');
+          if (selEl) {
+            selEl.addEventListener('change', function() {
+              var opt = selEl.options[selEl.selectedIndex];
+              window.__aniketSkillCfg.pair = selEl.value;
+              window.__aniketSkillCfg.pairLabel = opt ? opt.getAttribute('data-lbl') : selEl.value;
+              saveSkillCfg(window.__aniketSkillCfg);
+            });
+          }
+
+          var cbs = wrap.querySelectorAll('input[type=checkbox][data-skill]');
+          for (var c = 0; c < cbs.length; c++) {
+            cbs[c].addEventListener('change', function(ev) {
+              var sk = ev.target.getAttribute('data-skill');
+              window.__aniketSkillCfg[sk] = !!ev.target.checked;
+              saveSkillCfg(window.__aniketSkillCfg);
+            });
+          }
+
+          var fullBtn = document.getElementById('aniket-skill-full-btn');
+          if (fullBtn) {
+            fullBtn.addEventListener('click', function() {
+              if (window.FlutterBridge) {
+                window.FlutterBridge.postMessage('OPEN_11SKILL_SHEET:0');
+              }
+            });
+          }
+          var runBtn = document.getElementById('aniket-skill-run-btn');
+          if (runBtn) {
+            runBtn.addEventListener('click', async function() {
+              var outBox = document.getElementById('aniket-skill-live-out');
+              if (!outBox) return;
+              outBox.style.display = 'block';
+              outBox.innerHTML = '⏳ Running all 11 Day-Trader Skills on live 5m candles...';
+              var r = await run11SkillsEngine(window.__aniketSkillCfg.pair, window.__aniketSkillCfg.pairLabel);
+              if (!r) {
+                outBox.innerHTML = '⚠️ Could not fetch live candles right now. Check internet connection.';
+                return;
+              }
+              outBox.innerHTML = render11SkillCardHtml(r);
+            });
+          }
+        }
+      } catch(e) {}
+    }
+
+    function render11SkillCardHtml(r) {
+      var d = r.dec;
+      return ''
+        + '<div style="font-weight:900;color:#FFD54F;font-size:13px;margin-bottom:6px;">🎯 11-SKILL LIVE REPORT: ' + r.label + ' @ ' + r.livePx.toFixed(d) + ' (' + (r.chgPct >= 0 ? '+' : '') + r.chgPct.toFixed(2) + '%)</div>'
+        + '<div>• <b>3. Entry Timer (ORB 15m):</b> ' + r.entryStatus + ' | RSI-14: ' + r.rsi14.toFixed(1) + ' | ATR-14: ' + r.atr14.toFixed(d) + '</div>'
+        + '<div style="color:#7CFC9B;">• <b>4. Exit Plan (LONG):</b> SL=' + r.longSL.toFixed(d) + ' | TP1(1R)=' + r.longTP1.toFixed(d) + ' | TP2(' + r.targetR + 'R)=' + r.longTP2.toFixed(d) + ' | TP3(3R)=' + r.longTP3.toFixed(d) + '</div>'
+        + '<div style="color:#FFB74D;">• <b>4. Exit Plan (SHORT):</b> SL=' + r.shortSL.toFixed(d) + ' | TP1(1R)=' + r.shortTP1.toFixed(d) + ' | TP2(' + r.targetR + 'R)=' + r.shortTP2.toFixed(d) + ' | TP3(3R)=' + r.shortTP3.toFixed(d) + '</div>'
+        + '<div>• <b>5. Time Machine (2,000x Monte Carlo):</b> Win Rate=' + r.winPct.toFixed(1) + '% (Need ' + r.bePct.toFixed(0) + '%) | Verdict: <b style="color:#7CFC9B;">' + r.tmVerdict + '</b></div>'
+        + '<div>• <b>6. Budget & 7. Risk Gate:</b> Recommended Lot=<b>' + r.lots.toFixed(2) + ' Lots</b> (Risk USD ' + r.riskUsd.toFixed(2) + ') | Gate: <b>' + r.riskVerdict + '</b></div>'
+        + '<div>• <b>8. Broker Ticket & 9. Clock:</b> Session=' + r.kz + ' | Flat-By=15:55 ET</div>';
+    }
+
+    setInterval(enhanceForexModeAndAnalysisDom, 700);
+
     function stripThinkTags(txt) {
       if (!txt) return '';
       return txt.replace(/<think>[\\s\\S]*?<\\/think>/gi, '').trim();
@@ -787,8 +1257,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         }
       });
     }
-
-    var origFetch = window.fetch.bind(window);
 
     async function callOpenAiVisionProvider(endpoint, modelsUrl, key, defaultModels, promptText, imgList, requireFree, extraHeaders) {
       var models = defaultModels.slice();
@@ -923,96 +1391,45 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           }
         } catch(e) {}
 
-        // ═══ ADD-ONLY: LIVE OHLCV + ATR + ORB + 11-SKILL TELEMETRY ENRICHMENT ═══
+        // ═══ RUN 11 DAY-TRADER SKILLS ENGINE & ENRICH FOREX ANALYSIS ═══
         try {
-          var pageTxt = ((document.body && document.body.innerText) || '') + ' ' + promptText;
-          var upTxt = pageTxt.toUpperCase();
-          var detectedSym = 'GC=F'; // Default Gold Futures / XAUUSD
-          var detectedLabel = 'XAUUSD (Gold)';
+          var cfg = window.__aniketSkillCfg || loadSkillCfg();
+          var upTxt = (((document.body && document.body.innerText) || '') + ' ' + promptText).toUpperCase();
+          var detSym = cfg.pair || 'GC=F';
+          var detLbl = cfg.pairLabel || 'XAU/USD (Gold)';
           if (upTxt.indexOf('BTC') >= 0 || upTxt.indexOf('BITCOIN') >= 0) {
-            detectedSym = 'BTC-USD'; detectedLabel = 'BTCUSD (Bitcoin)';
+            detSym = 'BTC-USD'; detLbl = 'BTC/USD (Bitcoin)';
           } else if (upTxt.indexOf('EURUSD') >= 0 || upTxt.indexOf('EUR/USD') >= 0) {
-            detectedSym = 'EURUSD=X'; detectedLabel = 'EURUSD';
+            detSym = 'EURUSD=X'; detLbl = 'EUR/USD';
           } else if (upTxt.indexOf('GBPUSD') >= 0 || upTxt.indexOf('GBP/USD') >= 0) {
-            detectedSym = 'GBPUSD=X'; detectedLabel = 'GBPUSD';
+            detSym = 'GBPUSD=X'; detLbl = 'GBP/USD';
           } else if (upTxt.indexOf('USDJPY') >= 0 || upTxt.indexOf('USD/JPY') >= 0) {
-            detectedSym = 'USDJPY=X'; detectedLabel = 'USDJPY';
-          } else if (upTxt.indexOf('NVDA') >= 0) {
-            detectedSym = 'NVDA'; detectedLabel = 'NVDA';
-          } else if (upTxt.indexOf('TSLA') >= 0) {
-            detectedSym = 'TSLA'; detectedLabel = 'TSLA';
+            detSym = 'USDJPY=X'; detLbl = 'USD/JPY';
           }
-          var yUrl = 'https://query2.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(detectedSym) + '?range=5d&interval=5m';
-          var yResp = await origFetch(yUrl, { method: 'GET' });
-          if (yResp && yResp.ok) {
-            var yJson = await yResp.json();
-            var res0 = yJson && yJson.chart && yJson.chart.result && yJson.chart.result[0];
-            if (res0) {
-              var meta = res0.meta || {};
-              var q0 = (res0.indicators && res0.indicators.quote && res0.indicators.quote[0]) || {};
-              var cArr = q0.close || [];
-              var hArr = q0.high || [];
-              var lArr = q0.low || [];
-              var oArr = q0.open || [];
-              var vArr = q0.volume || [];
-              var validBars = [];
-              for (var bi = 0; bi < cArr.length; bi++) {
-                if (cArr[bi] != null && hArr[bi] != null && lArr[bi] != null) {
-                  validBars.push({
-                    o: oArr[bi] != null ? oArr[bi] : cArr[bi],
-                    h: hArr[bi],
-                    l: lArr[bi],
-                    c: cArr[bi],
-                    v: vArr[bi] || 0
-                  });
-                }
+
+          var r = await run11SkillsEngine(detSym, detLbl);
+          if (r) {
+            var d = r.dec;
+            var telemetryBlock = '\\n\\n[ANIKET PRO AI — 11 DAY-TRADER SKILLS LIVE TELEMETRY (' + r.label + ')]\\n'
+              + '• Live Price: ' + r.livePx.toFixed(d) + ' (' + (r.chgPct >= 0 ? '+' : '') + r.chgPct.toFixed(2) + '%) | Session: ' + r.kz + '\\n'
+              + '• trader-entry (5m Opening Range): ' + r.entryStatus + ' | OR High=' + r.orHigh.toFixed(d) + ' | OR Mid=' + r.orMid.toFixed(d) + ' | OR Low=' + r.orLow.toFixed(d) + ' | RSI-14=' + r.rsi14.toFixed(1) + ' | ATR-14=' + r.atr14.toFixed(d) + '\\n'
+              + '• trader-exit (LONG Plan): Entry=' + r.livePx.toFixed(d) + ' | SL=' + r.longSL.toFixed(d) + ' | TP1(1R)=' + r.longTP1.toFixed(d) + ' | TP2(' + r.targetR + 'R)=' + r.longTP2.toFixed(d) + ' | TP3(3R)=' + r.longTP3.toFixed(d) + '\\n'
+              + '• trader-exit (SHORT Plan): Entry=' + r.livePx.toFixed(d) + ' | SL=' + r.shortSL.toFixed(d) + ' | TP1(1R)=' + r.shortTP1.toFixed(d) + ' | TP2(' + r.targetR + 'R)=' + r.shortTP2.toFixed(d) + ' | TP3(3R)=' + r.shortTP3.toFixed(d) + '\\n'
+              + '• trader-timemachine (2,000x Monte Carlo Replay): Win Rate=' + r.winPct.toFixed(1) + '% (Breakeven ' + r.bePct.toFixed(0) + '%) | Verdict=' + r.tmVerdict + '\\n'
+              + '• trader-budget & trader-risk: Recommended Lot Size=' + r.lots.toFixed(2) + ' Lots (Balance $' + r.balance.toFixed(0) + ', Risk $' + r.riskUsd.toFixed(2) + ') | Risk Gate=' + r.riskVerdict + '\\n'
+              + 'Combine the uploaded screenshots (HTF, ENTRY, CORRELATION) with these exact 11-Skill numbers and include the Monte Carlo Win Rate %, Recommended Lot Size, and Risk Gate PASS/BLOCK in your response.';
+
+            promptText += telemetryBlock;
+            try {
+              var parsedForGem = JSON.parse(rawBodyStr);
+              if (parsedForGem && parsedForGem.contents && parsedForGem.contents[0] && parsedForGem.contents[0].parts) {
+                parsedForGem.contents[0].parts.push({ text: telemetryBlock });
+                rawBodyStr = JSON.stringify(parsedForGem);
               }
-              if (validBars.length >= 15) {
-                var lastBar = validBars[validBars.length - 1];
-                var livePx = meta.regularMarketPrice || lastBar.c;
-                var trSum = 0;
-                var atrCount = Math.min(14, validBars.length - 1);
-                for (var ai = validBars.length - atrCount; ai < validBars.length; ai++) {
-                  var curB = validBars[ai];
-                  var prevC = validBars[ai - 1].c;
-                  var tr = Math.max(curB.h - curB.l, Math.abs(curB.h - prevC), Math.abs(curB.l - prevC));
-                  trSum += tr;
-                }
-                var atr14 = trSum / Math.max(1, atrCount);
-                var recent20 = validBars.slice(-20);
-                var hi20 = recent20[0].h, lo20 = recent20[0].l;
-                for (var ri = 1; ri < recent20.length; ri++) {
-                  if (recent20[ri].h > hi20) hi20 = recent20[ri].h;
-                  if (recent20[ri].l < lo20) lo20 = recent20[ri].l;
-                }
-                var orMid = (hi20 + lo20) / 2.0;
-                var slLong = livePx - (1.5 * atr14);
-                var tp1Long = livePx + (1.5 * atr14);
-                var tp2Long = livePx + (3.0 * atr14);
-                var slShort = livePx + (1.5 * atr14);
-                var tp1Short = livePx - (1.5 * atr14);
-                var tp2Short = livePx - (3.0 * atr14);
-                var dec = livePx > 100 ? 2 : 5;
-                var telemetryBlock = '\n\n[ANIKET PRO AI — LIVE DAY-TRADER SKILL TELEMETRY (' + detectedLabel + ')]\n'
-                  + '• Live Market Price: ' + Number(livePx).toFixed(dec) + '\n'
-                  + '• 5m Session Range (Last 20 Bars): High=' + Number(hi20).toFixed(dec) + ' | Low=' + Number(lo20).toFixed(dec) + ' | Midpoint=' + Number(orMid).toFixed(dec) + '\n'
-                  + '• 14-Bar ATR (Volatility): ' + Number(atr14).toFixed(dec) + '\n'
-                  + '• trader-exit Long Reference: Entry=' + Number(livePx).toFixed(dec) + ' | ATR Stop=' + Number(slLong).toFixed(dec) + ' | 1R Target=' + Number(tp1Long).toFixed(dec) + ' | 2R Target=' + Number(tp2Long).toFixed(dec) + '\n'
-                  + '• trader-exit Short Reference: Entry=' + Number(livePx).toFixed(dec) + ' | ATR Stop=' + Number(slShort).toFixed(dec) + ' | 1R Target=' + Number(tp1Short).toFixed(dec) + ' | 2R Target=' + Number(tp2Short).toFixed(dec) + '\n'
-                  + 'Use both the uploaded chart screenshots (HTF, ENTRY, CORRELATION) AND these exact live OHLCV/ATR numbers so price levels are 100% accurate.';
-                promptText += telemetryBlock;
-                try {
-                  var parsedForGem = JSON.parse(rawBodyStr);
-                  if (parsedForGem && parsedForGem.contents && parsedForGem.contents[0] && parsedForGem.contents[0].parts) {
-                    parsedForGem.contents[0].parts.push({ text: telemetryBlock });
-                    rawBodyStr = JSON.stringify(parsedForGem);
-                  }
-                } catch(e2) {}
-              }
-            }
+            } catch(e2) {}
           }
         } catch(eTel) {}
-        // ═══ END LIVE TELEMETRY ENRICHMENT ═══
+        // ═══ END 11-SKILL FOREX ENRICHMENT ═══
 
         var urlKeyMatch = /[?&]key=([^&]+)/.exec(urlStr);
         var urlKey = urlKeyMatch ? cleanKey(decodeURIComponent(urlKeyMatch[1])) : '';
@@ -1126,6 +1543,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         } else if (m.startsWith('TAB:')) {
           final t = m.substring(4).trim().toUpperCase();
           if (mounted) setState(() => _camVisible = (t == 'SS'));
+        } else if (m.startsWith('OPEN_11SKILL_SHEET:')) {
+          final tabIdx = int.tryParse(m.substring(19).trim()) ?? 0;
+          if (mounted) _openInForex11SkillSheet(initialTab: tabIdx);
         } else if (m.startsWith('SYNC_KEYS:')) {
           try {
             final rawList = jsonDecode(m.substring(10)) as List;
@@ -1151,6 +1571,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         onPageStarted: (_) {
           _progressN.value = 0;
           if (_firstLoad) setState(() => _isLoading = true);
+          try { _controller.runJavaScript(_netlifyHideJs()); } catch (_) {}
         },
         onPageFinished: (_) async {
           setState(() {
@@ -1170,39 +1591,129 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 
   String _netlifyHideJs() => '''(function(){
-  if(!window.__nlCss){
-    window.__nlCss=1;
-    var st=document.createElement('style');
-    st.textContent='iframe[src*="netlify"],[id*="netlify"],[class*="netlify"],a[href*="netlify"]{display:none!important;}';
-    (document.head||document.documentElement).appendChild(st);
-  }
-  if(window.__nlHideDone)return;
-  var tries=0;
-  var iv=setInterval(function(){
-    tries++;
-    if(tries>100){clearInterval(iv);return;}
-    var nodes=document.querySelectorAll('iframe,a,div,span,button');
-    for(var i=0;i<nodes.length;i++){
-      var el=nodes[i];
-      var src=(el.src||'')+(el.href||'');
-      var idc=(el.id||'')+' '+(typeof el.className==='string'?el.className:'');
-      var txt=(el.innerText||'');
-      var low=(src+idc+txt).toLowerCase();
-      if(low.indexOf('netlify')>=0 && txt.length<80){
-        try{el.click();}catch(e){}
-        try{el.style.display='none';el.remove();}catch(e){}
-      }
+  try {
+    if (!window.__nlShadowHooked && window.Element && Element.prototype.attachShadow) {
+      window.__nlShadowHooked = true;
+      var origAttach = Element.prototype.attachShadow;
+      Element.prototype.attachShadow = function(init) {
+        var sr = origAttach.call(this, init);
+        try { this.__capturedShadow = sr; } catch(e) {}
+        return sr;
+      };
     }
-    var hide=document.querySelectorAll('a,button,div,span');
-    for(var j=0;j<hide.length;j++){
-      if((hide[j].innerText||'').trim()==='Hide this badge'){
-        try{hide[j].click();}catch(e){}
-        window.__nlHideDone=true;
-        clearInterval(iv);
-        return;
-      }
+
+    if (!window.__nlCss) {
+      window.__nlCss = 1;
+      var st = document.createElement('style');
+      st.textContent = 'iframe[src*="netlify"],[id*="netlify"],[class*="netlify"],a[href*="netlify"],div[data-netlify],aside[id*="netlify"],netlify-badge,[data-netlify-deploy-id]{display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important;width:0!important;height:0!important;max-height:0!important;overflow:hidden!important;z-index:-9999!important;}';
+      (document.head || document.documentElement).appendChild(st);
     }
-  },400);
+
+    function nukeEl(el) {
+      if (!el || el === document.body || el === document.documentElement) return;
+      if (el.tagName === 'NAV' || (el.querySelector && el.querySelector('input[type=file], nav'))) return;
+      try {
+        el.style.setProperty('display', 'none', 'important');
+        el.style.setProperty('visibility', 'hidden', 'important');
+        el.style.setProperty('opacity', '0', 'important');
+        el.style.setProperty('pointer-events', 'none', 'important');
+        el.style.setProperty('width', '0px', 'important');
+        el.style.setProperty('height', '0px', 'important');
+        el.remove();
+      } catch(e) {}
+    }
+
+    function isProtectedAppNode(el) {
+      if (!el) return true;
+      var tag = (el.tagName || '').toUpperCase();
+      if (tag === 'HTML' || tag === 'BODY' || tag === 'HEAD' || tag === 'MAIN' || tag === 'NAV' || tag === 'SCRIPT' || tag === 'STYLE') return true;
+      if (el.id && el.id.indexOf('aniket-') === 0) return true;
+      if (el.closest && el.closest('nav, #aniket-11skills-mode-box, #aniket-11skills-analysis-box')) return true;
+      if (el.querySelector && el.querySelector('nav, input[type=file]')) return true;
+      var t = (el.innerText || '').trim();
+      if (t.indexOf('ANIKET PRO AI') >= 0 || (t.indexOf('SS') >= 0 && t.indexOf('Analysis') >= 0 && t.indexOf('Journal') >= 0)) return true;
+      return false;
+    }
+
+    function scanRoot(root) {
+      if (!root) return;
+      var nodes = [];
+      try { nodes = root.querySelectorAll('*'); } catch(e) {}
+      for (var i = 0; i < nodes.length; i++) {
+        var el = nodes[i];
+        if (!el) continue;
+
+        var sr = el.shadowRoot || el.__capturedShadow;
+        if (sr) scanRoot(sr);
+
+        if (isProtectedAppNode(el)) continue;
+
+        var src = (el.src || '') + ' ' + (el.href || '');
+        var idc = (el.id || '') + ' ' + (typeof el.className === 'string' ? el.className : '');
+        var txt = (el.innerText || el.textContent || '').trim();
+        var low = (src + ' ' + idc + ' ' + txt).toLowerCase();
+
+        if (txt === 'Hide this badge') {
+          try { el.click(); } catch(e) {}
+          nukeEl(el);
+          continue;
+        }
+
+        if ((low.indexOf('powered by netlify') >= 0 || low.indexOf('netlify') >= 0) && txt.length < 140) {
+          nukeEl(el);
+          continue;
+        }
+
+        // Geometric killer for closed Shadow DOM floating pill in bottom-right ("Powered by Netlify")
+        try {
+          var cs = window.getComputedStyle(el);
+          if (cs && (cs.position === 'fixed' || cs.position === 'sticky' || parseInt(cs.zIndex || '0', 10) > 9999)) {
+            var rect = el.getBoundingClientRect();
+            // The Netlify pill sits near the bottom-right (bottom within 90px of viewport bottom, width < 70% of screen, height 20..75px)
+            if (rect.width > 60 && rect.width < window.innerWidth * 0.72 &&
+                rect.height >= 18 && rect.height <= 78 &&
+                rect.bottom >= window.innerHeight - 95 &&
+                rect.right >= window.innerWidth * 0.55) {
+              nukeEl(el);
+              continue;
+            }
+          }
+        } catch(e) {}
+      }
+
+      // Also probe bottom-right coordinates directly with elementFromPoint to catch closed Shadow-DOM hosts
+      try {
+        var probePoints = [
+          [window.innerWidth - 80, window.innerHeight - 24],
+          [window.innerWidth - 120, window.innerHeight - 28],
+          [window.innerWidth - 60, window.innerHeight - 32]
+        ];
+        for (var p = 0; p < probePoints.length; p++) {
+          var hit = document.elementFromPoint(probePoints[p][0], probePoints[p][1]);
+          while (hit && hit !== document.body && hit !== document.documentElement) {
+            if (!isProtectedAppNode(hit)) {
+              var hcs = window.getComputedStyle(hit);
+              var hrect = hit.getBoundingClientRect();
+              if (hcs && hcs.position === 'fixed' && hrect.width < window.innerWidth * 0.72 && hrect.height <= 80) {
+                nukeEl(hit);
+                break;
+              }
+            }
+            hit = hit.parentElement;
+          }
+        }
+      } catch(e) {}
+    }
+
+    scanRoot(document);
+    if (!window.__nlObserver) {
+      window.__nlObserver = new MutationObserver(function() { scanRoot(document); });
+      window.__nlObserver.observe(document.documentElement || document, { childList: true, subtree: true });
+    }
+    if (!window.__nlInterval) {
+      window.__nlInterval = setInterval(function() { scanRoot(document); }, 450);
+    }
+  } catch(e) {}
 })();''';
 
   String _pageHookJs() => '''(function(){
@@ -1263,8 +1774,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         _modeBtn('forex', Icons.show_chart_rounded, 'FOREX'),
         const SizedBox(width: 8),
         _modeBtn('binary', Icons.speed_rounded, 'BINARY'),
-        const SizedBox(width: 8),
-        _modeBtn('pro', Icons.auto_graph_rounded, 'PRO DESK'),
       ]),
     );
   }
@@ -1383,14 +1892,54 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                 offstage: _mode != 'binary',
                 child: const BinarySignalScreen(),
               ),
-              // PRO DESK side — 11 Day-Trader Skills Command Center (ADD-ONLY)
-              Offstage(
-                offstage: _mode != 'pro',
-                child: const ProTraderDeskScreen(),
-              ),
             ]),
           ),
         ]),
+      ),
+    );
+  }
+
+  void _openInForex11SkillSheet({int initialTab = 0}) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0A0D12),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => FractionallySizedBox(
+        heightFactor: 0.92,
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: const BoxDecoration(
+                color: Color(0xFF12161F),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                border: Border(bottom: BorderSide(color: Colors.white12)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.auto_graph_rounded, color: kGold, size: 18),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'FOREX 11 DAY-TRADER PRO SKILLS (FULL ENGINE)',
+                      style: TextStyle(color: kGold, fontSize: 13, fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                  InkWell(
+                    onTap: () => Navigator.pop(ctx),
+                    child: const Icon(Icons.close, color: Colors.white70, size: 22),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ProTraderDeskScreen(initialSkillTab: initialTab),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1626,7 +2175,8 @@ class ProBar {
 }
 
 class ProTraderDeskScreen extends StatefulWidget {
-  const ProTraderDeskScreen({super.key});
+  final int initialSkillTab;
+  const ProTraderDeskScreen({super.key, this.initialSkillTab = 0});
 
   @override
   State<ProTraderDeskScreen> createState() => _ProTraderDeskScreenState();
@@ -1719,6 +2269,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   @override
   void initState() {
     super.initState();
+    _activeSkillTab = widget.initialSkillTab;
     _loadSavedProState();
     _computeWeightsAllocation();
     _startBackgroundAlertWatcher();
