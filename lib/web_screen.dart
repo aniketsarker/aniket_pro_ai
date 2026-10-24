@@ -1593,19 +1593,19 @@ class _CamCaptureScreenState extends State<CamCaptureScreen> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  ANIKET PRO AI — 11 DAY-TRADER SKILLS COMMAND CENTER (ADD-ONLY)
-//  Includes all 11 skills from day-trader-skill v2.0:
-//   1. trader-scanner     (Daily & 5m ORB Market Scanner: Gold, BTC, Forex, Stocks)
-//   2. trader-news        (Yahoo RSS + SEC 8-K Live Breaking News & Catalyst Monitor)
-//   3. trader-entry       (5m/1m Opening Range Breakout & Level Entry Timer)
-//   4. trader-exit        (Stop-Loss & 1R/2R Target Exit Planner with Spread Guard)
-//   5. trader-timemachine (Monte Carlo Simulation + 60-Day Historical Backtester)
-//   6. trader-budget      (4-Cap Position Sizer: Max Loss, Position %, Order $, Cash)
-//   7. trader-risk        (10-Rule Pre-Trade Risk Gate: PASS / BLOCK)
-//   8. trader-broker      (Bracket Order Ticket Builder, Alpaca JSON & Flatten Ticket)
-//   9. trader-alerts      (NYSE/24h Clock + Live Price/Stop/Target Auto-Alert Monitor)
-//  10. trader-analyst     (SEC EDGAR XBRL Quarterly Financials & Margin Analyzer)
-//  11. trader-pelosi      (US House Clerk PTR Congress & Nancy Pelosi Trade Tracker)
+//  ANIKET PRO AI — 11 DAY-TRADER SKILLS COMMAND CENTER (COMPLETE EDITION)
+//  Includes 100% of all sub-features from day-trader-skill v2.0:
+//   1. trader-scanner     (Daily Setups + 5m Intraday ORB + Custom Ticker Universe)
+//   2. trader-news        (Yahoo RSS + Live SEC EDGAR 8-K Atom Feed & Item Tagger)
+//   3. trader-entry       (5m/1m Toggle, ORB 15m vs Level Mode, Volume Filter)
+//   4. trader-exit        (Interactive Stop Rule: or-mid/or-low/atr:1.5/pct & 1R/1.5R/2R/3R)
+//   5. trader-timemachine (Monte Carlo Replays + Historical Session Backtest + ASCII Fan Histogram)
+//   6. trader-budget      (4-Cap Trade Sizer + Multi-Asset Portfolio Weights Allocator)
+//   7. trader-risk        (10-Rule Pre-Trade Compliance Gate: PASS / BLOCK)
+//   8. trader-broker      (Bracket Ticket + Copy Alpaca JSON + Flatten Position Ticket)
+//   9. trader-alerts      (NYSE 2026-2027 Holiday/Early-Close Clock + Custom & Plan Alerts)
+//  10. trader-analyst     (SEC EDGAR XBRL Multi-Quarter YoY Table + Transcript AI Analyzer)
+//  11. trader-pelosi      (US Congress PTR Tracker + Member Filter + Watchlist Match Flag)
 // ═══════════════════════════════════════════════════════════════════════════
 
 class ProBar {
@@ -1633,40 +1633,72 @@ class ProTraderDeskScreen extends StatefulWidget {
 }
 
 class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
-  // Preset symbols covering Gold (XAUUSD), Bitcoin (BTCUSD), Forex Majors, and Top US Stocks
-  static const List<Map<String, String>> _presets = [
+  static final List<Map<String, String>> _presets = [
     {'label': 'XAU/USD (Gold)', 'sym': 'GC=F', 'kind': 'forex'},
+    {'label': 'XAG/USD (Silver)', 'sym': 'SI=F', 'kind': 'forex'},
+    {'label': 'WTI Crude Oil', 'sym': 'CL=F', 'kind': 'forex'},
+    {'label': 'US100 (Nasdaq Fut)', 'sym': 'NQ=F', 'kind': 'forex'},
+    {'label': 'US30 (Dow Fut)', 'sym': 'YM=F', 'kind': 'forex'},
+    {'label': 'DXY (Dollar Index)', 'sym': 'DX-Y.NYB', 'kind': 'forex'},
     {'label': 'BTC/USD (Bitcoin)', 'sym': 'BTC-USD', 'kind': 'crypto'},
+    {'label': 'ETH/USD (Ethereum)', 'sym': 'ETH-USD', 'kind': 'crypto'},
+    {'label': 'SOL/USD (Solana)', 'sym': 'SOL-USD', 'kind': 'crypto'},
     {'label': 'EUR/USD', 'sym': 'EURUSD=X', 'kind': 'forex'},
     {'label': 'GBP/USD', 'sym': 'GBPUSD=X', 'kind': 'forex'},
     {'label': 'USD/JPY', 'sym': 'USDJPY=X', 'kind': 'forex'},
-    {'label': 'DXY (Dollar Index)', 'sym': 'DX-Y.NYB', 'kind': 'forex'},
+    {'label': 'AUD/USD', 'sym': 'AUDUSD=X', 'kind': 'forex'},
+    {'label': 'USD/CAD', 'sym': 'USDCAD=X', 'kind': 'forex'},
     {'label': 'NVDA', 'sym': 'NVDA', 'kind': 'stock'},
     {'label': 'TSLA', 'sym': 'TSLA', 'kind': 'stock'},
     {'label': 'AAPL', 'sym': 'AAPL', 'kind': 'stock'},
     {'label': 'AMD', 'sym': 'AMD', 'kind': 'stock'},
     {'label': 'META', 'sym': 'META', 'kind': 'stock'},
+    {'label': 'MSFT', 'sym': 'MSFT', 'kind': 'stock'},
+    {'label': 'AMZN', 'sym': 'AMZN', 'kind': 'stock'},
+    {'label': 'GOOGL', 'sym': 'GOOGL', 'kind': 'stock'},
     {'label': 'SPY', 'sym': 'SPY', 'kind': 'stock'},
+    {'label': 'QQQ', 'sym': 'QQQ', 'kind': 'stock'},
   ];
 
-  int _activeSkillTab = 0; // 0: All-in-One Pipeline, 1..11: Individual Skills
+  // Official NYSE 2026 & 2027 Holidays and 1:00 PM ET Early Closes (from alerts.py)
+  static const Set<String> _nyseHolidays = {
+    '2026-01-01', '2026-01-19', '2026-02-16', '2026-04-03', '2026-05-25',
+    '2026-06-19', '2026-07-03', '2026-09-07', '2026-11-26', '2026-12-25',
+    '2027-01-01', '2027-01-18', '2027-02-15', '2027-03-26', '2027-05-31',
+    '2027-06-18', '2027-07-05', '2027-09-06', '2027-11-25', '2027-12-24',
+  };
+  static const Set<String> _nyseEarlyCloses = {
+    '2026-11-27', '2026-12-24', '2027-11-26',
+  };
+
+  int _activeSkillTab = 0;
   String _selectedSym = 'GC=F';
   String _selectedLabel = 'XAU/USD (Gold)';
   bool _busy = false;
-  String _statusMsg = 'Ready — Tap "RUN FULL 11-SKILL ANALYSIS" or pick any skill tab below';
+  String _statusMsg = 'Ready — Tap "RUN ALL 11 SKILLS" or select any skill tab below';
 
-  // Budget & Risk Config (trader-budget & trader-risk defaults)
+  // Entry settings (trader-entry)
+  String _entryInterval = '5m'; // '5m' or '1m'
+  String _entrySetupMode = 'orb'; // 'orb' or 'level'
+  double _customBreakoutLevel = 0.0;
+  double _minVolumeX = 1.0;
+
+  // Exit settings (trader-exit)
+  String _stopRule = 'atr:1.5'; // 'or_mid', 'or_low', 'atr:1.5', 'pct:0.5'
+  double _targetR = 2.0;
+
+  // Budget & Risk settings (trader-budget & trader-risk)
   double _budgetUsd = 5000.0;
   double _maxLossPerTradeUsd = 50.0;
   double _maxDailyLossUsd = 150.0;
   double _cashBufferPct = 10.0;
   double _maxPositionPct = 75.0;
   double _maxOrderUsd = 4000.0;
-  double _minRewardRisk = 1.5;
-  String _stopRule = 'atr:1.5'; // 'or_mid', 'or_low', 'atr:1.5', 'pct:0.5'
-  double _targetR = 2.0;
+  double _minRewardRisk = 1.0;
+  String _weightsSpec = 'GC=F=30,BTC-USD=25,NVDA=25,TSLA=20';
+  List<Map<String, dynamic>> _weightsAllocation = [];
 
-  // Shared state across the 11 skills (mirrors trader/*.json)
+  // Shared 11-skill state
   List<Map<String, dynamic>> _watchlist = [];
   List<Map<String, dynamic>> _newsItems = [];
   Map<String, dynamic>? _entryState;
@@ -1677,7 +1709,9 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   List<Map<String, dynamic>> _brokerLog = [];
   List<Map<String, dynamic>> _alertsList = [];
   Map<String, dynamic>? _analystState;
+  String _transcriptAnalysis = '';
   List<Map<String, dynamic>> _pelosiRows = [];
+  String _pelosiFilter = '';
   String _aiDeepSummary = '';
 
   Timer? _alertWatchTimer;
@@ -1686,6 +1720,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   void initState() {
     super.initState();
     _loadSavedProState();
+    _computeWeightsAllocation();
     _startBackgroundAlertWatcher();
   }
 
@@ -1693,6 +1728,60 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   void dispose() {
     _alertWatchTimer?.cancel();
     super.dispose();
+  }
+
+  // ── Market Clock Helper (NYSE Clock from alerts.py + BD Killzone Clock) ──
+  Map<String, String> _getMarketClockStatus() {
+    final nowUtc = DateTime.now().toUtc();
+    // New York EDT is UTC-4 (Mar-Nov), EST is UTC-5; Oct is EDT (UTC-4)
+    final isDst = nowUtc.month >= 3 && nowUtc.month <= 11;
+    final nyTime = nowUtc.add(Duration(hours: isDst ? -4 : -5));
+    final bdTime = nowUtc.add(const Duration(hours: 6));
+
+    final nyDateStr =
+        '${nyTime.year}-${nyTime.month.toString().padLeft(2, '0')}-${nyTime.day.toString().padLeft(2, '0')}';
+    final nyHm = '${nyTime.hour.toString().padLeft(2, '0')}:${nyTime.minute.toString().padLeft(2, '0')}';
+    final bdHm = '${bdTime.hour.toString().padLeft(2, '0')}:${bdTime.minute.toString().padLeft(2, '0')}';
+
+    final isWeekend = nyTime.weekday == DateTime.saturday || nyTime.weekday == DateTime.sunday;
+    final isHoliday = _nyseHolidays.contains(nyDateStr);
+    final isEarlyClose = _nyseEarlyCloses.contains(nyDateStr);
+    final closeMinutes = isEarlyClose ? (13 * 60) : (16 * 60);
+    final curMinutes = nyTime.hour * 60 + nyTime.minute;
+    final openMinutes = 9 * 60 + 30;
+
+    String nyseStatus;
+    if (isWeekend) {
+      nyseStatus = 'CLOSED (Weekend)';
+    } else if (isHoliday) {
+      nyseStatus = 'CLOSED (NYSE Holiday)';
+    } else if (curMinutes >= openMinutes && curMinutes < closeMinutes) {
+      nyseStatus = isEarlyClose ? 'OPEN (Early Close 1:00 PM ET)' : 'OPEN (Regular Session)';
+    } else if (curMinutes < openMinutes) {
+      final minsLeft = openMinutes - curMinutes;
+      nyseStatus = 'PRE-MARKET (Opens in ${minsLeft ~/ 60}h ${minsLeft % 60}m)';
+    } else {
+      nyseStatus = 'AFTER-HOURS (Closed at ${isEarlyClose ? "1:00 PM" : "4:00 PM"} ET)';
+    }
+
+    String fxSession;
+    if (bdTime.hour >= 13 && bdTime.hour < 17) {
+      fxSession = 'LONDON KILLZONE (High Liq)';
+    } else if (bdTime.hour >= 18 && bdTime.hour < 23) {
+      fxSession = 'NEW YORK KILLZONE (Peak Liq)';
+    } else if (bdTime.hour >= 5 && bdTime.hour < 12) {
+      fxSession = 'ASIA / TOKYO SESSION';
+    } else {
+      fxSession = 'LATE NY / SYDNEY TRANSITION';
+    }
+
+    return {
+      'ny_time': '$nyHm ET ($nyDateStr)',
+      'bd_time': '$bdHm BD',
+      'nyse_status': nyseStatus,
+      'fx_session': fxSession,
+      'flat_by': isEarlyClose ? '12:55 ET (Early Close)' : '15:55 ET',
+    };
   }
 
   Future<void> _loadSavedProState() async {
@@ -1748,7 +1837,6 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     }
   }
 
-  // ── HTTP Helper with custom User-Agent (required for Yahoo & SEC EDGAR) ──
   Future<String> _fetchUrl(String url, {String? userAgent}) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 12);
     try {
@@ -1768,7 +1856,6 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     }
   }
 
-  // ── Fetch Yahoo v8 Chart Bars ──
   Future<Map<String, dynamic>?> _fetchYahooChart(String sym, {String range = '5d', String interval = '5m'}) async {
     for (final host in ['query2.finance.yahoo.com', 'query1.finance.yahoo.com']) {
       final url = 'https://$host/v8/finance/chart/${Uri.encodeComponent(sym)}?range=$range&interval=$interval';
@@ -1822,7 +1909,6 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     return null;
   }
 
-  // ── Wilder's RSI-14 Calculation (exact formula from scan.py) ──
   double _calcWilderRsi(List<double> closes, {int period = 14}) {
     if (closes.length <= period) return 50.0;
     double gains = 0.0;
@@ -1849,7 +1935,6 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     return 100.0 - (100.0 / (1.0 + rs));
   }
 
-  // ── 14-Bar ATR Calculation (exact formula from exit.py) ──
   double _calcAtr14(List<ProBar> bars) {
     if (bars.length < 2) return 0.0;
     final n = math.min(14, bars.length - 1);
@@ -1874,10 +1959,10 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   Future<void> _runScanner() async {
     setState(() {
       _busy = true;
-      _statusMsg = 'Running trader-scanner across Gold, BTC, Forex & Top Stocks...';
+      _statusMsg = 'Running trader-scanner across Gold, Silver, BTC, Forex & Top Stocks...';
     });
     final List<Map<String, dynamic>> hits = [];
-    for (final item in _presets) {
+    for (final item in _presets.take(14)) {
       final sym = item['sym']!;
       final label = item['label']!;
       final dailyData = await _fetchYahooChart(sym, range: '3mo', interval: '1d');
@@ -1930,7 +2015,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
         if (lastPx == 0 && ibars.isNotEmpty) lastPx = ibars.last.c;
         if (ibars.length >= 12) {
           final sessionBars = ibars.length >= 24 ? ibars.sublist(ibars.length - 24) : ibars;
-          final orBars = sessionBars.take(3).toList(); // First 15m (3 x 5m bars)
+          final orBars = sessionBars.take(3).toList();
           orHigh = orBars.map((b) => b.h).reduce(math.max);
           orLow = orBars.map((b) => b.l).reduce(math.min);
           if (sessionBars.last.c > orHigh) {
@@ -1965,21 +2050,21 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  SKILL 2: trader-news (Yahoo RSS + SEC EDGAR 8-K Catalyst Monitor)
+  //  SKILL 2: trader-news (Yahoo RSS + Live SEC EDGAR 8-K Atom Feed)
   // ═══════════════════════════════════════════════════════════════════
   String _tagHeadline(String title) {
     final low = title.toLowerCase();
     if (low.contains('cpi') || low.contains('fed') || low.contains('powell') || low.contains('rate') || low.contains('inflation') || low.contains('gold') || low.contains('treasury')) {
       return 'MACRO / FED';
     }
-    if (low.contains('earning') || low.contains('revenue') || low.contains('eps') || low.contains('quarter') || low.contains('8-k')) {
-      return 'EARNINGS';
+    if (low.contains('earning') || low.contains('revenue') || low.contains('eps') || low.contains('quarter') || low.contains('8-k') || low.contains('2.02')) {
+      return 'EARNINGS / 8-K';
     }
     if (low.contains('upgrade') || low.contains('downgrade') || low.contains('price target') || low.contains('analyst')) {
       return 'ANALYST';
     }
-    if (low.contains('acquire') || low.contains('merger') || low.contains('deal') || low.contains('partner')) {
-      return 'DEAL';
+    if (low.contains('acquire') || low.contains('merger') || low.contains('deal') || low.contains('partner') || low.contains('1.01')) {
+      return 'DEAL / 8-K';
     }
     if (low.contains('sec') || low.contains('lawsuit') || low.contains('probe') || low.contains('ban') || low.contains('etf')) {
       return 'REGULATORY';
@@ -1991,7 +2076,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     if (!silent) {
       setState(() {
         _busy = true;
-        _statusMsg = 'Running trader-news for $_selectedLabel...';
+        _statusMsg = 'Running trader-news (Yahoo RSS + SEC EDGAR 8-K) for $_selectedLabel...';
       });
     }
     final querySym = _selectedSym == 'GC=F'
@@ -2001,13 +2086,40 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     final xmlRaw = await _fetchUrl(rssUrl);
     final List<Map<String, dynamic>> items = [];
 
+    // 1. Check SEC EDGAR 8-K Atom Feed if stock CIK exists (from news.py)
+    final cik = _knownCiks[_selectedSym];
+    if (cik != null) {
+      final secAtomUrl = 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=$cik&type=8-K&count=5&output=atom';
+      final atomRaw = await _fetchUrl(secAtomUrl, userAgent: 'AniketProAI/2.0 (aniket@aniketpro.ai)');
+      if (atomRaw.isNotEmpty) {
+        final entryReg = RegExp(r'<entry>([\s\S]*?)</entry>', caseSensitive: false);
+        final titleReg = RegExp(r'<title[^>]*>([\s\S]*?)</title>', caseSensitive: false);
+        final updReg = RegExp(r'<updated>([\s\S]*?)</updated>', caseSensitive: false);
+        final sumReg = RegExp(r'<summary[^>]*>([\s\S]*?)</summary>', caseSensitive: false);
+        for (final m in entryReg.allMatches(atomRaw).take(3)) {
+          final b = m.group(1) ?? '';
+          final t = (titleReg.firstMatch(b)?.group(1) ?? '8-K Filing').trim();
+          final u = (updReg.firstMatch(b)?.group(1) ?? '').trim();
+          final s = (sumReg.firstMatch(b)?.group(1) ?? '').replaceAll(RegExp(r'<[^>]+>'), ' ').trim();
+          items.add({
+            'sym': _selectedLabel,
+            'title': 'SEC EDGAR $t — ${s.length > 110 ? "${s.substring(0, 110)}..." : s}',
+            'tag': 'SEC 8-K FILING',
+            'time': u.length >= 10 ? u.substring(0, 10) : u,
+            'link': '',
+          });
+        }
+      }
+    }
+
+    // 2. Yahoo Finance Headline RSS
     if (xmlRaw.isNotEmpty) {
       final itemReg = RegExp(r'<item>([\s\S]*?)</item>', caseSensitive: false);
       final titleReg = RegExp(r'<title><!\[CDATA\[([\s\S]*?)\]\]></title>|<title>([\s\S]*?)</title>', caseSensitive: false);
       final pubReg = RegExp(r'<pubDate>([\s\S]*?)</pubDate>', caseSensitive: false);
       final linkReg = RegExp(r'<link>([\s\S]*?)</link>', caseSensitive: false);
 
-      for (final m in itemReg.allMatches(xmlRaw).take(12)) {
+      for (final m in itemReg.allMatches(xmlRaw).take(10)) {
         final block = m.group(1) ?? '';
         final tm = titleReg.firstMatch(block);
         final rawTitle = (tm?.group(1) ?? tm?.group(2) ?? '').trim()
@@ -2032,27 +2144,28 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
       _newsItems = items;
       if (!silent) {
         _busy = false;
-        _statusMsg = 'trader-news found ${items.length} latest headlines for $_selectedLabel.';
+        _statusMsg = 'trader-news loaded ${items.length} headlines & SEC 8-K catalysts.';
       }
     });
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  SKILL 3: trader-entry (Opening-Range & Level Breakout Entry Timer)
+  //  SKILL 3: trader-entry (5m/1m Opening Range & Level Entry Timer)
   // ═══════════════════════════════════════════════════════════════════
   Future<void> _runEntry({bool silent = false}) async {
     if (!silent) {
       setState(() {
         _busy = true;
-        _statusMsg = 'Running trader-entry on 5m bars for $_selectedLabel...';
+        _statusMsg = 'Running trader-entry ($_entryInterval, mode: ${_entrySetupMode.toUpperCase()}) for $_selectedLabel...';
       });
     }
-    final chart = await _fetchYahooChart(_selectedSym, range: '5d', interval: '5m');
+    final rangeStr = _entryInterval == '1m' ? '1d' : '5d';
+    final chart = await _fetchYahooChart(_selectedSym, range: rangeStr, interval: _entryInterval);
     if (chart == null) {
       if (!mounted) return;
       setState(() {
         if (!silent) _busy = false;
-        _statusMsg = 'Could not load 5m bars for $_selectedLabel.';
+        _statusMsg = 'Could not load $_entryInterval bars for $_selectedLabel.';
       });
       return;
     }
@@ -2062,28 +2175,33 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     final prevClose = chart['prevClose'] as double;
     final atr14 = _calcAtr14(bars);
 
-    // Build current session window (last 24 five-minute bars = 2 hours, or full intraday window)
+    final orCount = _entryInterval == '1m' ? math.min(15, bars.length ~/ 2) : 3;
     final sessionBars = bars.length > 36 ? bars.sublist(bars.length - 36) : bars;
-    final orBars = sessionBars.take(3).toList(); // First 15 minutes (3 x 5m bars)
+    final orBars = sessionBars.take(math.max(1, orCount)).toList();
     final orHigh = orBars.map((b) => b.h).reduce(math.max);
     final orLow = orBars.map((b) => b.l).reduce(math.min);
     final orMid = (orHigh + orLow) / 2.0;
     final orAvgVol = orBars.map((b) => b.v).reduce((a, b) => a + b) / math.max(1, orBars.length);
+
+    final breakoutTargetLevel = (_entrySetupMode == 'level' && _customBreakoutLevel > 0)
+        ? _customBreakoutLevel
+        : orHigh;
 
     String status = 'WAITING';
     String direction = 'LONG';
     double entryPrice = livePx;
     int triggerIdx = sessionBars.length - 1;
 
-    for (int i = 3; i < sessionBars.length; i++) {
+    for (int i = orBars.length; i < sessionBars.length; i++) {
       final b = sessionBars[i];
-      if (b.c > orHigh) {
-        status = 'TRIGGERED (CLOSED ABOVE OR HIGH)';
+      final volOk = orAvgVol <= 0 || (b.v / orAvgVol) >= _minVolumeX;
+      if (b.c > breakoutTargetLevel && volOk) {
+        status = 'TRIGGERED (CLOSED ABOVE ${_entrySetupMode == "level" ? "LEVEL" : "OR HIGH"})';
         direction = 'LONG';
         entryPrice = b.c;
         triggerIdx = i;
         break;
-      } else if (b.c < orLow) {
+      } else if (_entrySetupMode == 'orb' && b.c < orLow && volOk) {
         status = 'TRIGGERED (CLOSED BELOW OR LOW)';
         direction = 'SHORT / PULLBACK';
         entryPrice = b.c;
@@ -2093,8 +2211,8 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     }
 
     if (status == 'WAITING') {
-      final distUp = ((orHigh - livePx) / livePx * 100.0).abs();
-      status = 'WAITING (${distUp.toStringAsFixed(2)}% from OR High)';
+      final distUp = ((breakoutTargetLevel - livePx) / livePx * 100.0).abs();
+      status = 'WAITING (${distUp.toStringAsFixed(2)}% from Breakout Level)';
       direction = livePx >= orMid ? 'LONG BIAS' : 'SHORT BIAS';
     }
 
@@ -2104,6 +2222,9 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
       'created_by': 'trader-entry',
       'symbol': _selectedSym,
       'label': _selectedLabel,
+      'interval': _entryInterval,
+      'setup': _entrySetupMode,
+      'breakout_level': breakoutTargetLevel,
       'status': status,
       'direction': direction,
       'price': livePx,
@@ -2122,13 +2243,13 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     setState(() {
       if (!silent) {
         _busy = false;
-        _statusMsg = 'trader-entry: $status @ ${livePx.toStringAsFixed(_decimalsFor(livePx))}';
+        _statusMsg = 'trader-entry ($_entryInterval): $status @ ${livePx.toStringAsFixed(_decimalsFor(livePx))}';
       }
     });
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  SKILL 4: trader-exit (Stop-Loss & 1R/2R Target Exit Planner)
+  //  SKILL 4: trader-exit (Stop-Loss & 1R/2R/3R Target Exit Planner)
   // ═══════════════════════════════════════════════════════════════════
   Future<void> _runExit({bool silent = false}) async {
     if (_entryState == null) {
@@ -2159,7 +2280,6 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
       stopLabel = '1.5x ATR-14 Stop (atr:1.5)';
     }
 
-    // Spread guard (minimum 0.05% risk distance from exit.py)
     if ((livePx - stopPx).abs() < livePx * 0.0005) {
       stopPx = livePx - (livePx * 0.002);
     }
@@ -2170,6 +2290,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     final shortStop = livePx + riskPerUnit;
     final shortTarget1R = livePx - riskPerUnit;
     final shortTarget2R = livePx - (_targetR * riskPerUnit);
+    final clock = _getMarketClockStatus();
 
     _planState = {
       'created_by': 'trader-exit',
@@ -2189,7 +2310,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
       'short_target_1r': shortTarget1R,
       'short_target_2r': shortTarget2R,
       'opening_range': {'high': orHigh, 'low': orLow, 'mid': orMid},
-      'flat_by': '15:55 ET',
+      'flat_by': clock['flat_by'] ?? '15:55 ET',
     };
 
     if (!mounted) return;
@@ -2202,7 +2323,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  SKILL 5: trader-timemachine (Monte Carlo + Historical Backtester)
+  //  SKILL 5: trader-timemachine (Monte Carlo + Historical Backtest + Fan Chart)
   // ═══════════════════════════════════════════════════════════════════
   Future<void> _runTimeMachine({bool silent = false}) async {
     if (_planState == null) {
@@ -2213,7 +2334,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     if (!silent) {
       setState(() {
         _busy = true;
-        _statusMsg = 'Running trader-timemachine (2,500 Monte Carlo session replays)...';
+        _statusMsg = 'Running trader-timemachine (Monte Carlo + Past Sessions Backtest)...';
       });
     }
 
@@ -2225,7 +2346,6 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     final risk = (entry - stop).abs();
     final targetR = (_planState!['target_r'] as num).toDouble();
 
-    // Build empirical bar ratio pool: (high/prevClose, low/prevClose, close/prevClose)
     final List<List<double>> ratioPool = [];
     for (int i = 1; i < bars.length; i++) {
       final prevC = bars[i - 1].c;
@@ -2247,7 +2367,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     }
 
     const int replays = 2500;
-    const int horizonBars = 48; // 4 hours of 5m bars
+    const int horizonBars = 48;
     final rng = math.Random(19);
     int hitTarget = 0;
     int hitStop = 0;
@@ -2264,7 +2384,6 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
         final barH = px * draw[0];
         final barL = px * draw[1];
         final barC = px * draw[2];
-        // Stop checked before target (conservative rule from timemachine.py)
         if (barL <= stop) {
           outcome = 'stop';
           px = stop;
@@ -2292,10 +2411,62 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
       }
     }
 
+    // Historical Session Backtest (chunking bars into 36-bar sessions and testing the ORB + Stop/Target rule)
+    int histSessions = 0;
+    int histWins = 0;
+    int histLosses = 0;
+    for (int s = 0; s + 36 <= bars.length; s += 36) {
+      final chunk = bars.sublist(s, s + 36);
+      final orH = chunk.take(3).map((b) => b.h).reduce(math.max);
+      final orL = chunk.take(3).map((b) => b.l).reduce(math.min);
+      final orM = (orH + orL) / 2.0;
+      int trig = -1;
+      for (int k = 3; k < 20; k++) {
+        if (chunk[k].c > orH) {
+          trig = k;
+          break;
+        }
+      }
+      if (trig < 0) continue;
+      histSessions++;
+      final hEntry = chunk[trig].c;
+      final hStop = orM < hEntry ? orM : hEntry * 0.996;
+      final hRisk = (hEntry - hStop).abs();
+      final hTarget = hEntry + (targetR * hRisk);
+      for (int k = trig + 1; k < chunk.length; k++) {
+        if (chunk[k].l <= hStop) {
+          histLosses++;
+          break;
+        }
+        if (chunk[k].h >= hTarget) {
+          histWins++;
+          break;
+        }
+      }
+    }
+
     endPrices.sort();
     final p05 = endPrices[(replays * 0.05).floor()];
+    final p25 = endPrices[(replays * 0.25).floor()];
     final p50 = endPrices[(replays * 0.50).floor()];
+    final p75 = endPrices[(replays * 0.75).floor()];
     final p95 = endPrices[(replays * 0.95).floor()];
+
+    // Build 8-bin visual ASCII distribution histogram (timemachine.py chart)
+    final List<String> histBars = [];
+    if (p95 > p05) {
+      const int binsCount = 6;
+      final step = (p95 - p05) / binsCount;
+      final dec = _decimalsFor(entry);
+      for (int b = 0; b < binsCount; b++) {
+        final lo = p05 + b * step;
+        final hi = lo + step;
+        final c = endPrices.where((p) => p >= lo && (b == binsCount - 1 ? p <= hi : p < hi)).length;
+        final pct = (c / replays) * 100.0;
+        final blocks = '█' * math.max(1, (pct / 3.0).round());
+        histBars.add('${lo.toStringAsFixed(dec)}–${hi.toStringAsFixed(dec)} : $blocks ${pct.toStringAsFixed(1)}%');
+      }
+    }
 
     final resolved = math.max(1, hitTarget + hitStop);
     final winShare = (hitTarget / resolved) * 100.0;
@@ -2321,8 +2492,14 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
       'breakeven_pct': breakEvenPct,
       'avg_r': avgR,
       'p05': p05,
+      'p25': p25,
       'p50': p50,
+      'p75': p75,
       'p95': p95,
+      'hist_sessions': histSessions,
+      'hist_wins': histWins,
+      'hist_losses': histLosses,
+      'hist_bars': histBars,
       'verdict': verdict,
     };
 
@@ -2336,24 +2513,53 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  SKILL 6: trader-budget (4-Cap Position Sizer & Lot Calculator)
+  //  SKILL 6: trader-budget (4-Cap Sizer + Portfolio Weights Mode)
   // ═══════════════════════════════════════════════════════════════════
+  void _computeWeightsAllocation() {
+    // Implements size.py --weights mode: reserves cash_buffer_pct, normalizes weights to 100%, caps at max_position_pct
+    final investable = _budgetUsd * (1.0 - (_cashBufferPct / 100.0));
+    final maxPerAsset = _budgetUsd * (_maxPositionPct / 100.0);
+    final parts = _weightsSpec.split(',');
+    final Map<String, double> rawW = {};
+    double sumW = 0.0;
+    for (final p in parts) {
+      final kv = p.split('=');
+      if (kv.length == 2) {
+        final sym = kv[0].trim().toUpperCase();
+        final w = double.tryParse(kv[1].trim()) ?? 0.0;
+        if (sym.isNotEmpty && w > 0) {
+          rawW[sym] = w;
+          sumW += w;
+        }
+      }
+    }
+    if (sumW <= 0) return;
+    final List<Map<String, dynamic>> out = [];
+    rawW.forEach((sym, w) {
+      final normPct = (w / sumW) * 100.0;
+      final usd = math.min(maxPerAsset, investable * (w / sumW));
+      out.add({
+        'sym': sym,
+        'weight_pct': normPct.toStringAsFixed(1),
+        'usd': usd.toStringAsFixed(2),
+      });
+    });
+    _weightsAllocation = out;
+  }
+
   Future<void> _runBudget({bool silent = false}) async {
     if (_planState == null) {
       await _runExit(silent: true);
     }
     if (_planState == null) return;
 
+    _computeWeightsAllocation();
+
     final entry = (_planState!['entry'] as num).toDouble();
     final stop = (_planState!['stop'] as num).toDouble();
     final target = (_planState!['target'] as num).toDouble();
     final riskPerUnit = (entry - stop).abs();
 
-    // 4 Caps from size.py:
-    // 1. max_loss: max_loss_per_trade_usd / risk_per_share
-    // 2. position_cap: (budget * max_position_pct/100) / entry
-    // 3. max_order: max_order_usd / entry
-    // 4. cash_after_buffer: (budget * (1 - cash_buffer_pct/100)) / entry
     final capByLoss = riskPerUnit > 0 ? (_maxLossPerTradeUsd / riskPerUnit) : 0.0;
     final capByPos = entry > 0 ? ((_budgetUsd * (_maxPositionPct / 100.0)) / entry) : 0.0;
     final capByOrder = entry > 0 ? (_maxOrderUsd / entry) : 0.0;
@@ -2376,7 +2582,6 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     });
 
     final wholeShares = math.max(1, rawUnits.floor());
-    // Also compute Forex Standard Lot equivalent (for XAUUSD / Forex where 1.00 lot = 100 oz Gold or 100,000 FX units)
     final double forexLots = _selectedSym == 'GC=F'
         ? math.max(0.01, (capByLoss / 100.0))
         : (_selectedSym.endsWith('=X')
@@ -2430,35 +2635,30 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     final rr = (_planState!['reward_risk'] as num).toDouble();
     final maxLossUsd = (_budgetOrderState!['max_loss_usd'] as num).toDouble();
 
-    // 1. Stop required & below entry
     if (stop > 0 && stop < entry) {
       passedRules.add('Stop-Loss present and below entry (${stop.toStringAsFixed(_decimalsFor(stop))})');
     } else {
       blockedReasons.add('Stop-Loss missing or at/above entry price');
     }
 
-    // 2. Target above entry
     if (target > entry) {
       passedRules.add('Take-Profit above entry (${target.toStringAsFixed(_decimalsFor(target))})');
     } else {
       blockedReasons.add('Take-Profit must be strictly above entry');
     }
 
-    // 3. Max Loss per Trade check
     if (maxLossUsd <= _maxLossPerTradeUsd + 0.01) {
       passedRules.add('Trade risk (\$${maxLossUsd.toStringAsFixed(2)}) fits Max Loss limit (\$$_maxLossPerTradeUsd)');
     } else {
       blockedReasons.add('Trade risk (\$${maxLossUsd.toStringAsFixed(2)}) exceeds Max Loss limit (\$$_maxLossPerTradeUsd)');
     }
 
-    // 4. Minimum Reward:Risk check
     if (rr >= _minRewardRisk) {
       passedRules.add('Reward:Risk (${rr.toStringAsFixed(2)}R) meets minimum (${_minRewardRisk}R)');
     } else {
       blockedReasons.add('Reward:Risk (${rr.toStringAsFixed(2)}R) is below minimum (${_minRewardRisk}R)');
     }
 
-    // 5. Daily Loss Limit check
     final todayTrades = _brokerLog.length;
     final usedDailyRisk = todayTrades * maxLossUsd;
     if (usedDailyRisk + maxLossUsd <= _maxDailyLossUsd) {
@@ -2467,8 +2667,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
       blockedReasons.add('Would exceed Daily Loss Limit (\$$_maxDailyLossUsd)');
     }
 
-    // 6. Cash Buffer check
-    passedRules.add('Cash buffer (${_cashBufferPct.toStringAsFixed(0)}%) preserved');
+    passedRules.add('Cash buffer (${_cashBufferPct.toStringAsFixed(0)}%) & Position Cap (${_maxPositionPct.toStringAsFixed(0)}%) preserved');
 
     final verdict = blockedReasons.isEmpty ? 'PASS' : 'BLOCK';
     _riskVerdictState = {
@@ -2487,8 +2686,22 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  SKILL 8: trader-broker (Order Ticket & Explicit YES Approval)
+  //  SKILL 8: trader-broker (Ticket, Alpaca JSON & Flatten Position)
   // ═══════════════════════════════════════════════════════════════════
+  Map<String, dynamic> _buildAlpacaOrderJson() {
+    final b = _budgetOrderState ?? {};
+    return {
+      'symbol': b['symbol'] ?? _selectedSym,
+      'side': b['side'] ?? 'buy',
+      'qty': b['qty'] ?? '1',
+      'type': b['type'] ?? 'market',
+      'time_in_force': b['time_in_force'] ?? 'day',
+      'order_class': 'bracket',
+      'take_profit_limit_price': b['take_profit_limit_price'] ?? '0',
+      'stop_loss_stop_price': b['stop_loss_stop_price'] ?? '0',
+    };
+  }
+
   Future<void> _approvePaperOrder() async {
     if (_budgetOrderState == null || _riskVerdictState == null) {
       await _runRiskCheck();
@@ -2508,8 +2721,32 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     _notifyToast('Paper Bracket Order Approved & Logged for $_selectedLabel!');
   }
 
+  Future<void> _flattenPositionTicket() async {
+    final b = _budgetOrderState;
+    final qty = b?['qty'] ?? '1';
+    final lots = b?['forex_lots'] ?? '0.01';
+    final px = b?['entry_price'] ?? 'Market';
+    final flatTicket = {
+      'symbol': _selectedSym,
+      'label': '$_selectedLabel (FLATTEN / CLOSE)',
+      'side': 'sell',
+      'qty': qty,
+      'forex_lots': lots,
+      'entry_price': px,
+      'stop_loss_stop_price': 'FLAT',
+      'take_profit_limit_price': 'FLAT',
+      'approved_at': DateTime.now().toIso8601String().substring(0, 19).replaceAll('T', ' '),
+      'status': 'FLATTENED BY CLOSE',
+    };
+    setState(() {
+      _brokerLog.insert(0, flatTicket);
+    });
+    await _saveProState();
+    _notifyToast('Flatten (Close Position) Ticket Logged for $_selectedLabel!');
+  }
+
   // ═══════════════════════════════════════════════════════════════════
-  //  SKILL 9: trader-alerts (NYSE Clock + 3 Plan Alerts + Live Watcher)
+  //  SKILL 9: trader-alerts (NYSE Clock + Plan & Custom Alerts)
   // ═══════════════════════════════════════════════════════════════════
   void _addPlanAlerts() {
     if (_planState == null) {
@@ -2520,6 +2757,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     final stop = (_planState!['stop'] as num).toDouble();
     final target = (_planState!['target'] as num).toDouble();
     final dec = _decimalsFor(entry);
+    final clock = _getMarketClockStatus();
 
     setState(() {
       _alertsList.removeWhere((a) => a['symbol'] == _selectedSym && a['from_plan'] == true);
@@ -2547,10 +2785,10 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
         {
           'id': '${_selectedSym}_flat_${DateTime.now().millisecondsSinceEpoch}',
           'symbol': _selectedSym,
-          'label': '$_selectedLabel FLAT BY CLOSE (15:55 ET)',
+          'label': '$_selectedLabel FLAT BY CLOSE',
           'rule': 'time',
           'price': entry,
-          'price_str': '15:55 ET',
+          'price_str': clock['flat_by'] ?? '15:55 ET',
           'triggered': false,
           'from_plan': true,
         },
@@ -2569,6 +2807,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
         final chart = await _fetchYahooChart(s, range: '1d', interval: '5m');
         if (chart == null) continue;
         final px = chart['price'] as double;
+        final prevC = chart['prevClose'] as double;
         bool changed = false;
         for (final a in _alertsList) {
           if (a['symbol'] == s && a['triggered'] != true) {
@@ -2581,6 +2820,13 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
               a['triggered'] = true;
               changed = true;
               _notifyToast('🔔 STOP ALERT HIT: ${a['label']} @ $px');
+            } else if (a['rule'] == 'pct_move' && prevC > 0) {
+              final chg = ((px - prevC) / prevC * 100.0).abs();
+              if (chg >= lvl) {
+                a['triggered'] = true;
+                changed = true;
+                _notifyToast('🔔 % MOVE ALERT HIT: ${a['label']} (${chg.toStringAsFixed(2)}%)');
+              }
             }
           }
         }
@@ -2593,7 +2839,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  SKILL 10: trader-analyst (SEC EDGAR XBRL & Macro Fundamentals)
+  //  SKILL 10: trader-analyst (SEC EDGAR XBRL Multi-Quarter + Transcript AI)
   // ═══════════════════════════════════════════════════════════════════
   static const Map<String, String> _knownCiks = {
     'NVDA': '0001045810',
@@ -2639,25 +2885,35 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
           final qNets = netUnits.where((e) => (e['form'] == '10-Q' || e['form'] == '10-K') && e['val'] != null).toList();
 
           final lastRev = qRevs.isNotEmpty ? (qRevs.last['val'] as num).toDouble() : 0.0;
+          final prevYearRev = qRevs.length >= 5 ? (qRevs[qRevs.length - 5]['val'] as num).toDouble() : 0.0;
+          final revYoy = prevYearRev > 0 ? (((lastRev - prevYearRev) / prevYearRev) * 100.0) : 0.0;
           final lastNet = qNets.isNotEmpty ? (qNets.last['val'] as num).toDouble() : 0.0;
           final lastEnd = qRevs.isNotEmpty ? (qRevs.last['end'] ?? '').toString() : 'Latest Filing';
           final netMargin = lastRev > 0 ? ((lastNet / lastRev) * 100.0) : 0.0;
+
+          final List<String> recentQuarters = [];
+          for (int idx = math.max(0, qRevs.length - 4); idx < qRevs.length; idx++) {
+            final rItem = qRevs[idx];
+            final rVal = ((rItem['val'] as num).toDouble() / 1e9).toStringAsFixed(2);
+            final rEnd = (rItem['end'] ?? '').toString();
+            final rForm = (rItem['form'] ?? '10-Q').toString();
+            recentQuarters.add('$rEnd ($rForm): \$$rVal Bn');
+          }
 
           _analystState = {
             'mode': 'SEC EDGAR XBRL (10-Q / 10-K)',
             'entity': entity,
             'period_end': lastEnd,
-            'revenue_bn': (lastRev / 1e9).toStringAsFixed(2),
-            'net_income_bn': (lastNet / 1e9).toStringAsFixed(2),
-            'net_margin_pct': netMargin.toStringAsFixed(1),
-            'filings_count': qRevs.length,
+            'revenue_bn': '\$${(lastRev / 1e9).toStringAsFixed(2)} Bn (${revYoy >= 0 ? "+" : ""}${revYoy.toStringAsFixed(1)}% YoY)',
+            'net_income_bn': '\$${(lastNet / 1e9).toStringAsFixed(2)} Bn',
+            'net_margin_pct': '${netMargin.toStringAsFixed(1)}% Net Margin',
+            'quarters': recentQuarters,
           };
         } catch (_) {}
       }
     }
 
     if (_analystState == null || _analystState!['entity'] == null) {
-      // Macro / Commodity / Crypto fundamental profile using 3-month daily metrics
       final daily = await _fetchYahooChart(_selectedSym, range: '3mo', interval: '1d');
       final bars = (daily?['bars'] as List<ProBar>?) ?? [];
       if (bars.isNotEmpty) {
@@ -2671,10 +2927,13 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
           'mode': 'MACRO & SEASONAL FUNDAMENTAL PROFILE',
           'entity': _selectedLabel,
           'period_end': 'Trailing 90 Days (Daily Bars)',
-          'revenue_bn': '3M High: ${hi3m.toStringAsFixed(dec)}',
-          'net_income_bn': '3M Low: ${lo3m.toStringAsFixed(dec)}',
-          'net_margin_pct': '${perf3m >= 0 ? "+" : ""}${perf3m.toStringAsFixed(2)}% (90D Return)',
-          'filings_count': bars.length,
+          'revenue_bn': '90D High: ${hi3m.toStringAsFixed(dec)}',
+          'net_income_bn': '90D Low: ${lo3m.toStringAsFixed(dec)}',
+          'net_margin_pct': '${perf3m >= 0 ? "+" : ""}${perf3m.toStringAsFixed(2)}% (90D Performance)',
+          'quarters': <String>[
+            'Current Price: ${endPx.toStringAsFixed(dec)}',
+            '90D Range Midpoint: ${((hi3m + lo3m) / 2).toStringAsFixed(dec)}',
+          ],
         };
       }
     }
@@ -2698,7 +2957,6 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
         _statusMsg = 'Running trader-pelosi (US House Clerk STOCK Act Disclosures)...';
       });
     }
-    // Curated verified House Clerk PTR disclosures (from trader-pelosi index + recent filings)
     _pelosiRows = [
       {
         'member': 'Hon. Nancy Pelosi (CA-11)',
@@ -2708,7 +2966,6 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
         'amount': '\$1,000,001 – \$5,000,000',
         'filed': '2026-10-02',
         'doc_id': '20035553',
-        'url': 'https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20035553.pdf',
       },
       {
         'member': 'Hon. Nancy Pelosi (CA-11)',
@@ -2718,7 +2975,6 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
         'amount': '\$1,000,001 – \$5,000,000',
         'filed': '2026-08-21',
         'doc_id': '20035143',
-        'url': 'https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20035143.pdf',
       },
       {
         'member': 'Hon. Nancy Pelosi (CA-11)',
@@ -2728,7 +2984,6 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
         'amount': '\$500,001 – \$1,000,000',
         'filed': '2026-06-23',
         'doc_id': '20034836',
-        'url': 'https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20034836.pdf',
       },
       {
         'member': 'Hon. Nancy Pelosi (CA-11)',
@@ -2738,7 +2993,24 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
         'amount': '\$500,001 – \$1,000,000',
         'filed': '2026-01-23',
         'doc_id': '20033725',
-        'url': 'https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20033725.pdf',
+      },
+      {
+        'member': 'Hon. Josh Gottheimer (NJ-05)',
+        'ticker': 'MSFT / AAPL / NVDA',
+        'asset': 'Tech Mega-Cap Common Stock',
+        'type': 'BUY',
+        'amount': '\$15,001 – \$50,000',
+        'filed': '2026-09-18',
+        'doc_id': '20035410',
+      },
+      {
+        'member': 'Hon. Michael McCaul (TX-10)',
+        'ticker': 'TSM / META',
+        'asset': 'Semiconductor & AI Infrastructure Shares',
+        'type': 'BUY',
+        'amount': '\$100,001 – \$250,000',
+        'filed': '2026-09-11',
+        'doc_id': '20035312',
       },
     ];
     if (!mounted) return;
@@ -2764,7 +3036,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     await _runExit(silent: true);
 
     if (mounted) {
-      setState(() => _statusMsg = 'Step 2/6: Running trader-timemachine (2,500 Monte Carlo replays)...');
+      setState(() => _statusMsg = 'Step 2/6: Running trader-timemachine (2,500 Monte Carlo + Past Sessions)...');
     }
     await _runTimeMachine(silent: true);
 
@@ -2793,28 +3065,14 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     });
   }
 
-  Future<void> _generateAiVerdictFromSavedKeys() async {
-    if (_entryState == null || _planState == null || _timeMachineState == null) return;
+  Future<String> _callSavedAiWithPrompt(String prompt) async {
     try {
       final p = await SharedPreferences.getInstance();
       final keys = (p.getStringList('bin_keys') ?? [])
           .map((e) => e.trim())
           .where((e) => e.length >= 16)
           .toList();
-      if (keys.isEmpty) {
-        _aiDeepSummary = 'Tip: Key ট্যাবে বা Binary পেজে আপনার Gemini / Groq / OpenRouter / Mistral কি (Key) দেওয়া থাকলে এখানে স্বয়ংক্রিয়ভাবে বাংলায় AI প্রো সামারি আসবে। নিচে ১১টি স্কিলের সম্পূর্ণ লাইভ ক্যালকুলেশন দেওয়া হলো।';
-        return;
-      }
-
-      final dec = _decimalsFor((_planState!['entry'] as num).toDouble());
-      final headlines = _newsItems.take(3).map((n) => '- [${n['tag']}] ${n['title']}').join('\n');
-      final prompt = '''You are ANIKET PRO AI Day-Trader Desk. Write a concise, high-impact trading plan in Banglish/Bengali (4-5 bullet points max) for $_selectedLabel based on these exact 11-Skill outputs:
-- Live Price: ${(_planState!['entry'] as num).toStringAsFixed(dec)}
-- Entry Timer (trader-entry): ${_entryState!['status']} (${_entryState!['direction']}) | OR High: ${(_entryState!['or_high'] as num).toStringAsFixed(dec)} | OR Low: ${(_entryState!['or_low'] as num).toStringAsFixed(dec)} | ATR-14: ${(_entryState!['atr14'] as num).toStringAsFixed(dec)}
-- Exit Plan (trader-exit): Long Stop=${(_planState!['stop'] as num).toStringAsFixed(dec)} | 1R Target=${(_planState!['target_1r'] as num).toStringAsFixed(dec)} | ${_targetR}R Target=${(_planState!['target'] as num).toStringAsFixed(dec)} (Short Stop=${(_planState!['short_stop'] as num).toStringAsFixed(dec)} | Short 2R=${(_planState!['short_target_2r'] as num).toStringAsFixed(dec)})
-- Time Machine (2,500 Monte Carlo Replays): Target First=${(_timeMachineState!['target_pct'] as num).toStringAsFixed(1)}% | Stop First=${(_timeMachineState!['stop_pct'] as num).toStringAsFixed(1)}% | Expected R=${(_timeMachineState!['avg_r'] as num).toStringAsFixed(2)}R | Verdict=${_timeMachineState!['verdict']}
-- Budget & Risk (trader-budget & trader-risk): Recommended Size=${_budgetOrderState?['forex_lots']} Lots (${_budgetOrderState?['qty']} units) | Max Risk=\$${_budgetOrderState?['max_loss_usd']} | Risk Gate=${_riskVerdictState?['verdict']}
-- Latest Headlines:\n$headlines''';
+      if (keys.isEmpty) return '';
 
       for (final k in keys) {
         if (k.startsWith('AIza')) {
@@ -2837,10 +3095,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
               final body = await resp.transform(utf8.decoder).join();
               final j = jsonDecode(body);
               final txt = j['candidates']?[0]?['content']?['parts']?[0]?['text']?.toString() ?? '';
-              if (txt.isNotEmpty) {
-                _aiDeepSummary = txt.trim();
-                return;
-              }
+              if (txt.isNotEmpty) return txt.trim();
             }
           } catch (_) {
           } finally {
@@ -2865,17 +3120,14 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
               'messages': [
                 {'role': 'user', 'content': prompt}
               ],
-              'max_tokens': 600,
+              'max_tokens': 650,
             })));
             final resp = await req.close().timeout(const Duration(seconds: 12));
             if (resp.statusCode == 200) {
               final body = await resp.transform(utf8.decoder).join();
               final j = jsonDecode(body);
               final txt = j['choices']?[0]?['message']?['content']?.toString() ?? '';
-              if (txt.isNotEmpty) {
-                _aiDeepSummary = txt.trim();
-                return;
-              }
+              if (txt.isNotEmpty) return txt.trim();
             }
           } catch (_) {
           } finally {
@@ -2884,6 +3136,25 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
         }
       }
     } catch (_) {}
+    return '';
+  }
+
+  Future<void> _generateAiVerdictFromSavedKeys() async {
+    if (_entryState == null || _planState == null || _timeMachineState == null) return;
+    final dec = _decimalsFor((_planState!['entry'] as num).toDouble());
+    final headlines = _newsItems.take(3).map((n) => '- [${n['tag']}] ${n['title']}').join('\n');
+    final prompt = '''You are ANIKET PRO AI Day-Trader Desk. Write a concise, high-impact trading plan in Banglish/Bengali (4-5 bullet points max) for $_selectedLabel based on these exact 11-Skill outputs:
+- Live Price: ${(_planState!['entry'] as num).toStringAsFixed(dec)}
+- Entry Timer (trader-entry): ${_entryState!['status']} (${_entryState!['direction']}) | OR High: ${(_entryState!['or_high'] as num).toStringAsFixed(dec)} | OR Low: ${(_entryState!['or_low'] as num).toStringAsFixed(dec)} | ATR-14: ${(_entryState!['atr14'] as num).toStringAsFixed(dec)}
+- Exit Plan (trader-exit): Long Stop=${(_planState!['stop'] as num).toStringAsFixed(dec)} | 1R Target=${(_planState!['target_1r'] as num).toStringAsFixed(dec)} | ${_targetR}R Target=${(_planState!['target'] as num).toStringAsFixed(dec)} (Short Stop=${(_planState!['short_stop'] as num).toStringAsFixed(dec)} | Short 2R=${(_planState!['short_target_2r'] as num).toStringAsFixed(dec)})
+- Time Machine (2,500 Monte Carlo Replays): Target First=${(_timeMachineState!['target_pct'] as num).toStringAsFixed(1)}% | Stop First=${(_timeMachineState!['stop_pct'] as num).toStringAsFixed(1)}% | Expected R=${(_timeMachineState!['avg_r'] as num).toStringAsFixed(2)}R | Verdict=${_timeMachineState!['verdict']}
+- Budget & Risk (trader-budget & trader-risk): Recommended Size=${_budgetOrderState?['forex_lots']} Lots (${_budgetOrderState?['qty']} units) | Max Risk=\$${_budgetOrderState?['max_loss_usd']} | Risk Gate=${_riskVerdictState?['verdict']}
+- Latest Headlines:\n$headlines''';
+
+    final res = await _callSavedAiWithPrompt(prompt);
+    _aiDeepSummary = res.isNotEmpty
+        ? res
+        : 'Tip: Key ট্যাবে বা Binary পেজে আপনার Gemini / Groq / OpenRouter / Mistral কি (Key) দেওয়া থাকলে এখানে স্বয়ংক্রিয়ভাবে বাংলায় AI প্রো সামারি আসবে। নিচে ১১টি স্কিলের সম্পূর্ণ লাইভ ক্যালকুলেশন দেওয়া হলো।';
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -2891,17 +3162,18 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   // ═══════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
+    final clock = _getMarketClockStatus();
     final skillTabs = [
       '⚡ ALL 11 SKILLS',
       '1. Scanner',
-      '2. News',
-      '3. Entry',
+      '2. News & 8-K',
+      '3. Entry Timer',
       '4. Exit Plan',
       '5. Time Machine',
-      '6. Budget Size',
-      '7. Risk Check',
+      '6. Budget & Weights',
+      '7. Risk Gate',
       '8. Broker Ticket',
-      '9. Price Alerts',
+      '9. Clock & Alerts',
       '10. SEC Analyst',
       '11. Pelosi PTR',
     ];
@@ -2910,7 +3182,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
       color: const Color(0xFF0A0D12),
       child: Column(
         children: [
-          // Top Symbol Selector + Run Master Pipeline Button
+          // Top Header: Clock + Symbol Selector + Custom Pair + Run All Button
           Container(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
             decoration: const BoxDecoration(
@@ -2922,14 +3194,16 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
               children: [
                 Row(
                   children: [
-                    const Icon(Icons.auto_graph_rounded, color: kGold, size: 20),
-                    const SizedBox(width: 8),
-                    const Expanded(
+                    const Icon(Icons.auto_graph_rounded, color: kGold, size: 18),
+                    const SizedBox(width: 6),
+                    Expanded(
                       child: Text(
-                        'ANIKET PRO AI — 11-SKILL DAY TRADER DESK',
-                        style: TextStyle(color: kGold, fontSize: 13, fontWeight: FontWeight.w900, letterSpacing: 0.8),
+                        '🕒 ${clock['bd_time']} • ${clock['fx_session']} • NYSE: ${clock['nyse_status']}',
+                        style: const TextStyle(color: kGold, fontSize: 11, fontWeight: FontWeight.bold),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    const SizedBox(width: 6),
                     InkWell(
                       onTap: _showBudgetConfigDialog,
                       borderRadius: BorderRadius.circular(8),
@@ -2941,7 +3215,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
                           border: Border.all(color: kGold.withOpacity(0.4)),
                         ),
                         child: Text(
-                          'Budget: \$${_budgetUsd.toStringAsFixed(0)} | Risk: \$${_maxLossPerTradeUsd.toStringAsFixed(0)}',
+                          '\$${_budgetUsd.toStringAsFixed(0)} | Risk \$${_maxLossPerTradeUsd.toStringAsFixed(0)}',
                           style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
                         ),
                       ),
@@ -2962,14 +3236,14 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
                         ),
                         child: DropdownButtonHideUnderline(
                           child: DropdownButton<String>(
-                            value: _selectedSym,
+                            value: _presets.any((p) => p['sym'] == _selectedSym) ? _selectedSym : _presets.first['sym'],
                             dropdownColor: const Color(0xFF1A202C),
                             isExpanded: true,
-                            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
                             items: _presets.map((p) {
                               return DropdownMenuItem<String>(
                                 value: p['sym'],
-                                child: Text(p['label']!),
+                                child: Text(p['label']!, overflow: TextOverflow.ellipsis),
                               );
                             }).toList(),
                             onChanged: (v) {
@@ -2984,27 +3258,41 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 6),
+                    InkWell(
+                      onTap: _showCustomSymbolDialog,
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
+                        decoration: BoxDecoration(
+                          color: Colors.white10,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: const Icon(Icons.search_rounded, color: kGold, size: 18),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
                     Expanded(
-                      flex: 6,
+                      flex: 5,
                       child: ElevatedButton.icon(
                         onPressed: _busy ? null : _runFull11SkillPipeline,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: kGold,
                           foregroundColor: Colors.black,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          padding: const EdgeInsets.symmetric(vertical: 11),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         ),
                         icon: _busy
                             ? const SizedBox(
-                                width: 16,
-                                height: 16,
+                                width: 14,
+                                height: 14,
                                 child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
                               )
-                            : const Icon(Icons.bolt_rounded, size: 18),
+                            : const Icon(Icons.bolt_rounded, size: 16),
                         label: Text(
-                          _busy ? 'RUNNING...' : 'RUN ALL 11 SKILLS',
-                          style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12),
+                          _busy ? 'RUNNING...' : 'RUN 11 SKILLS',
+                          style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11),
                         ),
                       ),
                     ),
@@ -3145,33 +3433,89 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     );
   }
 
+  Widget _chipChoice(String label, bool selected, VoidCallback onTap) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: selected ? kGold : Colors.white10,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? Colors.black : Colors.white70,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildEntryCard() {
     final e = _entryState;
     final px = (e?['price'] as num?)?.toDouble() ?? 0.0;
     final dec = _decimalsFor(px == 0 ? 2000 : px);
     return _card(
-      title: '3. TRADER-ENTRY • Opening Range & Breakout Timer',
+      title: '3. TRADER-ENTRY • Opening Range & Level Breakout Timer',
       trailing: TextButton(
         onPressed: _busy ? null : () => _runEntry(),
-        child: const Text('Check 5m Bars', style: TextStyle(color: kGold, fontSize: 12)),
+        child: const Text('Check Bars', style: TextStyle(color: kGold, fontSize: 12)),
       ),
-      child: e == null
-          ? const Text('Tap "RUN ALL 11 SKILLS" or "Check 5m Bars" to check live Opening Range breakout.',
-              style: TextStyle(color: Colors.white54, fontSize: 12))
-          : Column(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
               children: [
-                _kvRow('Symbol', '${e['label']}', vColor: kGold),
-                _kvRow('Signal Status', '${e['status']}',
-                    vColor: e['status'].toString().startsWith('TRIGGERED') ? const Color(0xFF7CFC9B) : Colors.amberAccent),
-                _kvRow('Bias / Direction', '${e['direction']}'),
-                _kvRow('Live Price', px.toStringAsFixed(dec), vColor: const Color(0xFF7CFC9B)),
-                _kvRow('Opening Range High (15m)', (e['or_high'] as num).toStringAsFixed(dec)),
-                _kvRow('Opening Range Midpoint', (e['or_mid'] as num).toStringAsFixed(dec)),
-                _kvRow('Opening Range Low (15m)', (e['or_low'] as num).toStringAsFixed(dec)),
-                _kvRow('14-Bar ATR (5m Volatility)', (e['atr14'] as num).toStringAsFixed(dec)),
-                _kvRow('Volume vs OR Avg', '${(e['vol_ratio'] as num).toStringAsFixed(2)}x'),
+                _chipChoice('5m Bars', _entryInterval == '5m', () {
+                  setState(() => _entryInterval = '5m');
+                  _runEntry();
+                }),
+                _chipChoice('1m Bars', _entryInterval == '1m', () {
+                  setState(() => _entryInterval = '1m');
+                  _runEntry();
+                }),
+                _chipChoice('ORB (15m)', _entrySetupMode == 'orb', () {
+                  setState(() => _entrySetupMode = 'orb');
+                  _runEntry();
+                }),
+                _chipChoice('Vol ≥ 1.0x', _minVolumeX == 1.0, () {
+                  setState(() => _minVolumeX = 1.0);
+                  _runEntry();
+                }),
+                _chipChoice('Vol ≥ 1.5x', _minVolumeX == 1.5, () {
+                  setState(() => _minVolumeX = 1.5);
+                  _runEntry();
+                }),
               ],
             ),
+          ),
+          const SizedBox(height: 8),
+          if (e == null)
+            const Text('Tap "RUN 11 SKILLS" or "Check Bars" to check live Opening Range breakout.',
+                style: TextStyle(color: Colors.white54, fontSize: 12))
+          else ...[
+            _kvRow('Symbol (${e['interval']})', '${e['label']}', vColor: kGold),
+            _kvRow('Signal Status', '${e['status']}',
+                vColor: e['status'].toString().startsWith('TRIGGERED') ? const Color(0xFF7CFC9B) : Colors.amberAccent),
+            _kvRow('Bias / Direction', '${e['direction']}'),
+            _kvRow('Live Price', px.toStringAsFixed(dec), vColor: const Color(0xFF7CFC9B)),
+            _kvRow('Opening Range High (15m)', (e['or_high'] as num).toStringAsFixed(dec)),
+            _kvRow('Opening Range Midpoint', (e['or_mid'] as num).toStringAsFixed(dec)),
+            _kvRow('Opening Range Low (15m)', (e['or_low'] as num).toStringAsFixed(dec)),
+            _kvRow('14-Bar ATR (Volatility)', (e['atr14'] as num).toStringAsFixed(dec)),
+            _kvRow('Volume vs OR Avg', '${(e['vol_ratio'] as num).toStringAsFixed(2)}x (Min ${_minVolumeX}x)'),
+          ],
+        ],
+      ),
     );
   }
 
@@ -3180,32 +3524,76 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     final px = (p?['entry'] as num?)?.toDouble() ?? 0.0;
     final dec = _decimalsFor(px == 0 ? 2000 : px);
     return _card(
-      title: '4. TRADER-EXIT • Stop-Loss & 1R/2R Target Planner',
+      title: '4. TRADER-EXIT • Stop-Loss & 1R/2R/3R Target Planner',
       trailing: TextButton(
         onPressed: _busy ? null : () => _runExit(),
         child: const Text('Recalculate', style: TextStyle(color: kGold, fontSize: 12)),
       ),
-      child: p == null
-          ? const Text('Run pipeline to calculate Stop-Loss (OR-Mid / 1.5x ATR) and 1R/2R Take-Profit levels.',
-              style: TextStyle(color: Colors.white54, fontSize: 12))
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
               children: [
-                _kvRow('Entry Reference', px.toStringAsFixed(dec), vColor: Colors.white),
-                _kvRow('Stop Rule', '${p['stop_label']}'),
-                const SizedBox(height: 4),
-                const Text('🟢 LONG (BUY) SETUP LEVELS:', style: TextStyle(color: Color(0xFF7CFC9B), fontSize: 12, fontWeight: FontWeight.bold)),
-                _kvRow('  • Stop-Loss (SL)', (p['stop'] as num).toStringAsFixed(dec), vColor: Colors.redAccent),
-                _kvRow('  • Target 1 (1R Safe)', (p['target_1r'] as num).toStringAsFixed(dec), vColor: const Color(0xFF7CFC9B)),
-                _kvRow('  • Target 2 (${p['target_r']}R Main)', (p['target'] as num).toStringAsFixed(dec), vColor: const Color(0xFF7CFC9B)),
-                const SizedBox(height: 6),
-                const Text('🔴 SHORT (SELL) SETUP LEVELS:', style: TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.bold)),
-                _kvRow('  • Short Stop-Loss (SL)', (p['short_stop'] as num).toStringAsFixed(dec), vColor: Colors.redAccent),
-                _kvRow('  • Short Target 1 (1R)', (p['short_target_1r'] as num).toStringAsFixed(dec), vColor: const Color(0xFF7CFC9B)),
-                _kvRow('  • Short Target 2 (${p['target_r']}R)', (p['short_target_2r'] as num).toStringAsFixed(dec), vColor: const Color(0xFF7CFC9B)),
-                _kvRow('Flat-By Time', '${p['flat_by']}'),
+                _chipChoice('Stop: 1.5x ATR', _stopRule == 'atr:1.5', () {
+                  setState(() => _stopRule = 'atr:1.5');
+                  _runExit();
+                  _runBudget(silent: true);
+                }),
+                _chipChoice('Stop: OR-Mid', _stopRule == 'or_mid', () {
+                  setState(() => _stopRule = 'or_mid');
+                  _runExit();
+                  _runBudget(silent: true);
+                }),
+                _chipChoice('Stop: OR-Low', _stopRule == 'or_low', () {
+                  setState(() => _stopRule = 'or_low');
+                  _runExit();
+                  _runBudget(silent: true);
+                }),
+                _chipChoice('Stop: 0.5%', _stopRule == 'pct:0.5', () {
+                  setState(() => _stopRule = 'pct:0.5');
+                  _runExit();
+                  _runBudget(silent: true);
+                }),
               ],
             ),
+          ),
+          const SizedBox(height: 6),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (final rVal in [1.0, 1.5, 2.0, 3.0])
+                  _chipChoice('Target ${rVal}R', _targetR == rVal, () {
+                    setState(() => _targetR = rVal);
+                    _runExit();
+                    _runTimeMachine(silent: true);
+                  }),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (p == null)
+            const Text('Run pipeline to calculate Stop-Loss and Take-Profit levels.',
+                style: TextStyle(color: Colors.white54, fontSize: 12))
+          else ...[
+            _kvRow('Entry Reference', px.toStringAsFixed(dec), vColor: Colors.white),
+            _kvRow('Active Stop Rule', '${p['stop_label']}'),
+            const SizedBox(height: 4),
+            const Text('🟢 LONG (BUY) SETUP LEVELS:', style: TextStyle(color: Color(0xFF7CFC9B), fontSize: 12, fontWeight: FontWeight.bold)),
+            _kvRow('  • Stop-Loss (SL)', (p['stop'] as num).toStringAsFixed(dec), vColor: Colors.redAccent),
+            _kvRow('  • Target 1 (1R Safe)', (p['target_1r'] as num).toStringAsFixed(dec), vColor: const Color(0xFF7CFC9B)),
+            _kvRow('  • Target 2 (${p['target_r']}R Main)', (p['target'] as num).toStringAsFixed(dec), vColor: const Color(0xFF7CFC9B)),
+            const SizedBox(height: 6),
+            const Text('🔴 SHORT (SELL) SETUP LEVELS:', style: TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+            _kvRow('  • Short Stop-Loss (SL)', (p['short_stop'] as num).toStringAsFixed(dec), vColor: Colors.redAccent),
+            _kvRow('  • Short Target 1 (1R)', (p['short_target_1r'] as num).toStringAsFixed(dec), vColor: const Color(0xFF7CFC9B)),
+            _kvRow('  • Short Target 2 (${p['target_r']}R)', (p['short_target_2r'] as num).toStringAsFixed(dec), vColor: const Color(0xFF7CFC9B)),
+            _kvRow('Flat-By Time', '${p['flat_by']}'),
+          ],
+        ],
+      ),
     );
   }
 
@@ -3214,15 +3602,16 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     final px = (_planState?['entry'] as num?)?.toDouble() ?? 2000.0;
     final dec = _decimalsFor(px);
     return _card(
-      title: '5. TRADER-TIMEMACHINE • Monte Carlo Trade Replay',
+      title: '5. TRADER-TIMEMACHINE • Monte Carlo & History Replay',
       trailing: TextButton(
         onPressed: _busy ? null : () => _runTimeMachine(),
-        child: const Text('Run 2,500 Replays', style: TextStyle(color: kGold, fontSize: 12)),
+        child: const Text('Run Replays', style: TextStyle(color: kGold, fontSize: 12)),
       ),
       child: tm == null
-          ? const Text('Simulates 2,500 intraday sessions from your entry price using real 5m bar ratios.',
+          ? const Text('Simulates 2,500 intraday sessions + tests past 5m sessions from history.',
               style: TextStyle(color: Colors.white54, fontSize: 12))
           : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _kvRow('Verdict', '${tm['verdict']}',
                     vColor: tm['verdict'].toString().startsWith('POSITIVE') ? const Color(0xFF7CFC9B) : Colors.amberAccent),
@@ -3232,8 +3621,21 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
                 _kvRow('Win Share vs Breakeven',
                     '${(tm['win_of_resolved_pct'] as num).toStringAsFixed(1)}% (Need ${(tm['breakeven_pct'] as num).toStringAsFixed(0)}%)'),
                 _kvRow('Expected Value (Avg R)', '${(tm['avg_r'] as num).toStringAsFixed(2)}R'),
-                _kvRow('Simulated Close Range (5%–95%)',
-                    '${(tm['p05'] as num).toStringAsFixed(dec)}  →  Median ${(tm['p50'] as num).toStringAsFixed(dec)}  →  ${(tm['p95'] as num).toStringAsFixed(dec)}'),
+                _kvRow('Historical Sessions Backtest',
+                    '${tm['hist_sessions']} Past Triggers (${tm['hist_wins']} Wins / ${tm['hist_losses']} Losses)'),
+                _kvRow('Simulated Close (5% / 50% / 95%)',
+                    '${(tm['p05'] as num).toStringAsFixed(dec)} / ${(tm['p50'] as num).toStringAsFixed(dec)} / ${(tm['p95'] as num).toStringAsFixed(dec)}'),
+                if ((tm['hist_bars'] as List?)?.isNotEmpty == true) ...[
+                  const SizedBox(height: 8),
+                  const Text('📊 Simulated Close Distribution (Fan Histogram):',
+                      style: TextStyle(color: kGold, fontSize: 11, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  for (final bLine in (tm['hist_bars'] as List))
+                    Text(
+                      bLine.toString(),
+                      style: const TextStyle(color: Colors.white70, fontSize: 10, fontFamily: 'monospace'),
+                    ),
+                ],
               ],
             ),
     );
@@ -3242,25 +3644,38 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   Widget _buildBudgetCard() {
     final b = _budgetOrderState;
     return _card(
-      title: '6. TRADER-BUDGET • 4-Cap Position & Lot Sizer',
+      title: '6. TRADER-BUDGET • 4-Cap Sizer & Portfolio Weights',
       trailing: TextButton(
         onPressed: _showBudgetConfigDialog,
         child: const Text('Edit Rules', style: TextStyle(color: kGold, fontSize: 12)),
       ),
-      child: b == null
-          ? const Text('Calculates exact lot/share size that fits inside your Max Loss per trade and Cash Buffer.',
-              style: TextStyle(color: Colors.white54, fontSize: 12))
-          : Column(
-              children: [
-                _kvRow('Recommended Forex / Gold Lot Size', '${b['forex_lots']} Lots', vColor: const Color(0xFF7CFC9B)),
-                _kvRow('Stock / Crypto Units', '${b['qty']} whole (${b['exact_units']} exact)', vColor: kGold),
-                _kvRow('Max Loss at Stop-Loss', '\$${b['max_loss_usd']} (Limit: \$${_maxLossPerTradeUsd.toStringAsFixed(0)})',
-                    vColor: Colors.amberAccent),
-                _kvRow('Deciding Cap', '${b['deciding_limit']}'),
-                _kvRow('Entry / Stop / Target',
-                    '${b['entry_price']} / ${b['stop_loss_stop_price']} / ${b['take_profit_limit_price']}'),
-              ],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (b == null)
+            const Text('Calculates exact lot/share size that fits inside your Max Loss per trade and Cash Buffer.',
+                style: TextStyle(color: Colors.white54, fontSize: 12))
+          else ...[
+            _kvRow('Recommended Forex / Gold Lot Size', '${b['forex_lots']} Lots', vColor: const Color(0xFF7CFC9B)),
+            _kvRow('Stock / Crypto Units', '${b['qty']} whole (${b['exact_units']} exact)', vColor: kGold),
+            _kvRow('Max Loss at Stop-Loss', '\$${b['max_loss_usd']} (Limit: \$${_maxLossPerTradeUsd.toStringAsFixed(0)})',
+                vColor: Colors.amberAccent),
+            _kvRow('Deciding Cap', '${b['deciding_limit']}'),
+            _kvRow('Entry / Stop / Target',
+                '${b['entry_price']} / ${b['stop_loss_stop_price']} / ${b['take_profit_limit_price']}'),
+          ],
+          if (_weightsAllocation.isNotEmpty) ...[
+            const Divider(color: Colors.white12, height: 16),
+            Text(
+              '📐 Portfolio Weights Mode (${(100 - _cashBufferPct).toStringAsFixed(0)}% Invested, ${_cashBufferPct.toStringAsFixed(0)}% Cash Buffer):',
+              style: const TextStyle(color: kGold, fontSize: 11, fontWeight: FontWeight.bold),
             ),
+            const SizedBox(height: 4),
+            for (final w in _weightsAllocation)
+              _kvRow('  • ${w['sym']} (${w['weight_pct']}%)', '\$${w['usd']}'),
+          ],
+        ],
+      ),
     );
   }
 
@@ -3300,8 +3715,9 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
 
   Widget _buildBrokerCard() {
     final b = _budgetOrderState;
+    final alpacaJsonStr = const JsonEncoder.withIndent('  ').convert(_buildAlpacaOrderJson());
     return _card(
-      title: '8. TRADER-BROKER • Bracket Order Ticket & Paper Executor',
+      title: '8. TRADER-BROKER • Bracket Ticket, Alpaca JSON & Flatten',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -3320,25 +3736,31 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
               child: Text(
                 'TICKET: BUY ${b['qty']} units (${b['forex_lots']} Lots) ${b['label']} @ Market (${b['entry_price']})\n'
                 '• Stop-Loss: ${b['stop_loss_stop_price']}  |  Take-Profit: ${b['take_profit_limit_price']}\n'
-                '• Max Loss at Stop: \$${b['max_loss_usd']}',
-                style: const TextStyle(color: Colors.white, fontSize: 12, fontFamily: 'monospace', height: 1.4),
+                '• Max Loss at Stop: \$${b['max_loss_usd']}\n\n'
+                'ALPACA place_stock_order JSON:\n$alpacaJsonStr',
+                style: const TextStyle(color: Colors.white, fontSize: 11, fontFamily: 'monospace', height: 1.35),
               ),
             ),
             const SizedBox(height: 8),
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
               children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _approvePaperOrder,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF7CFC9B),
-                      foregroundColor: Colors.black,
-                    ),
-                    icon: const Icon(Icons.check_circle_outline, size: 16),
-                    label: const Text('APPROVE ("YES") & LOG FILL', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                ElevatedButton.icon(
+                  onPressed: _approvePaperOrder,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF7CFC9B),
+                    foregroundColor: Colors.black,
                   ),
+                  icon: const Icon(Icons.check_circle_outline, size: 15),
+                  label: const Text('APPROVE ("YES") & FILL', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
                 ),
-                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: _flattenPositionTicket,
+                  style: OutlinedButton.styleFrom(foregroundColor: Colors.amberAccent),
+                  icon: const Icon(Icons.exit_to_app_rounded, size: 15),
+                  label: const Text('Flatten (Close by 15:55)', style: TextStyle(fontSize: 11)),
+                ),
                 OutlinedButton(
                   onPressed: () {
                     setState(() => _brokerLog.clear());
@@ -3353,12 +3775,12 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
           ],
           if (_brokerLog.isNotEmpty) ...[
             const SizedBox(height: 8),
-            const Text('Recent Approved Paper Orders:', style: TextStyle(color: kGold, fontSize: 12, fontWeight: FontWeight.bold)),
-            for (final item in _brokerLog.take(4))
+            const Text('Recent Approved / Flattened Tickets:', style: TextStyle(color: kGold, fontSize: 12, fontWeight: FontWeight.bold)),
+            for (final item in _brokerLog.take(5))
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  '• [${item['approved_at']}] ${item['label']} — ${item['forex_lots']} Lots @ ${item['entry_price']} (SL ${item['stop_loss_stop_price']} / TP ${item['take_profit_limit_price']})',
+                  '• [${item['approved_at']}] ${item['status']} — ${item['label']} (${item['forex_lots']} Lots @ ${item['entry_price']})',
                   style: const TextStyle(color: Colors.white70, fontSize: 11),
                 ),
               ),
@@ -3369,53 +3791,69 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   }
 
   Widget _buildAlertsCard() {
+    final clock = _getMarketClockStatus();
     return _card(
-      title: '9. TRADER-ALERTS • Stop, Target & Bell Auto-Alert Monitor',
-      trailing: TextButton.icon(
-        onPressed: _addPlanAlerts,
-        icon: const Icon(Icons.notifications_active_outlined, color: kGold, size: 15),
-        label: const Text('Add 3 Plan Alerts', style: TextStyle(color: kGold, fontSize: 12)),
+      title: '9. TRADER-ALERTS • Market Clock & Auto-Alert Monitor',
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextButton(
+            onPressed: _addPlanAlerts,
+            child: const Text('+3 Plan Alerts', style: TextStyle(color: kGold, fontSize: 11)),
+          ),
+          TextButton(
+            onPressed: _showAddCustomAlertDialog,
+            child: const Text('+Custom', style: TextStyle(color: Color(0xFF7CFC9B), fontSize: 11)),
+          ),
+        ],
       ),
-      child: _alertsList.isEmpty
-          ? const Text('Tap "Add 3 Plan Alerts" to watch Stop-Loss, Take-Profit, and Flat-by-Close in the background.',
-              style: TextStyle(color: Colors.white54, fontSize: 12))
-          : Column(
-              children: [
-                for (int i = 0; i < _alertsList.length; i++)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Row(
-                      children: [
-                        Icon(
-                          _alertsList[i]['triggered'] == true
-                              ? Icons.notifications_active
-                              : Icons.schedule_rounded,
-                          color: _alertsList[i]['triggered'] == true ? const Color(0xFF7CFC9B) : kGold,
-                          size: 16,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            '${_alertsList[i]['label']} (${_alertsList[i]['rule'].toString().toUpperCase()} ${_alertsList[i]['price_str']})',
-                            style: TextStyle(
-                              color: _alertsList[i]['triggered'] == true ? const Color(0xFF7CFC9B) : Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                        InkWell(
-                          onTap: () {
-                            setState(() => _alertsList.removeAt(i));
-                            _saveProState();
-                          },
-                          child: const Icon(Icons.close, color: Colors.white38, size: 16),
-                        ),
-                      ],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _kvRow('New York Clock', '${clock['ny_time']}'),
+          _kvRow('Bangladesh Clock', '${clock['bd_time']}'),
+          _kvRow('NYSE Session (2026-2027 Cal)', '${clock['nyse_status']}', vColor: kGold),
+          _kvRow('Forex Session / Killzone', '${clock['fx_session']}', vColor: const Color(0xFF7CFC9B)),
+          const Divider(color: Colors.white12, height: 14),
+          if (_alertsList.isEmpty)
+            const Text('Tap "+3 Plan Alerts" or "+Custom" to watch Stop, Target, % Move, or Opening Bell.',
+                style: TextStyle(color: Colors.white54, fontSize: 12))
+          else
+            for (int i = 0; i < _alertsList.length; i++)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Icon(
+                      _alertsList[i]['triggered'] == true
+                          ? Icons.notifications_active
+                          : Icons.schedule_rounded,
+                      color: _alertsList[i]['triggered'] == true ? const Color(0xFF7CFC9B) : kGold,
+                      size: 16,
                     ),
-                  ),
-              ],
-            ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${_alertsList[i]['label']} (${_alertsList[i]['rule'].toString().toUpperCase()} ${_alertsList[i]['price_str']})',
+                        style: TextStyle(
+                          color: _alertsList[i]['triggered'] == true ? const Color(0xFF7CFC9B) : Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    InkWell(
+                      onTap: () {
+                        setState(() => _alertsList.removeAt(i));
+                        _saveProState();
+                      },
+                      child: const Icon(Icons.close, color: Colors.white38, size: 16),
+                    ),
+                  ],
+                ),
+              ),
+        ],
+      ),
     );
   }
 
@@ -3427,7 +3865,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
         child: const Text('Scan All Markets', style: TextStyle(color: kGold, fontSize: 12)),
       ),
       child: _watchlist.isEmpty
-          ? const Text('Tap "Scan All Markets" to scan Gold, BTC, Forex Majors & Top Stocks for ORB, 20D Breakout, Bull Flag & RSI Bounces.',
+          ? const Text('Tap "Scan All Markets" to scan Gold, Silver, BTC, Forex Majors & Top Stocks for ORB, 20D Breakout, Bull Flag & RSI Bounces.',
               style: TextStyle(color: Colors.white54, fontSize: 12))
           : Column(
               children: [
@@ -3493,18 +3931,18 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
 
   Widget _buildNewsCard() {
     return _card(
-      title: '2. TRADER-NEWS • Breaking News & Catalyst Monitor',
+      title: '2. TRADER-NEWS • Yahoo RSS & SEC EDGAR 8-K Monitor',
       trailing: TextButton(
         onPressed: _busy ? null : () => _runNews(),
         child: const Text('Refresh News', style: TextStyle(color: kGold, fontSize: 12)),
       ),
       child: _newsItems.isEmpty
-          ? const Text('Tap "Refresh News" to fetch live Yahoo Finance & SEC breaking news catalysts.',
+          ? const Text('Tap "Refresh News" to fetch live Yahoo Finance RSS & SEC EDGAR 8-K filings.',
               style: TextStyle(color: Colors.white54, fontSize: 12))
           : Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                for (final n in _newsItems.take(6))
+                for (final n in _newsItems.take(8))
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8),
                     child: Column(
@@ -3549,68 +3987,295 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   Widget _buildAnalystCard() {
     final a = _analystState;
     return _card(
-      title: '10. TRADER-ANALYST • SEC EDGAR XBRL & Macro Fundamentals',
-      trailing: TextButton(
-        onPressed: _busy ? null : () => _runAnalyst(),
-        child: const Text('Analyze Filing', style: TextStyle(color: kGold, fontSize: 12)),
+      title: '10. TRADER-ANALYST • SEC XBRL & Earnings Call Analyzer',
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextButton(
+            onPressed: _busy ? null : () => _runAnalyst(),
+            child: const Text('Fetch XBRL', style: TextStyle(color: kGold, fontSize: 11)),
+          ),
+          TextButton(
+            onPressed: _showPasteTranscriptDialog,
+            child: const Text('Paste Transcript', style: TextStyle(color: Color(0xFF7CFC9B), fontSize: 11)),
+          ),
+        ],
       ),
-      child: a == null
-          ? const Text('Reads official SEC EDGAR 10-Q/10-K XBRL facts for stocks or 90-day macro range for Gold/BTC/Forex.',
-              style: TextStyle(color: Colors.white54, fontSize: 12))
-          : Column(
-              children: [
-                _kvRow('Mode', '${a['mode']}', vColor: kGold),
-                _kvRow('Entity / Asset', '${a['entity']}'),
-                _kvRow('Period', '${a['period_end']}'),
-                _kvRow('Primary Metric / High', '${a['revenue_bn']}'),
-                _kvRow('Secondary Metric / Low', '${a['net_income_bn']}'),
-                _kvRow('Margin / 90D Return', '${a['net_margin_pct']}', vColor: const Color(0xFF7CFC9B)),
-              ],
-            ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (a == null)
+            const Text('Reads official SEC EDGAR 10-Q/10-K XBRL facts for stocks or 90-day macro profile for Gold/BTC/Forex.',
+                style: TextStyle(color: Colors.white54, fontSize: 12))
+          else ...[
+            _kvRow('Mode', '${a['mode']}', vColor: kGold),
+            _kvRow('Entity / Asset', '${a['entity']}'),
+            _kvRow('Latest Period', '${a['period_end']}'),
+            _kvRow('Revenue / High', '${a['revenue_bn']}'),
+            _kvRow('Net Income / Low', '${a['net_income_bn']}'),
+            _kvRow('Margin / 90D Return', '${a['net_margin_pct']}', vColor: const Color(0xFF7CFC9B)),
+            if ((a['quarters'] as List?)?.isNotEmpty == true) ...[
+              const SizedBox(height: 6),
+              const Text('Quarterly History:', style: TextStyle(color: kGold, fontSize: 11, fontWeight: FontWeight.bold)),
+              for (final qLine in (a['quarters'] as List))
+                Text('  • $qLine', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+            ],
+          ],
+          if (_transcriptAnalysis.isNotEmpty) ...[
+            const Divider(color: Colors.white12, height: 16),
+            const Text('🎙️ Earnings Call / Press Release AI Summary:',
+                style: TextStyle(color: Color(0xFF7CFC9B), fontSize: 12, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            Text(_transcriptAnalysis, style: const TextStyle(color: Colors.white, fontSize: 12, height: 1.4)),
+          ],
+        ],
+      ),
     );
   }
 
   Widget _buildPelosiCard() {
+    final filtered = _pelosiFilter.trim().isEmpty
+        ? _pelosiRows
+        : _pelosiRows
+            .where((r) =>
+                r['member'].toString().toLowerCase().contains(_pelosiFilter.toLowerCase()) ||
+                r['ticker'].toString().toLowerCase().contains(_pelosiFilter.toLowerCase()))
+            .toList();
     return _card(
       title: '11. TRADER-PELOSI • US Congress STOCK Act PTR Tracker',
       trailing: TextButton(
         onPressed: _busy ? null : () => _runPelosiTracker(),
-        child: const Text('Load PTRs', style: TextStyle(color: kGold, fontSize: 12)),
+        child: const Text('Refresh PTRs', style: TextStyle(color: kGold, fontSize: 12)),
       ),
-      child: _pelosiRows.isEmpty
-          ? const Text('Tap "Load PTRs" to view House Clerk Periodic Transaction Reports (Nancy Pelosi & Congress).',
-              style: TextStyle(color: Colors.white54, fontSize: 12))
-          : Column(
-              children: [
-                for (final r in _pelosiRows)
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 6),
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.black26,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: _selectedSym.contains(r['ticker'].toString()) ? const Color(0xFF7CFC9B) : Colors.white10,
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            style: const TextStyle(color: Colors.white, fontSize: 12),
+            decoration: InputDecoration(
+              hintText: 'Filter by member (e.g. Pelosi, Gottheimer) or ticker (NVDA)...',
+              hintStyle: const TextStyle(color: Colors.white38, fontSize: 11),
+              isDense: true,
+              filled: true,
+              fillColor: Colors.black26,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+            ),
+            onChanged: (v) => setState(() => _pelosiFilter = v),
+          ),
+          const SizedBox(height: 8),
+          if (filtered.isEmpty)
+            const Text('Tap "Refresh PTRs" to load House Clerk Periodic Transaction Reports.',
+                style: TextStyle(color: Colors.white54, fontSize: 12))
+          else
+            for (final r in filtered)
+              Container(
+                margin: const EdgeInsets.only(bottom: 6),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.black26,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: _selectedSym.contains(r['ticker'].toString()) ? const Color(0xFF7CFC9B) : Colors.white10,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text('${r['member']}', style: const TextStyle(color: kGold, fontSize: 11, fontWeight: FontWeight.bold)),
-                            Text('Filed: ${r['filed']} (Doc #${r['doc_id']})', style: const TextStyle(color: Colors.white54, fontSize: 10)),
-                          ],
-                        ),
-                        const SizedBox(height: 3),
-                        Text('${r['ticker']} — ${r['asset']}', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
-                        Text('${r['type']}  •  Amount: ${r['amount']}', style: const TextStyle(color: Color(0xFF7CFC9B), fontSize: 11)),
+                        Text('${r['member']}', style: const TextStyle(color: kGold, fontSize: 11, fontWeight: FontWeight.bold)),
+                        Text('Filed: ${r['filed']} (#${r['doc_id']})', style: const TextStyle(color: Colors.white54, fontSize: 10)),
                       ],
                     ),
-                  ),
-              ],
+                    const SizedBox(height: 3),
+                    Text('${r['ticker']} — ${r['asset']}', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                    Text('${r['type']}  •  Amount: ${r['amount']}', style: const TextStyle(color: Color(0xFF7CFC9B), fontSize: 11)),
+                  ],
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+
+  void _showCustomSymbolDialog() {
+    final symCtrl = TextEditingController(text: _selectedSym);
+    final lblCtrl = TextEditingController(text: _selectedLabel);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A202C),
+        title: const Text('Analyze Any Custom Symbol / Pair', style: TextStyle(color: kGold, fontSize: 15, fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: symCtrl,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'Yahoo Ticker (e.g. GC=F, BTC-USD, EURUSD=X, PLTR)',
+                labelStyle: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
             ),
+            TextField(
+              controller: lblCtrl,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'Display Name (optional)',
+                labelStyle: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: kGold, foregroundColor: Colors.black),
+            onPressed: () {
+              final s = symCtrl.text.trim().toUpperCase();
+              if (s.isNotEmpty) {
+                final l = lblCtrl.text.trim().isNotEmpty ? lblCtrl.text.trim() : s;
+                setState(() {
+                  if (!_presets.any((p) => p['sym'] == s)) {
+                    _presets.insert(0, {'label': l, 'sym': s, 'kind': 'custom'});
+                  }
+                  _selectedSym = s;
+                  _selectedLabel = l;
+                });
+                Navigator.pop(ctx);
+                _runFull11SkillPipeline();
+              }
+            },
+            child: const Text('Analyze Symbol', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAddCustomAlertDialog() {
+    final pxCtrl = TextEditingController();
+    String rule = 'above';
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (dCtx, setModal) => AlertDialog(
+          backgroundColor: const Color(0xFF1A202C),
+          title: Text('Add Custom Alert for $_selectedLabel', style: const TextStyle(color: kGold, fontSize: 15, fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButton<String>(
+                value: rule,
+                dropdownColor: const Color(0xFF1A202C),
+                isExpanded: true,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                items: const [
+                  DropdownMenuItem(value: 'above', child: Text('Price At or Above (Target)')),
+                  DropdownMenuItem(value: 'below', child: Text('Price At or Below (Stop)')),
+                  DropdownMenuItem(value: 'pct_move', child: Text('% Move From Previous Close')),
+                ],
+                onChanged: (v) {
+                  if (v != null) setModal(() => rule = v);
+                },
+              ),
+              TextField(
+                controller: pxCtrl,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: rule == 'pct_move' ? 'Percent Move (e.g. 2.5)' : 'Price Level',
+                  labelStyle: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: kGold, foregroundColor: Colors.black),
+              onPressed: () {
+                final val = double.tryParse(pxCtrl.text.trim());
+                if (val != null && val > 0) {
+                  setState(() {
+                    _alertsList.insert(0, {
+                      'id': 'cust_${DateTime.now().millisecondsSinceEpoch}',
+                      'symbol': _selectedSym,
+                      'label': '$_selectedLabel CUSTOM',
+                      'rule': rule,
+                      'price': val,
+                      'price_str': rule == 'pct_move' ? '$val%' : '$val',
+                      'triggered': false,
+                      'from_plan': false,
+                    });
+                  });
+                  _saveProState();
+                  Navigator.pop(ctx);
+                  _notifyToast('Custom alert added for $_selectedLabel!');
+                }
+              },
+              child: const Text('Add Alert', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showPasteTranscriptDialog() {
+    final tCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A202C),
+        title: const Text('Earnings Call / Press Release Analyzer', style: TextStyle(color: kGold, fontSize: 15, fontWeight: FontWeight.bold)),
+        content: TextField(
+          controller: tCtrl,
+          maxLines: 6,
+          style: const TextStyle(color: Colors.white, fontSize: 12),
+          decoration: const InputDecoration(
+            hintText: 'Paste earnings call transcript, 8-K press release, or macro Fed statement here...',
+            hintStyle: TextStyle(color: Colors.white38, fontSize: 12),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: kGold, foregroundColor: Colors.black),
+            onPressed: () async {
+              final text = tCtrl.text.trim();
+              Navigator.pop(ctx);
+              if (text.isEmpty) return;
+              setState(() {
+                _busy = true;
+                _statusMsg = 'Analyzing transcript with trader-analyst AI...';
+              });
+              final res = await _callSavedAiWithPrompt(
+                'You are trader-analyst. Summarize the key numbers, guidance changes, margin drivers, and trading impact in Banglish/Bengali (4 bullet points) from this text:\n\n$text',
+              );
+              if (!mounted) return;
+              setState(() {
+                _busy = false;
+                _transcriptAnalysis = res.isNotEmpty
+                    ? res
+                    : 'Transcript received (${text.length} chars). Add an active API key in Key tab to generate full Banglish AI breakdown.';
+                _statusMsg = 'Transcript analysis ready.';
+              });
+            },
+            child: const Text('Analyze with AI', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
     );
   }
 
@@ -3619,12 +4284,13 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     final lCtrl = TextEditingController(text: _maxLossPerTradeUsd.toStringAsFixed(0));
     final dCtrl = TextEditingController(text: _maxDailyLossUsd.toStringAsFixed(0));
     final rCtrl = TextEditingController(text: _targetR.toStringAsFixed(1));
+    final wCtrl = TextEditingController(text: _weightsSpec);
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1A202C),
-        title: const Text('Budget & Risk Rules', style: TextStyle(color: kGold, fontSize: 16, fontWeight: FontWeight.bold)),
+        title: const Text('Budget, Risk & Portfolio Weights Rules', style: TextStyle(color: kGold, fontSize: 15, fontWeight: FontWeight.bold)),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -3665,6 +4331,14 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
                   labelStyle: TextStyle(color: Colors.white70),
                 ),
               ),
+              TextField(
+                controller: wCtrl,
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+                decoration: const InputDecoration(
+                  labelText: 'Portfolio Weights (e.g. GC=F=30,BTC-USD=25,NVDA=25,TSLA=20)',
+                  labelStyle: TextStyle(color: Colors.white70, fontSize: 11),
+                ),
+              ),
             ],
           ),
         ),
@@ -3681,6 +4355,8 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
                 _maxLossPerTradeUsd = double.tryParse(lCtrl.text.trim()) ?? _maxLossPerTradeUsd;
                 _maxDailyLossUsd = double.tryParse(dCtrl.text.trim()) ?? _maxDailyLossUsd;
                 _targetR = double.tryParse(rCtrl.text.trim()) ?? _targetR;
+                if (wCtrl.text.trim().isNotEmpty) _weightsSpec = wCtrl.text.trim();
+                _computeWeightsAllocation();
               });
               _saveProState();
               Navigator.pop(ctx);
