@@ -1106,9 +1106,160 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         ? 'NYSE Holiday Today'
         : (nyseEarlyCloses[nyIsoDate] ? 'NYSE Early Close 1:00 PM ET (Flat by 12:55 ET)' : 'Regular Session (Flat by 15:55 ET)');
 
+      // ═══════════════════════════════════════════════════════════════════
+      //  SKILL 12: ORDER FLOW, FOOTPRINT DELTA, VOLUME PROFILE (POC/VAH/VAL),
+      //  LIVE ORDERBOOK HEATMAP WALLS & ABSORPTION / WHALE TRAP ENGINE
+      // ═══════════════════════════════════════════════════════════════════
+      // 12A. Session Volume Profile (24-Bucket POC, VAH, VAL & LVN Liquidity Void)
+      var vpBuckets = 24;
+      var vpMin = sessLow, vpMax = sessHigh;
+      var vpStep = Math.max((vpMax - vpMin) / vpBuckets, 1e-6);
+      var vpVols = [];
+      for (var vb = 0; vb < vpBuckets; vb++) vpVols.push(0);
+      var totalSessVol = 0;
+      for (var sb = 0; sb < sess.length; sb++) {
+        var b = sess[sb];
+        var bv = Math.max(b.v || 1, 1);
+        totalSessVol += bv;
+        var bIdx = Math.min(vpBuckets - 1, Math.max(0, Math.floor(((b.c - vpMin) / vpStep))));
+        vpVols[bIdx] += bv;
+      }
+      var pocIdx = 0;
+      for (var vi = 1; vi < vpBuckets; vi++) {
+        if (vpVols[vi] > vpVols[pocIdx]) pocIdx = vi;
+      }
+      var pocPrice = vpMin + (pocIdx + 0.5) * vpStep;
+
+      // Calculate 70% Value Area (VAH & VAL) expanding from POC
+      var targetVaVol = totalSessVol * 0.70;
+      var curVaVol = vpVols[pocIdx];
+      var vaLoIdx = pocIdx, vaHiIdx = pocIdx;
+      while (curVaVol < targetVaVol && (vaLoIdx > 0 || vaHiIdx < vpBuckets - 1)) {
+        var upV = vaHiIdx < vpBuckets - 1 ? vpVols[vaHiIdx + 1] : -1;
+        var dnV = vaLoIdx > 0 ? vpVols[vaLoIdx - 1] : -1;
+        if (upV >= dnV && vaHiIdx < vpBuckets - 1) {
+          vaHiIdx++;
+          curVaVol += vpVols[vaHiIdx];
+        } else if (vaLoIdx > 0) {
+          vaLoIdx--;
+          curVaVol += vpVols[vaLoIdx];
+        } else {
+          break;
+        }
+      }
+      var valPrice = vpMin + vaLoIdx * vpStep;
+      var vahPrice = vpMin + (vaHiIdx + 1) * vpStep;
+
+      // 12B. Footprint Volume Delta, Cumulative Volume Delta (CVD) & Stacked Imbalance
+      var cvdSession = 0;
+      var last5Delta = 0;
+      var buyImbalanceCount = 0;
+      var sellImbalanceCount = 0;
+      var whalePrints = [];
+      var avgSessBarVol = totalSessVol / Math.max(1, sess.length);
+
+      for (var fi = 0; fi < sess.length; fi++) {
+        var fb = sess[fi];
+        var fRange = Math.max(fb.h - fb.l, 1e-8);
+        var fVol = Math.max(fb.v || 100, 1);
+        var buyShare = (fb.c - fb.l) / fRange;
+        var sellShare = (fb.h - fb.c) / fRange;
+        var bVol = fVol * buyShare;
+        var sVol = fVol * sellShare;
+        var bDelta = bVol - sVol;
+        cvdSession += bDelta;
+        if (fi >= sess.length - 5) {
+          last5Delta += bDelta;
+          if (buyShare >= 0.72) buyImbalanceCount++;
+          if (sellShare >= 0.72) sellImbalanceCount++;
+        }
+        if (fVol >= avgSessBarVol * 2.1 && fi >= sess.length - 8) {
+          whalePrints.push((fb.c >= fb.o ? 'WHALE BUY BUBBLE @ ' : 'WHALE SELL BUBBLE @ ') + fb.c.toFixed(dec) + ' (' + (fVol / Math.max(1, avgSessBarVol)).toFixed(1) + 'x Vol)');
+        }
+      }
+
+      var stackedImbalanceStr = buyImbalanceCount >= 3
+        ? 'STACKED BUY IMBALANCE (' + buyImbalanceCount + '/5 bars aggressive buyer dominance)'
+        : (sellImbalanceCount >= 3
+            ? 'STACKED SELL IMBALANCE (' + sellImbalanceCount + '/5 bars aggressive seller dominance)'
+            : 'Balanced Two-Sided Footprint Flow');
+
+      // 12C. Absorption vs Spoofing / Exhaustion Trap Detector
+      var lastBar = sess[sess.length - 1];
+      var prevBar = sess[Math.max(0, sess.length - 2)];
+      var lbRange = Math.max(lastBar.h - lastBar.l, 1e-8);
+      var lbBody  = Math.abs(lastBar.c - lastBar.o);
+      var upperWick = lastBar.h - Math.max(lastBar.c, lastBar.o);
+      var lowerWick = Math.min(lastBar.c, lastBar.o) - lastBar.l;
+
+      var absorptionStatus = 'No Passive Absorption Trap — Clean Price Discovery';
+      if (upperWick > lbBody * 1.4 && lastBar.h >= vahPrice - vpStep) {
+        absorptionStatus = 'BEARISH ICEBERG ABSORPTION AT RESISTANCE (' + lastBar.h.toFixed(dec) + '): Aggressive market buys were soaked up by passive limit sellers -> High-Probability Bull Trap / Reversal DOWN!';
+      } else if (lowerWick > lbBody * 1.4 && lastBar.l <= valPrice + vpStep) {
+        absorptionStatus = 'BULLISH ICEBERG ABSORPTION AT SUPPORT (' + lastBar.l.toFixed(dec) + '): Aggressive market sells were soaked up by passive limit buyers -> High-Probability Bear Trap / Reversal UP!';
+      } else if (last5Delta > 0 && lastBar.c < prevBar.c) {
+        absorptionStatus = 'DELTA DIVERGENCE (Hidden Seller Absorption: +Delta but price stalled at ' + lastBar.c.toFixed(dec) + ')';
+      } else if (last5Delta < 0 && lastBar.c > prevBar.c) {
+        absorptionStatus = 'DELTA DIVERGENCE (Hidden Buyer Absorption: -Delta but price held firm at ' + lastBar.c.toFixed(dec) + ')';
+      }
+
+      // 12D. Live Orderbook Liquidity Heatmap Walls (Bid Wall below price & Ask Wall above price)
+      // Queries Binance L2 Orderbook Depth for Crypto/Gold proxy + Volume Profile HVN clusters
+      var bidWallPx = valPrice < livePx ? valPrice : orLow;
+      var askWallPx = vahPrice > livePx ? vahPrice : orHigh;
+      var heatmapSource = 'Institutional Volume-Depth Clusters';
+
+      try {
+        var binSym = '';
+        if (sym === 'BTC-USD') binSym = 'BTCUSDT';
+        else if (sym === 'ETH-USD') binSym = 'ETHUSDT';
+        else if (sym === 'SOL-USD') binSym = 'SOLUSDT';
+        else if (sym === 'GC=F') binSym = 'PAXGUSDT';
+
+        if (binSym) {
+          var obResp = await origFetch('https://api.binance.com/api/v3/depth?symbol=' + binSym + '&limit=100', { method: 'GET' }).catch(function(){ return null; });
+          if (obResp && obResp.ok) {
+            var obJson = await obResp.json();
+            var bids = (obJson && obJson.bids) || [];
+            var asks = (obJson && obJson.asks) || [];
+            var maxBidQty = 0, bestBidWall = 0;
+            for (var bi = 0; bi < bids.length; bi++) {
+              var bPx = parseFloat(bids[bi][0]), bQ = parseFloat(bids[bi][1]);
+              if (bQ > maxBidQty) { maxBidQty = bQ; bestBidWall = bPx; }
+            }
+            var maxAskQty = 0, bestAskWall = 0;
+            for (var ai = 0; ai < asks.length; ai++) {
+              var aPx = parseFloat(asks[ai][0]), aQ = parseFloat(asks[ai][1]);
+              if (aQ > maxAskQty) { maxAskQty = aQ; bestAskWall = aPx; }
+            }
+            if (bestBidWall > 0 && bestAskWall > 0 && sym !== 'GC=F') {
+              bidWallPx = bestBidWall;
+              askWallPx = bestAskWall;
+              heatmapSource = 'Live L2 Exchange Orderbook Depth (' + binSym + ')';
+            }
+          }
+        }
+      } catch(eOb) {}
+
+      // Also scan buckets above and below livePx for strongest resting HVN walls
+      var bestAboveVol = -1, bestBelowVol = -1;
+      for (var wi = 0; wi < vpBuckets; wi++) {
+        var bCenter = vpMin + (wi + 0.5) * vpStep;
+        if (bCenter > livePx + (vpStep * 0.4) && vpVols[wi] > bestAboveVol) {
+          bestAboveVol = vpVols[wi];
+          if (heatmapSource.indexOf('Live L2') < 0) askWallPx = bCenter;
+        }
+        if (bCenter < livePx - (vpStep * 0.4) && vpVols[wi] > bestBelowVol) {
+          bestBelowVol = vpVols[wi];
+          if (heatmapSource.indexOf('Live L2') < 0) bidWallPx = bCenter;
+        }
+      }
+      if (askWallPx <= livePx) askWallPx = livePx + (1.5 * atr14);
+      if (bidWallPx >= livePx) bidWallPx = livePx - (1.5 * atr14);
+
       return ''
         + '\\n\\n══════════════════════════════════════════════════════════════════\\n'
-        + '[ANIKET PRO AI — UNIFIED 11 DAY-TRADER SKILLS + USER SMC/ICT ENGINE (' + label + ')]\\n'
+        + '[ANIKET PRO AI — UNIFIED 11 DAY-TRADER SKILLS + ORDER FLOW / FOOTPRINT / HEATMAP + USER SMC/ICT ENGINE (' + label + ')]\\n'
         + '══════════════════════════════════════════════════════════════════\\n'
         + '1. [trader-scanner & Live Market Data]:\\n'
         + '   • Live Price: ' + livePx.toFixed(dec) + ' (' + (chgPct >= 0 ? '+' : '') + chgPct.toFixed(2) + '%) | 5m Wilder RSI-14: ' + rsi5m.toFixed(1) + ' | Daily RSI-14: ' + dailyRsi.toFixed(1) + '\\n'
@@ -1122,22 +1273,33 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         + '   • Entry Timer Status: ' + entryStatus + '\\n'
         + '   • Session Dealing Range (' + sessLow.toFixed(dec) + ' – ' + sessHigh.toFixed(dec) + '): Current Price is in ' + pdZone + '\\n'
         + '   • OTE Fibonacci Zone (0.618–0.786): Bullish Buy OTE=' + bullOte786.toFixed(dec) + '–' + bullOte618.toFixed(dec) + ' | Bearish Sell OTE=' + bearOte618.toFixed(dec) + '–' + bearOte786.toFixed(dec) + '\\n'
-        + '4. [trader-exit (Dynamic ' + atrMult + 'x ATR-14 SL & Partial TP1/TP2/TP3)]:\\n'
+        + '4. [ORDER FLOW, FOOTPRINT DELTA, VOLUME PROFILE & LIQUIDITY HEATMAP]:\\n'
+        + '   • Volume Profile: Point of Control (POC)=' + pocPrice.toFixed(dec) + ' | Value Area High (VAH)=' + vahPrice.toFixed(dec) + ' | Value Area Low (VAL)=' + valPrice.toFixed(dec) + '\\n'
+        + '   • Heatmap Liquidity Walls (' + heatmapSource + '): Nearest Bid Wall (Buy Support)=' + bidWallPx.toFixed(dec) + ' | Nearest Ask Wall (Sell Resistance)=' + askWallPx.toFixed(dec) + '\\n'
+        + '   • Footprint Delta & CVD: Session CVD=' + (cvdSession >= 0 ? '+Bullish' : '-Bearish') + ' | Last 5-Bar Delta=' + (last5Delta >= 0 ? '+Buying Pressure' : '-Selling Pressure') + ' | ' + stackedImbalanceStr + '\\n'
+        + '   • Absorption / Spoofing Trap Check: ' + absorptionStatus + '\\n'
+        + '   • Whale Prints / Large Bubbles: ' + (whalePrints.length > 0 ? whalePrints.slice(-2).join(' | ') : 'Normal Institutional Flow') + '\\n'
+        + '5. [trader-exit (Dynamic ' + atrMult + 'x ATR-14 SL & Partial TP1/TP2/TP3)]:\\n'
         + '   • 14-Bar ATR Volatility: ' + atr14.toFixed(dec) + ' (Partial TP1 Split: ' + userCfg.tp1Pct + '%)\\n'
         + '   • IF BUY (LONG): Entry=' + livePx.toFixed(dec) + ' | Stop-Loss=' + longSL.toFixed(dec) + ' | TP1(1R)=' + longTP1.toFixed(dec) + ' | TP2(2R)=' + longTP2.toFixed(dec) + ' | TP3(3R)=' + longTP3.toFixed(dec) + '\\n'
         + '   • IF SELL (SHORT): Entry=' + livePx.toFixed(dec) + ' | Stop-Loss=' + shortSL.toFixed(dec) + ' | TP1(1R)=' + shortTP1.toFixed(dec) + ' | TP2(2R)=' + shortTP2.toFixed(dec) + ' | TP3(3R)=' + shortTP3.toFixed(dec) + '\\n'
-        + '5. [trader-timemachine (2,500x Monte Carlo Intraday Simulation)]:\\n'
+        + '6. [trader-timemachine (2,500x Monte Carlo Intraday Simulation)]:\\n'
         + '   • Target Hit First: ' + ((hitTP / replays) * 100).toFixed(1) + '% | Stop Hit First: ' + ((hitSL / replays) * 100).toFixed(1) + '% | Win Share of Resolved: ' + winPct.toFixed(1) + '% (Breakeven ' + bePct.toFixed(0) + '%)\\n'
         + '   • Expected Value: ' + (avgR >= 0 ? '+' : '') + avgR.toFixed(2) + 'R | Simulated Close Range (5%–50%–95%): ' + p05.toFixed(dec) + ' -> ' + p50.toFixed(dec) + ' -> ' + p95.toFixed(dec) + '\\n'
         + '   • Time Machine Verdict: ' + tmVerdict + '\\n'
-        + '6. [trader-budget, trader-risk & trader-broker]:\\n'
+        + '7. [trader-budget, trader-risk & trader-broker]:\\n'
         + '   • Account Balance: USD ' + userCfg.balance.toFixed(0) + ' | Risk per Trade: ' + userCfg.riskPct + '% (USD ' + riskUsd.toFixed(2) + ') | A+ Threshold: ' + userCfg.aPlusThreshold + '/10\\n'
         + '   • Recommended Position Size: ' + lots.toFixed(2) + ' Standard Lots (' + Math.max(1, Math.floor(rawUnits)) + ' units)\\n'
         + '   • Pre-Trade Risk Gate: ' + riskVerdict + '\\n'
-        + '7. [trader-alerts & Session Clock]:\\n'
+        + '8. [trader-alerts & Session Clock]:\\n'
         + '   • Current Session: ' + kz + ' | Calendar: ' + nyseCalNote + '\\n'
         + 'MANDATORY INSTRUCTION FOR AI RESPONSE:\\n'
-        + 'Analyze the uploaded screenshots (HTF, ENTRY, CORRELATION) together with all 11 Day-Trader Skill metrics above. In your final analysis output, clearly include: (a) HTF + Entry SMC/ICT Structure & IDM/OTE Zone, (b) Exact Entry, Dynamic ATR Stop-Loss, and Partial TP1/TP2/TP3 levels, (c) Time Machine 2,500x Monte Carlo Win-Rate % & Verdict, (d) Recommended Lot Size from trader-budget, and (e) Pre-Trade Risk Gate (PASS/BLOCK) from trader-risk.\\n';
+        + 'Analyze the uploaded screenshots (HTF, ENTRY, CORRELATION — including any Footprint/Heatmap chart screenshots) together with all 11 Day-Trader Skills AND the Order Flow / Footprint / Heatmap metrics above. In your final analysis output, clearly include:\\n'
+        + '  (1) HTF + Entry SMC/ICT Structure, OTE (0.618–0.786) & IDM Sweep,\\n'
+        + '  (2) Order Flow Confirmation: Volume Profile POC (' + pocPrice.toFixed(dec) + '), Heatmap Bid Wall (' + bidWallPx.toFixed(dec) + ') & Ask Wall (' + askWallPx.toFixed(dec) + '), Footprint CVD/Delta & Absorption Trap status,\\n'
+        + '  (3) Exact Entry, Dynamic ATR Stop-Loss, and Partial TP1/TP2/TP3 levels,\\n'
+        + '  (4) Time Machine 2,500x Monte Carlo Win-Rate % & Verdict,\\n'
+        + '  (5) Recommended Lot Size from trader-budget & Pre-Trade Risk Gate (PASS/BLOCK) from trader-risk.\\n';
     }
 
     // ═══════════════════════════════════════════════════════════════════
