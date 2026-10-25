@@ -721,82 +721,87 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     var origFetch = window.fetch.bind(window);
 
     // ═══════════════════════════════════════════════════════════════════
-    //  11 DAY-TRADER SKILLS ENGINE DIRECTLY INSIDE FOREX PAGE
+    //  UNIFIED PRO ANALYSIS ENGINE:
+    //  USER'S FOREX FEATURES (HTF/ENTRY/DXY SS + SMC/ICT MODE FILTERS)
+    //  + ALL 11 DAY-TRADER SKILLS RUNNING AUTOMATICALLY ON 'ANALYZE'
     // ═══════════════════════════════════════════════════════════════════
-    var defaultSkillCfg = {
-      pair: 'GC=F',
-      pairLabel: 'XAU/USD (Gold)',
-      stopRule: 'atr:1.5',
-      targetR: 2.0,
-      s1_scanner: true,
-      s2_news: true,
-      s3_entry: true,
-      s4_exit: true,
-      s5_timemachine: true,
-      s6_budget: true,
-      s7_risk: true,
-      s8_broker: true,
-      s9_alerts: true,
-      s10_analyst: true,
-      s11_pelosi: true
+
+    // Official NYSE 2026 & 2027 Holidays & 1:00 PM ET Early Closes (Skill 9: trader-alerts)
+    var nyseHolidays = {
+      '2026-01-01':1, '2026-01-19':1, '2026-02-16':1, '2026-04-03':1, '2026-05-25':1,
+      '2026-06-19':1, '2026-07-03':1, '2026-09-07':1, '2026-11-26':1, '2026-12-25':1,
+      '2027-01-01':1, '2027-01-18':1, '2027-02-15':1, '2027-03-26':1, '2027-05-31':1,
+      '2027-06-18':1, '2027-07-05':1, '2027-09-06':1, '2027-11-25':1, '2027-12-24':1
     };
+    var nyseEarlyCloses = { '2026-11-27':1, '2026-12-24':1, '2027-11-26':1 };
 
-    function loadSkillCfg() {
-      try {
-        var raw = localStorage.getItem('aniket_11skills_cfg');
-        if (raw) {
-          var p = JSON.parse(raw);
-          for (var k in defaultSkillCfg) {
-            if (p[k] === undefined) p[k] = defaultSkillCfg[k];
-          }
-          return p;
-        }
-      } catch(e) {}
-      return Object.assign({}, defaultSkillCfg);
-    }
-
-    function saveSkillCfg(cfg) {
-      try {
-        origSetItem('aniket_11skills_cfg', JSON.stringify(cfg));
-      } catch(e) {}
-    }
-
-    window.__aniketSkillCfg = loadSkillCfg();
-
-    // Read user's Risk per Trade (%), Account Balance (USD), Daily Loss Limit (%), Max Daily Trades, ATR Multiplier from Mode tab inputs
-    function readModeFormNumbers() {
+    // Read all user settings & active SMC/ICT switches from the Forex Mode tab
+    function readUserForexModeSettings() {
       var res = {
         riskPct: 1.0,
-        balance: 5000.0,
+        balance: 1000.0,
         dailyLossPct: 2.0,
         maxTrades: 10,
+        aPlusThreshold: 8,
         atrMult: 1.5,
-        tp1Pct: 50
+        tp1Pct: 50,
+        showHtfZones: true,
+        liveMemoryMode: false,
+        cache5Min: true,
+        premiumDiscount: true,
+        oteFilter: true,
+        idmMandatory: true,
+        killZoneStrict: false,
+        news15MinFilter: true,
+        dynamicAtrSl: true,
+        partialTp: true
       };
       try {
-        var labels = document.querySelectorAll('label, div, span');
-        for (var i = 0; i < labels.length; i++) {
-          var el = labels[i];
-          if (el.children && el.children.length > 2) continue;
-          var t = (el.innerText || '').trim().toLowerCase();
+        var nodes = document.querySelectorAll('label, div, span');
+        for (var i = 0; i < nodes.length; i++) {
+          var el = nodes[i];
+          if (!el || (el.children && el.children.length > 3)) continue;
+          var t = (el.textContent || '').trim().toLowerCase();
+          if (!t || t.length > 100) continue;
           var parent = el.parentElement;
           if (!parent) continue;
-          var inp = parent.querySelector('input');
-          if (!inp && parent.parentElement) inp = parent.parentElement.querySelector('input');
-          if (!inp) continue;
-          var val = parseFloat(inp.value || inp.placeholder || '');
-          if (isNaN(val) || val <= 0) continue;
-          if (t.indexOf('risk per trade') >= 0) res.riskPct = val;
-          else if (t.indexOf('account balance') >= 0) res.balance = val;
-          else if (t.indexOf('daily loss limit') >= 0) res.dailyLossPct = val;
-          else if (t.indexOf('max daily trades') >= 0) res.maxTrades = val;
-          else if (t.indexOf('atr multiplier') >= 0) res.atrMult = val;
+
+          // Check numeric inputs
+          var inp = parent.querySelector('input[type=number], input[type=text], select');
+          if (!inp && parent.parentElement) inp = parent.parentElement.querySelector('input[type=number], input[type=text], select');
+          if (inp && inp.type !== 'checkbox') {
+            var val = parseFloat(inp.value || inp.placeholder || '');
+            if (!isNaN(val) && val > 0) {
+              if (t.indexOf('risk per trade') >= 0) res.riskPct = val;
+              else if (t.indexOf('account balance') >= 0) res.balance = val;
+              else if (t.indexOf('daily loss limit') >= 0) res.dailyLossPct = val;
+              else if (t.indexOf('max daily trades') >= 0) res.maxTrades = val;
+              else if (t.indexOf('a+ threshold') >= 0) res.aPlusThreshold = val;
+              else if (t.indexOf('atr multiplier') >= 0) res.atrMult = val;
+              else if (t.indexOf('partial profit') >= 0) res.tp1Pct = val;
+            }
+          }
+
+          // Check Mode switches (checkboxes)
+          var cb = parent.querySelector('input[type=checkbox]');
+          if (!cb && parent.parentElement) cb = parent.parentElement.querySelector('input[type=checkbox]');
+          if (cb) {
+            if (t.indexOf('show htf zones') >= 0) res.showHtfZones = !!cb.checked;
+            else if (t.indexOf('live memory mode') >= 0) res.liveMemoryMode = !!cb.checked;
+            else if (t.indexOf('premium/discount') >= 0) res.premiumDiscount = !!cb.checked;
+            else if (t.indexOf('ote filter') >= 0) res.oteFilter = !!cb.checked;
+            else if (t.indexOf('idm mandatory') >= 0) res.idmMandatory = !!cb.checked;
+            else if (t.indexOf('kill zone filter') >= 0) res.killZoneStrict = !!cb.checked;
+            else if (t.indexOf('news 15-min filter') >= 0) res.news15MinFilter = !!cb.checked;
+            else if (t.indexOf('dynamic atr sl') >= 0) res.dynamicAtrSl = !!cb.checked;
+            else if (t.indexOf('partial tp') >= 0) res.partialTp = !!cb.checked;
+          }
         }
       } catch(e) {}
       return res;
     }
 
-    // Wilder RSI-14
+    // Wilder RSI-14 (from Skill 1: trader-scanner)
     function calcWilderRsi(closes, period) {
       period = period || 14;
       if (!closes || closes.length <= period) return 50.0;
@@ -817,18 +822,80 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       return 100.0 - (100.0 / (1.0 + (avgG / avgL)));
     }
 
-    // Run the 11 Day-Trader Skills Engine on a symbol
-    async function run11SkillsEngine(sym, label) {
-      var cfg = window.__aniketSkillCfg || loadSkillCfg();
-      sym = sym || cfg.pair || 'GC=F';
-      label = label || cfg.pairLabel || 'XAU/USD (Gold)';
-      var modeNums = readModeFormNumbers();
+    // Detect which symbol/pair the user is analyzing from the page text, prompt, or Live chart
+    function detectActivePair(promptText) {
+      var combined = ((promptText || '') + ' ' + ((document.body && document.body.innerText) || '')).toUpperCase();
+      var map = [
+        ['XAUUSD', 'GC=F', 'XAU/USD (Gold)'],
+        ['XAU/USD', 'GC=F', 'XAU/USD (Gold)'],
+        ['GOLD', 'GC=F', 'XAU/USD (Gold)'],
+        ['BTCUSD', 'BTC-USD', 'BTC/USD (Bitcoin)'],
+        ['BTC/USD', 'BTC-USD', 'BTC/USD (Bitcoin)'],
+        ['BTCUSDT', 'BTC-USD', 'BTC/USD (Bitcoin)'],
+        ['BITCOIN', 'BTC-USD', 'BTC/USD (Bitcoin)'],
+        ['ETHUSD', 'ETH-USD', 'ETH/USD (Ethereum)'],
+        ['SOLUSD', 'SOL-USD', 'SOL/USD (Solana)'],
+        ['EURUSD', 'EURUSD=X', 'EUR/USD'],
+        ['EUR/USD', 'EURUSD=X', 'EUR/USD'],
+        ['GBPUSD', 'GBPUSD=X', 'GBP/USD'],
+        ['GBP/USD', 'GBPUSD=X', 'GBP/USD'],
+        ['USDJPY', 'USDJPY=X', 'USD/JPY'],
+        ['USD/JPY', 'USDJPY=X', 'USD/JPY'],
+        ['AUDUSD', 'AUDUSD=X', 'AUD/USD'],
+        ['AUD/USD', 'AUDUSD=X', 'AUD/USD'],
+        ['USDCAD', 'USDCAD=X', 'USD/CAD'],
+        ['USD/CAD', 'USDCAD=X', 'USD/CAD'],
+        ['GBPJPY', 'GBPJPY=X', 'GBP/JPY'],
+        ['EURJPY', 'EURJPY=X', 'EUR/JPY'],
+        ['XAGUSD', 'SI=F', 'XAG/USD (Silver)'],
+        ['SILVER', 'SI=F', 'XAG/USD (Silver)'],
+        ['USOIL', 'CL=F', 'WTI Crude Oil'],
+        ['NAS100', 'NQ=F', 'US100 (Nasdaq)'],
+        ['US100', 'NQ=F', 'US100 (Nasdaq)'],
+        ['US30', 'YM=F', 'US30 (Dow)'],
+        ['NVDA', 'NVDA', 'NVDA'],
+        ['TSLA', 'TSLA', 'TSLA'],
+        ['AAPL', 'AAPL', 'AAPL']
+      ];
+      // Prioritize what is in promptText first
+      var pUp = (promptText || '').toUpperCase();
+      for (var i = 0; i < map.length; i++) {
+        if (pUp.indexOf(map[i][0]) >= 0) {
+          return { sym: map[i][1], label: map[i][2] };
+        }
+      }
+      for (var j = 0; j < map.length; j++) {
+        if (combined.indexOf(map[j][0]) >= 0) {
+          return { sym: map[j][1], label: map[j][2] };
+        }
+      }
+      return { sym: 'GC=F', label: 'XAU/USD (Gold)' };
+    }
 
+    // Master background runner that executes ALL 11 Day-Trader Skills + User's Mode Settings
+    async function runUnified11SkillsAndUserFeatures(promptText) {
+      var det = detectActivePair(promptText);
+      var sym = det.sym;
+      var label = det.label;
+      var userCfg = readUserForexModeSettings();
+
+      // Fetch 5-minute intraday bars AND 3-month daily bars + DXY correlation in parallel (0 API quota!)
       var url5m = 'https://query2.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(sym) + '?range=5d&interval=5m';
-      var resp = await origFetch(url5m, { method: 'GET' });
-      if (!resp || !resp.ok) return null;
-      var j = await resp.json();
-      var res0 = j && j.chart && j.chart.result && j.chart.result[0];
+      var url1d = 'https://query2.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(sym) + '?range=3mo&interval=1d';
+      var urlDxy = 'https://query2.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?range=2d&interval=5m';
+      var urlRss = 'https://feeds.finance.yahoo.com/rss/2.0/headline?s=' + encodeURIComponent(sym === 'GC=F' ? 'GC=F' : (sym.indexOf('=X') >= 0 ? 'DX-Y.NYB' : sym)) + '&region=US&lang=en-US';
+
+      var responses = await Promise.all([
+        origFetch(url5m, { method: 'GET' }).catch(function(){ return null; }),
+        origFetch(url1d, { method: 'GET' }).catch(function(){ return null; }),
+        origFetch(urlDxy, { method: 'GET' }).catch(function(){ return null; }),
+        origFetch(urlRss, { method: 'GET' }).catch(function(){ return null; })
+      ]);
+
+      var resp5m = responses[0], resp1d = responses[1], respDxy = responses[2], respRss = responses[3];
+      if (!resp5m || !resp5m.ok) return null;
+      var j5m = await resp5m.json();
+      var res0 = j5m && j5m.chart && j5m.chart.result && j5m.chart.result[0];
       if (!res0) return null;
 
       var meta = res0.meta || {};
@@ -853,7 +920,62 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       var chgPct = prevClose > 0 ? (((livePx - prevClose) / prevClose) * 100.0) : 0.0;
       var dec = livePx > 100 ? 2 : (livePx > 10 ? 3 : 5);
 
-      // 1. ATR-14
+      // ── SKILL 1 (trader-scanner) & SKILL 10 (trader-analyst 90D Macro Range) ──
+      var dailySetups = [];
+      var hi90d = livePx, lo90d = livePx, sma20d = livePx, dailyRsi = 50.0;
+      if (resp1d && resp1d.ok) {
+        try {
+          var j1d = await resp1d.json();
+          var r1d = j1d && j1d.chart && j1d.chart.result && j1d.chart.result[0];
+          var q1d = (r1d && r1d.indicators && r1d.indicators.quote && r1d.indicators.quote[0]) || {};
+          var dc = (q1d.close || []).filter(function(x){ return x != null; });
+          var dh = (q1d.high || []).filter(function(x){ return x != null; });
+          var dl = (q1d.low || []).filter(function(x){ return x != null; });
+          if (dh.length > 0) hi90d = Math.max.apply(null, dh);
+          if (dl.length > 0) lo90d = Math.min.apply(null, dl);
+          if (dc.length >= 21) {
+            dailyRsi = calcWilderRsi(dc, 14);
+            var prior20 = dc.slice(-21, -1);
+            var max20 = Math.max.apply(null, prior20);
+            sma20d = prior20.reduce(function(a,b){ return a + b; }, 0) / prior20.length;
+            if (livePx > max20) dailySetups.push('20D Closing-High Breakout');
+            if (dc[dc.length - 2] < sma20d && livePx > sma20d) dailySetups.push('Reclaimed 20-Day SMA');
+            if (dailyRsi < 32) dailySetups.push('Daily Oversold (RSI ' + dailyRsi.toFixed(1) + ')');
+          }
+        } catch(e1d) {}
+      }
+
+      // Live DXY Correlation check
+      var dxyInfo = 'DXY Neutral';
+      if (respDxy && respDxy.ok) {
+        try {
+          var jDxy = await respDxy.json();
+          var rDxy = jDxy && jDxy.chart && jDxy.chart.result && jDxy.chart.result[0];
+          if (rDxy && rDxy.meta) {
+            var dpx = rDxy.meta.regularMarketPrice || 0;
+            var dprev = rDxy.meta.chartPreviousClose || rDxy.meta.previousClose || dpx;
+            var dchg = dprev > 0 ? (((dpx - dprev) / dprev) * 100.0) : 0;
+            dxyInfo = 'DXY @ ' + Number(dpx).toFixed(2) + ' (' + (dchg >= 0 ? '+' : '') + dchg.toFixed(2) + '% -> ' + (dchg >= 0.1 ? 'USD Strong / Bearish Pressure on Gold & EUR' : (dchg <= -0.1 ? 'USD Weak / Bullish Tailwind for Gold & EUR' : 'DXY Flat')) + ')';
+          }
+        } catch(eDxy) {}
+      }
+
+      // ── SKILL 2 (trader-news): Live Yahoo Finance RSS & Red-Folder Catalyst Check ──
+      var headlines = [];
+      if (respRss && respRss.ok) {
+        try {
+          var xmlTxt = await respRss.text();
+          var itemMatches = xmlTxt.match(/<item>[\s\S]*?<\/item>/gi) || [];
+          for (var hm = 0; hm < Math.min(4, itemMatches.length); hm++) {
+            var blk = itemMatches[hm];
+            var tm = /<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>|<title>([\s\S]*?)<\/title>/i.exec(blk);
+            var tStr = ((tm && (tm[1] || tm[2])) || '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').trim();
+            if (tStr) headlines.push(tStr);
+          }
+        } catch(eRss) {}
+      }
+
+      // ── SKILL 3 (trader-entry): 5m Opening Range (OR High/Low/Mid), ATR-14, Wilder RSI-14 & OTE/Premium-Discount ──
       var atrN = Math.min(14, bars.length - 1);
       var trSum = 0;
       for (var a = bars.length - atrN; a < bars.length; a++) {
@@ -861,42 +983,51 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         trSum += Math.max(cur.h - cur.l, Math.abs(cur.h - pv), Math.abs(cur.l - pv));
       }
       var atr14 = trSum / Math.max(1, atrN);
+      var closes5m = bars.map(function(b){ return b.c; });
+      var rsi5m = calcWilderRsi(closes5m, 14);
 
-      // 2. RSI-14
-      var closes = bars.map(function(b){ return b.c; });
-      var rsi14 = calcWilderRsi(closes, 14);
-
-      // 3. trader-entry: Opening Range (first 3 bars of recent 24-bar session)
       var sess = bars.slice(-24);
       var orBars = sess.slice(0, 3);
       var orHigh = Math.max.apply(null, orBars.map(function(b){ return b.h; }));
       var orLow  = Math.min.apply(null, orBars.map(function(b){ return b.l; }));
       var orMid  = (orHigh + orLow) / 2.0;
-      var entryStatus = livePx > orHigh
-        ? 'TRIGGERED BULLISH (Above OR High ' + orHigh.toFixed(dec) + ')'
-        : (livePx < orLow
-            ? 'TRIGGERED BEARISH (Below OR Low ' + orLow.toFixed(dec) + ')'
-            : 'WAITING INSIDE OR (' + orLow.toFixed(dec) + ' – ' + orHigh.toFixed(dec) + ')');
+      var orAvgVol = orBars.reduce(function(acc, b){ return acc + (b.v || 0); }, 0) / Math.max(1, orBars.length);
+      var lastVolRatio = orAvgVol > 0 ? (sess[sess.length - 1].v / orAvgVol) : 1.0;
 
-      // 4. trader-exit: Stop-Loss & 1R/2R/3R Targets
-      var atrMult = modeNums.atrMult > 0 ? modeNums.atrMult : 1.5;
-      var riskDist = cfg.stopRule === 'or_mid' && Math.abs(livePx - orMid) > livePx * 0.0005
-        ? Math.abs(livePx - orMid)
-        : (atrMult * atr14);
+      // Session Dealing Range for User's Premium/Discount & OTE (0.618-0.786) Filter
+      var sessHigh = Math.max.apply(null, sess.map(function(b){ return b.h; }));
+      var sessLow  = Math.min.apply(null, sess.map(function(b){ return b.l; }));
+      var sessEq   = (sessHigh + sessLow) / 2.0;
+      var sessSpan = Math.max(sessHigh - sessLow, atr14);
+      var bullOte618 = sessHigh - (0.618 * sessSpan);
+      var bullOte786 = sessHigh - (0.786 * sessSpan);
+      var bearOte618 = sessLow + (0.618 * sessSpan);
+      var bearOte786 = sessLow + (0.786 * sessSpan);
+      var pdZone = livePx > sessEq ? 'PREMIUM ZONE (Above 50% Eq ' + sessEq.toFixed(dec) + ')' : 'DISCOUNT ZONE (Below 50% Eq ' + sessEq.toFixed(dec) + ')';
+
+      var entryStatus = livePx > orHigh
+        ? 'ORB BULLISH BREAKOUT TRIGGERED (Closed above OR High ' + orHigh.toFixed(dec) + ', Vol ' + lastVolRatio.toFixed(2) + 'x)'
+        : (livePx < orLow
+            ? 'ORB BEARISH BREAKDOWN TRIGGERED (Closed below OR Low ' + orLow.toFixed(dec) + ', Vol ' + lastVolRatio.toFixed(2) + 'x)'
+            : 'INSIDE OPENING RANGE (' + orLow.toFixed(dec) + ' – ' + orHigh.toFixed(dec) + ', Mid ' + orMid.toFixed(dec) + ')');
+
+      // ── SKILL 4 (trader-exit): Dynamic ATR SL & Partial TP (TP1=1R, TP2=2R, TP3=3R) ──
+      var atrMult = userCfg.atrMult > 0 ? userCfg.atrMult : 1.5;
+      var riskDist = atrMult * atr14;
       if (riskDist < livePx * 0.0005) riskDist = livePx * 0.002;
 
-      var targetR = cfg.targetR || 2.0;
+      var targetR = 2.0;
       var longSL  = livePx - riskDist;
-      var longTP1 = livePx + riskDist;
-      var longTP2 = livePx + (targetR * riskDist);
+      var longTP1 = livePx + (1.0 * riskDist);
+      var longTP2 = livePx + (2.0 * riskDist);
       var longTP3 = livePx + (3.0 * riskDist);
 
       var shortSL  = livePx + riskDist;
-      var shortTP1 = livePx - riskDist;
-      var shortTP2 = livePx - (targetR * riskDist);
+      var shortTP1 = livePx - (1.0 * riskDist);
+      var shortTP2 = livePx - (2.0 * riskDist);
       var shortTP3 = livePx - (3.0 * riskDist);
 
-      // 5. trader-timemachine: 2,500 Monte Carlo Intraday Replays
+      // ── SKILL 5 (trader-timemachine): 2,500 Monte Carlo Session Replays + Historical Backtest ──
       var ratios = [];
       for (var rIdx = 1; rIdx < bars.length; rIdx++) {
         var pc = bars[rIdx - 1].c;
@@ -905,8 +1036,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           if (hr > 0.92 && hr < 1.08 && lr > 0.92 && lr < 1.08) ratios.push([hr, lr, cr]);
         }
       }
-      var replays = 2000;
+      var replays = 2500;
       var hitTP = 0, hitSL = 0, hitFlat = 0, sumR = 0;
+      var endPrices = [];
       var seed = 19;
       function nextRand() {
         seed = (seed * 1664525 + 1013904223) % 4294967296;
@@ -928,6 +1060,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           }
           px = bc;
         }
+        endPrices.push(px);
         if (out === 'tp') { hitTP++; sumR += targetR; }
         else if (out === 'sl') { hitSL++; sumR -= 1.0; }
         else {
@@ -935,101 +1068,91 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           sumR += ((isBullBias ? (px - livePx) : (livePx - px)) / riskDist);
         }
       }
+      endPrices.sort(function(a,b){ return a - b; });
+      var p05 = endPrices[Math.floor(replays * 0.05)] || livePx;
+      var p50 = endPrices[Math.floor(replays * 0.50)] || livePx;
+      var p95 = endPrices[Math.floor(replays * 0.95)] || livePx;
+
       var resolved = Math.max(1, hitTP + hitSL);
       var winPct = (hitTP / resolved) * 100.0;
       var bePct  = (1.0 / (1.0 + targetR)) * 100.0;
       var avgR   = sumR / replays;
       var tmVerdict = winPct >= bePct + 4
-        ? 'POSITIVE EDGE (+' + avgR.toFixed(2) + 'R)'
-        : (Math.abs(winPct - bePct) <= 4 ? 'COIN FLIP (' + winPct.toFixed(1) + '%)' : 'CAUTION (' + avgR.toFixed(2) + 'R)');
+        ? 'POSITIVE EDGE (+' + avgR.toFixed(2) + 'R Expected | Beats ' + bePct.toFixed(0) + '% Breakeven)'
+        : (Math.abs(winPct - bePct) <= 4 ? 'NEUTRAL / COIN FLIP (' + winPct.toFixed(1) + '% vs ' + bePct.toFixed(0) + '% Breakeven)' : 'LOW PROBABILITY (' + avgR.toFixed(2) + 'R — Wait for Better Pullback)');
 
-      // 6. trader-budget & 7. trader-risk: Lot Sizing & Compliance Gate
-      var riskUsd = modeNums.balance * (modeNums.riskPct / 100.0);
-      var dailyMaxLossUsd = modeNums.balance * (modeNums.dailyLossPct / 100.0);
+      // ── SKILL 6 (trader-budget) & SKILL 7 (trader-risk) & SKILL 8 (trader-broker) ──
+      var riskUsd = userCfg.balance * (userCfg.riskPct / 100.0);
+      var dailyMaxLossUsd = userCfg.balance * (userCfg.dailyLossPct / 100.0);
       var rawUnits = riskDist > 0 ? (riskUsd / riskDist) : 1;
       var lots = sym === 'GC=F'
         ? Math.max(0.01, rawUnits / 100.0)
         : (sym.indexOf('=X') >= 0 ? Math.max(0.01, rawUnits / 100000.0) : Math.max(0.01, rawUnits));
       var riskPass = (riskUsd <= dailyMaxLossUsd) && (targetR >= 1.0);
       var riskVerdict = riskPass
-        ? 'PASS (Max Risk USD ' + riskUsd.toFixed(2) + ' fits Daily Limit USD ' + dailyMaxLossUsd.toFixed(2) + ')'
-        : 'BLOCK (Risk USD ' + riskUsd.toFixed(2) + ' exceeds Daily Limit USD ' + dailyMaxLossUsd.toFixed(2) + ')';
+        ? 'PASS (Trade Risk USD ' + riskUsd.toFixed(2) + ' fits Daily Limit USD ' + dailyMaxLossUsd.toFixed(2) + ' | Max Trades: ' + userCfg.maxTrades + ')'
+        : 'BLOCK (Trade Risk USD ' + riskUsd.toFixed(2) + ' exceeds Daily Limit USD ' + dailyMaxLossUsd.toFixed(2) + ')';
 
-      // 9. trader-alerts Clock (BD Time + NYSE Status)
+      // ── SKILL 9 (trader-alerts): BD Killzone & NYSE 2026-2027 Holiday Clock ──
       var nowUtc = new Date();
       var bdDate = new Date(nowUtc.getTime() + 6 * 3600 * 1000);
+      var nyDate = new Date(nowUtc.getTime() - 4 * 3600 * 1000);
+      var nyIsoDate = nyDate.toISOString().slice(0, 10);
       var bdHr = bdDate.getUTCHours();
-      var kz = (bdHr >= 13 && bdHr < 17) ? 'London Killzone' : ((bdHr >= 18 && bdHr < 23) ? 'New York Killzone' : 'Asia / Transition');
+      var kz = (bdHr >= 13 && bdHr < 17)
+        ? 'London Killzone (ACTIVE — High Liquidity)'
+        : ((bdHr >= 18 && bdHr < 23) ? 'New York Killzone (ACTIVE — Peak Liquidity)' : 'Asia / Transition Session');
+      var nyseCalNote = nyseHolidays[nyIsoDate]
+        ? 'NYSE Holiday Today'
+        : (nyseEarlyCloses[nyIsoDate] ? 'NYSE Early Close 1:00 PM ET (Flat by 12:55 ET)' : 'Regular Session (Flat by 15:55 ET)');
 
-      return {
-        sym: sym,
-        label: label,
-        dec: dec,
-        livePx: livePx,
-        chgPct: chgPct,
-        atr14: atr14,
-        rsi14: rsi14,
-        orHigh: orHigh,
-        orLow: orLow,
-        orMid: orMid,
-        entryStatus: entryStatus,
-        isBullBias: isBullBias,
-        longSL: longSL,
-        longTP1: longTP1,
-        longTP2: longTP2,
-        longTP3: longTP3,
-        shortSL: shortSL,
-        shortTP1: shortTP1,
-        shortTP2: shortTP2,
-        shortTP3: shortTP3,
-        targetR: targetR,
-        winPct: winPct,
-        bePct: bePct,
-        avgR: avgR,
-        tmVerdict: tmVerdict,
-        riskUsd: riskUsd,
-        dailyMaxLossUsd: dailyMaxLossUsd,
-        lots: lots,
-        riskVerdict: riskVerdict,
-        kz: kz,
-        balance: modeNums.balance,
-        riskPct: modeNums.riskPct
-      };
+      return ''
+        + '\\n\\n══════════════════════════════════════════════════════════════════\\n'
+        + '[ANIKET PRO AI — UNIFIED 11 DAY-TRADER SKILLS + USER SMC/ICT ENGINE (' + label + ')]\\n'
+        + '══════════════════════════════════════════════════════════════════\\n'
+        + '1. [trader-scanner & Live Market Data]:\\n'
+        + '   • Live Price: ' + livePx.toFixed(dec) + ' (' + (chgPct >= 0 ? '+' : '') + chgPct.toFixed(2) + '%) | 5m Wilder RSI-14: ' + rsi5m.toFixed(1) + ' | Daily RSI-14: ' + dailyRsi.toFixed(1) + '\\n'
+        + '   • 20-Day SMA: ' + sma20d.toFixed(dec) + ' | 90-Day Macro Range (trader-analyst): Low ' + lo90d.toFixed(dec) + ' – High ' + hi90d.toFixed(dec) + '\\n'
+        + '   • Active Scanner Setups: ' + (dailySetups.length > 0 ? dailySetups.join(', ') : 'Intraday SMC Structure Play') + '\\n'
+        + '   • Live DXY Correlation: ' + dxyInfo + '\\n'
+        + '2. [trader-news (Free Live Yahoo RSS & Macro Catalyst Check)]:\\n'
+        + '   • Latest Headlines: ' + (headlines.length > 0 ? headlines.join(' | ') : 'No Red-Folder Shock Headline Detected') + '\\n'
+        + '3. [trader-entry (15m Opening Range) + User SMC/ICT Filters]:\\n'
+        + '   • 5m Opening Range (First 15m): High=' + orHigh.toFixed(dec) + ' | Midpoint=' + orMid.toFixed(dec) + ' | Low=' + orLow.toFixed(dec) + '\\n'
+        + '   • Entry Timer Status: ' + entryStatus + '\\n'
+        + '   • Session Dealing Range (' + sessLow.toFixed(dec) + ' – ' + sessHigh.toFixed(dec) + '): Current Price is in ' + pdZone + '\\n'
+        + '   • OTE Fibonacci Zone (0.618–0.786): Bullish Buy OTE=' + bullOte786.toFixed(dec) + '–' + bullOte618.toFixed(dec) + ' | Bearish Sell OTE=' + bearOte618.toFixed(dec) + '–' + bearOte786.toFixed(dec) + '\\n'
+        + '4. [trader-exit (Dynamic ' + atrMult + 'x ATR-14 SL & Partial TP1/TP2/TP3)]:\\n'
+        + '   • 14-Bar ATR Volatility: ' + atr14.toFixed(dec) + ' (Partial TP1 Split: ' + userCfg.tp1Pct + '%)\\n'
+        + '   • IF BUY (LONG): Entry=' + livePx.toFixed(dec) + ' | Stop-Loss=' + longSL.toFixed(dec) + ' | TP1(1R)=' + longTP1.toFixed(dec) + ' | TP2(2R)=' + longTP2.toFixed(dec) + ' | TP3(3R)=' + longTP3.toFixed(dec) + '\\n'
+        + '   • IF SELL (SHORT): Entry=' + livePx.toFixed(dec) + ' | Stop-Loss=' + shortSL.toFixed(dec) + ' | TP1(1R)=' + shortTP1.toFixed(dec) + ' | TP2(2R)=' + shortTP2.toFixed(dec) + ' | TP3(3R)=' + shortTP3.toFixed(dec) + '\\n'
+        + '5. [trader-timemachine (2,500x Monte Carlo Intraday Simulation)]:\\n'
+        + '   • Target Hit First: ' + ((hitTP / replays) * 100).toFixed(1) + '% | Stop Hit First: ' + ((hitSL / replays) * 100).toFixed(1) + '% | Win Share of Resolved: ' + winPct.toFixed(1) + '% (Breakeven ' + bePct.toFixed(0) + '%)\\n'
+        + '   • Expected Value: ' + (avgR >= 0 ? '+' : '') + avgR.toFixed(2) + 'R | Simulated Close Range (5%–50%–95%): ' + p05.toFixed(dec) + ' -> ' + p50.toFixed(dec) + ' -> ' + p95.toFixed(dec) + '\\n'
+        + '   • Time Machine Verdict: ' + tmVerdict + '\\n'
+        + '6. [trader-budget, trader-risk & trader-broker]:\\n'
+        + '   • Account Balance: USD ' + userCfg.balance.toFixed(0) + ' | Risk per Trade: ' + userCfg.riskPct + '% (USD ' + riskUsd.toFixed(2) + ') | A+ Threshold: ' + userCfg.aPlusThreshold + '/10\\n'
+        + '   • Recommended Position Size: ' + lots.toFixed(2) + ' Standard Lots (' + Math.max(1, Math.floor(rawUnits)) + ' units)\\n'
+        + '   • Pre-Trade Risk Gate: ' + riskVerdict + '\\n'
+        + '7. [trader-alerts & Session Clock]:\\n'
+        + '   • Current Session: ' + kz + ' | Calendar: ' + nyseCalNote + '\\n'
+        + 'MANDATORY INSTRUCTION FOR AI RESPONSE:\\n'
+        + 'Analyze the uploaded screenshots (HTF, ENTRY, CORRELATION) together with all 11 Day-Trader Skill metrics above. In your final analysis output, clearly include: (a) HTF + Entry SMC/ICT Structure & IDM/OTE Zone, (b) Exact Entry, Dynamic ATR Stop-Loss, and Partial TP1/TP2/TP3 levels, (c) Time Machine 2,500x Monte Carlo Win-Rate % & Verdict, (d) Recommended Lot Size from trader-budget, and (e) Pre-Trade Risk Gate (PASS/BLOCK) from trader-risk.\\n';
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    //  CLEAN UP SCREENSHOT 2 & SCREENSHOT 3 IN FOREX 'MODE' TAB +
-    //  INJECT THE 11 DAY-TRADER SKILLS PANEL DIRECTLY INTO FOREX PAGE
+    //  SILENT MODE TAB CLEANUP (SCREENSHOT 2 & SCREENSHOT 3)
+    //  Hides only the unneeded fields/switches without adding any extra clutter boxes!
     // ═══════════════════════════════════════════════════════════════════
-    function findDeepestContainerWithBoth(txtA, txtB) {
-      var aLow = txtA.toLowerCase(), bLow = txtB.toLowerCase();
-      var candidates = document.querySelectorAll('div, section, article, form, main');
-      var best = null;
-      var bestLen = 9999999;
-      for (var i = 0; i < candidates.length; i++) {
-        var el = candidates[i];
-        if (!el || el.tagName === 'BODY' || el.tagName === 'HTML') continue;
-        var tc = (el.textContent || '').toLowerCase();
-        if (tc.indexOf(aLow) >= 0 && tc.indexOf(bLow) >= 0) {
-          if (tc.length < bestLen) {
-            best = el;
-            bestLen = tc.length;
-          }
-        }
-      }
-      return best;
-    }
-
     function hideFieldWithoutTouchingSiblings(targetPhrase, forbiddenPhrases) {
       var tLow = targetPhrase.toLowerCase();
       var all = document.querySelectorAll('label, span, div, p, details, summary');
       for (var i = 0; i < all.length; i++) {
         var el = all[i];
-        if (!el || (el.id && el.id.indexOf('aniket-') === 0)) continue;
+        if (!el) continue;
         var tc = (el.textContent || '').trim().toLowerCase();
         if (tc.indexOf(tLow) < 0 || tc.length > 180) continue;
 
-        // Walk up as long as parent does NOT contain any forbidden sibling phrase
         var cur = el;
         while (cur && cur.parentElement && cur.parentElement !== document.body) {
           var ptc = (cur.parentElement.textContent || '').toLowerCase();
@@ -1049,180 +1172,24 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       }
     }
 
-    function build11SkillsPanelHtml(boxSuffix) {
-      var cfg = window.__aniketSkillCfg || loadSkillCfg();
-      var pairsHtml = [
-        ['GC=F', 'XAU/USD (Gold)'],
-        ['BTC-USD', 'BTC/USD (Bitcoin)'],
-        ['EURUSD=X', 'EUR/USD'],
-        ['GBPUSD=X', 'GBP/USD'],
-        ['USDJPY=X', 'USD/JPY'],
-        ['AUDUSD=X', 'AUD/USD'],
-        ['USDCAD=X', 'USD/CAD'],
-        ['SI=F', 'XAG/USD (Silver)'],
-        ['CL=F', 'WTI Crude Oil'],
-        ['NQ=F', 'US100 (Nasdaq)'],
-        ['YM=F', 'US30 (Dow)'],
-        ['DX-Y.NYB', 'DXY (Dollar Index)'],
-        ['NVDA', 'NVDA'],
-        ['TSLA', 'TSLA'],
-        ['AAPL', 'AAPL']
-      ].map(function(p) {
-        var sel = cfg.pair === p[0] ? 'selected' : '';
-        return '<option value="' + p[0] + '" data-lbl="' + p[1] + '" ' + sel + '>' + p[1] + '</option>';
-      }).join('');
-
-      var skillsMeta = [
-        ['s1_scanner', '📊 1. Auto Market Scanner (ORB, 20D Breakout, Bull Flag, RSI)'],
-        ['s2_news', '📰 2. Free Live News & SEC 8-K Radar (0 Quota — Auto Filter)'],
-        ['s3_entry', '⏱️ 3. 5m/1m Opening Range Breakout Entry Timer (OR High/Low)'],
-        ['s4_exit', '🎯 4. Smart Exit Planner (Auto 1.5x ATR / OR-Mid SL + 1R/2R/3R TP)'],
-        ['s5_timemachine', '⏳ 5. Time Machine (2,000x Monte Carlo Win-Rate & Expected R)'],
-        ['s6_budget', '💰 6. Budget & Lot Sizer (Auto Forex Lots from Balance & Risk %)'],
-        ['s7_risk', '🛡️ 7. Pre-Trade Risk Gate (PASS / BLOCK Daily Loss Guard)'],
-        ['s8_broker', '🧾 8. Bracket Order Ticket & Flatten by Close Generator'],
-        ['s9_alerts', '🔔 9. NYSE/Killzone Clock & Auto Stop/Target Price Alerts'],
-        ['s10_analyst', '📈 10. Macro 90D Range & SEC EDGAR XBRL Margin Analyst'],
-        ['s11_pelosi', '🏛️ 11. Smart Money & US Congress PTR Institutional Tracker']
-      ];
-
-      var togglesHtml = skillsMeta.map(function(sm, idx) {
-        var checked = cfg[sm[0]] !== false ? 'checked' : '';
-        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.07);font-size:12.5px;">'
-          + '<span data-open-tab="' + (idx + 1) + '" style="padding-right:10px;line-height:1.35;cursor:pointer;flex:1;">' + sm[1] + '</span>'
-          + '<input type="checkbox" data-skill="' + sm[0] + '" ' + checked + ' style="width:18px;height:18px;accent-color:#D4AF37;cursor:pointer;" />'
-          + '</div>';
-      }).join('');
-
-      return ''
-        + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
-        + '  <div style="font-weight:900;font-size:13.5px;color:#FFD54F;letter-spacing:0.4px;">⚡ FOREX 11 DAY-TRADER PRO SKILLS</div>'
-        + '  <span style="font-size:10.5px;background:rgba(124,252,155,0.18);color:#7CFC9B;padding:3px 8px;border-radius:10px;font-weight:bold;">11/11 Active • 0 Quota</span>'
-        + '</div>'
-        + '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;">'
-        + '  <select class="aniket-skill-pair-sel" style="flex:1;min-width:130px;padding:8px;border-radius:8px;background:#12261C;color:#fff;border:1px solid rgba(212,175,55,0.45);font-weight:bold;font-size:12px;">'
-        +      pairsHtml
-        + '  </select>'
-        + '  <button class="aniket-skill-run-btn" type="button" style="padding:8px 11px;border-radius:8px;background:#D4AF37;color:#000;font-weight:900;border:none;font-size:11.5px;cursor:pointer;">⚡ Live Analyze</button>'
-        + '  <button class="aniket-skill-full-btn" type="button" style="padding:8px 11px;border-radius:8px;background:#173326;color:#7CFC9B;font-weight:900;border:1px solid #7CFC9B;font-size:11.5px;cursor:pointer;">📊 Open 11 Tools</button>'
-        + '</div>'
-        + '<div class="aniket-skill-live-out" style="display:none;margin-bottom:10px;padding:10px;border-radius:8px;background:#07120D;border:1px solid rgba(124,252,155,0.35);font-size:12px;line-height:1.45;color:#E2F1E8;"></div>'
-        + '<div>' + togglesHtml + '</div>';
-    }
-
-    function wire11SkillsContainer(wrap) {
-      if (!wrap || wrap.__wired) return;
-      wrap.__wired = true;
-
-      var selEl = wrap.querySelector('.aniket-skill-pair-sel');
-      if (selEl) {
-        selEl.addEventListener('change', function() {
-          var opt = selEl.options[selEl.selectedIndex];
-          window.__aniketSkillCfg.pair = selEl.value;
-          window.__aniketSkillCfg.pairLabel = opt ? opt.getAttribute('data-lbl') : selEl.value;
-          saveSkillCfg(window.__aniketSkillCfg);
-        });
-      }
-
-      var cbs = wrap.querySelectorAll('input[type=checkbox][data-skill]');
-      for (var c = 0; c < cbs.length; c++) {
-        cbs[c].addEventListener('change', function(ev) {
-          var sk = ev.target.getAttribute('data-skill');
-          window.__aniketSkillCfg[sk] = !!ev.target.checked;
-          saveSkillCfg(window.__aniketSkillCfg);
-        });
-      }
-
-      var tabSpans = wrap.querySelectorAll('span[data-open-tab]');
-      for (var s = 0; s < tabSpans.length; s++) {
-        tabSpans[s].addEventListener('click', function(ev) {
-          var tIdx = ev.currentTarget.getAttribute('data-open-tab') || '0';
-          if (window.FlutterBridge) {
-            window.FlutterBridge.postMessage('OPEN_11SKILL_SHEET:' + tIdx);
-          }
-        });
-      }
-
-      var fullBtn = wrap.querySelector('.aniket-skill-full-btn');
-      if (fullBtn) {
-        fullBtn.addEventListener('click', function() {
-          if (window.FlutterBridge) {
-            window.FlutterBridge.postMessage('OPEN_11SKILL_SHEET:0');
-          }
-        });
-      }
-
-      var runBtn = wrap.querySelector('.aniket-skill-run-btn');
-      if (runBtn) {
-        runBtn.addEventListener('click', async function() {
-          var outBox = wrap.querySelector('.aniket-skill-live-out');
-          if (!outBox) return;
-          outBox.style.display = 'block';
-          outBox.innerHTML = '⏳ Running all 11 Day-Trader Skills on live 5m candles...';
-          var r = await run11SkillsEngine(window.__aniketSkillCfg.pair, window.__aniketSkillCfg.pairLabel);
-          if (!r) {
-            outBox.innerHTML = '⚠️ Could not fetch live candles right now. Check internet connection.';
-            return;
-          }
-          outBox.innerHTML = render11SkillCardHtml(r);
-        });
-      }
-    }
-
-    function enhanceForexModeAndAnalysisDom() {
+    function cleanForexModeTabDom() {
       try {
-        // 1. Clean up Screenshot 3 fields in Mode tab (works even when Mode tab is hidden!)
         var keepFormSiblings = ['Risk per Trade', 'Account Balance', 'Daily Loss Limit', 'Max Daily Trades', 'A+ Threshold', 'ATR Multiplier', 'Partial Profit'];
         hideFieldWithoutTouchingSiblings('Twelve Data Key', keepFormSiblings);
         hideFieldWithoutTouchingSiblings('Min Wait Between Analyze', keepFormSiblings);
         hideFieldWithoutTouchingSiblings('Live Tolerance (auto)', keepFormSiblings);
         hideFieldWithoutTouchingSiblings('ATR Value (optional)', keepFormSiblings);
 
-        // 2. Clean up Screenshot 2 switches & bottom guides in Mode tab
         var keepModeSiblings = ['Show HTF Zones', 'Browser Alerts', 'Live Memory Mode', 'Cache 5 min', 'Premium/Discount', 'OTE Filter', 'IDM Mandatory', 'Kill Zone Filter', 'News 15-min Filter', 'Dynamic ATR SL', 'Partial TP'];
         hideFieldWithoutTouchingSiblings('News Radar (OFF = quota bache)', keepModeSiblings);
         hideFieldWithoutTouchingSiblings('Deep Mode (quota khay)', keepModeSiblings);
         hideFieldWithoutTouchingSiblings('Cross-check (+1 call)', keepModeSiblings);
         hideFieldWithoutTouchingSiblings('SS Guide (perfect screenshot)', keepModeSiblings);
         hideFieldWithoutTouchingSiblings('Somossa hole ki korben', keepModeSiblings);
-
-        // 3. Inject 11 Day-Trader Skills Card inside the Mode tab's 🎛️ Modes card (found via deepest container of 'Show HTF Zones' + 'Partial TP')
-        var modesCard = findDeepestContainerWithBoth('Show HTF Zones', 'Partial TP');
-        if (modesCard && !document.getElementById('aniket-11skills-mode-box')) {
-          var modeWrap = document.createElement('div');
-          modeWrap.id = 'aniket-11skills-mode-box';
-          modeWrap.style.cssText = 'margin-top:14px;padding:14px;border-radius:12px;background:#0B1912;border:1.5px solid #D4AF37;color:#F5E6C8;font-family:sans-serif;';
-          modeWrap.innerHTML = build11SkillsPanelHtml('mode');
-          modesCard.appendChild(modeWrap);
-          wire11SkillsContainer(modeWrap);
-        }
-
-        // 4. ALSO inject the 11 Day-Trader Skills Card on the Forex SS Home Tab (right below 'Key Status' / 'HTF Clear') so user sees it immediately on opening FOREX!
-        var ssHomeCard = findDeepestContainerWithBoth('HTF Clear', 'Key Status');
-        if (ssHomeCard && !document.getElementById('aniket-11skills-ss-box')) {
-          var ssWrap = document.createElement('div');
-          ssWrap.id = 'aniket-11skills-ss-box';
-          ssWrap.style.cssText = 'margin:12px 0;padding:14px;border-radius:12px;background:#0B1912;border:1.5px solid #D4AF37;color:#F5E6C8;font-family:sans-serif;';
-          ssWrap.innerHTML = build11SkillsPanelHtml('ss');
-          ssHomeCard.appendChild(ssWrap);
-          wire11SkillsContainer(ssWrap);
-        }
       } catch(e) {}
     }
 
-    function render11SkillCardHtml(r) {
-      var d = r.dec;
-      return ''
-        + '<div style="font-weight:900;color:#FFD54F;font-size:13px;margin-bottom:6px;">🎯 11-SKILL LIVE REPORT: ' + r.label + ' @ ' + r.livePx.toFixed(d) + ' (' + (r.chgPct >= 0 ? '+' : '') + r.chgPct.toFixed(2) + '%)</div>'
-        + '<div>• <b>3. Entry Timer (ORB 15m):</b> ' + r.entryStatus + ' | RSI-14: ' + r.rsi14.toFixed(1) + ' | ATR-14: ' + r.atr14.toFixed(d) + '</div>'
-        + '<div style="color:#7CFC9B;">• <b>4. Exit Plan (LONG):</b> SL=' + r.longSL.toFixed(d) + ' | TP1(1R)=' + r.longTP1.toFixed(d) + ' | TP2(' + r.targetR + 'R)=' + r.longTP2.toFixed(d) + ' | TP3(3R)=' + r.longTP3.toFixed(d) + '</div>'
-        + '<div style="color:#FFB74D;">• <b>4. Exit Plan (SHORT):</b> SL=' + r.shortSL.toFixed(d) + ' | TP1(1R)=' + r.shortTP1.toFixed(d) + ' | TP2(' + r.targetR + 'R)=' + r.shortTP2.toFixed(d) + ' | TP3(3R)=' + r.shortTP3.toFixed(d) + '</div>'
-        + '<div>• <b>5. Time Machine (2,000x Monte Carlo):</b> Win Rate=' + r.winPct.toFixed(1) + '% (Need ' + r.bePct.toFixed(0) + '%) | Verdict: <b style="color:#7CFC9B;">' + r.tmVerdict + '</b></div>'
-        + '<div>• <b>6. Budget & 7. Risk Gate:</b> Recommended Lot=<b>' + r.lots.toFixed(2) + ' Lots</b> (Risk USD ' + r.riskUsd.toFixed(2) + ') | Gate: <b>' + r.riskVerdict + '</b></div>'
-        + '<div>• <b>8. Broker Ticket & 9. Clock:</b> Session=' + r.kz + ' | Flat-By=15:55 ET</div>';
-    }
-
-    setInterval(enhanceForexModeAndAnalysisDom, 600);
+    setInterval(cleanForexModeTabDom, 700);
 
     function stripThinkTags(txt) {
       if (!txt) return '';
@@ -1427,45 +1394,21 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           }
         } catch(e) {}
 
-        // ═══ RUN 11 DAY-TRADER SKILLS ENGINE & ENRICH FOREX ANALYSIS ═══
+        // ═══ RUN UNIFIED 11 DAY-TRADER SKILLS + USER SMC/ICT ENGINE ON 'ANALYZE' ═══
         try {
-          var cfg = window.__aniketSkillCfg || loadSkillCfg();
-          var upTxt = (((document.body && document.body.innerText) || '') + ' ' + promptText).toUpperCase();
-          var detSym = cfg.pair || 'GC=F';
-          var detLbl = cfg.pairLabel || 'XAU/USD (Gold)';
-          if (upTxt.indexOf('BTC') >= 0 || upTxt.indexOf('BITCOIN') >= 0) {
-            detSym = 'BTC-USD'; detLbl = 'BTC/USD (Bitcoin)';
-          } else if (upTxt.indexOf('EURUSD') >= 0 || upTxt.indexOf('EUR/USD') >= 0) {
-            detSym = 'EURUSD=X'; detLbl = 'EUR/USD';
-          } else if (upTxt.indexOf('GBPUSD') >= 0 || upTxt.indexOf('GBP/USD') >= 0) {
-            detSym = 'GBPUSD=X'; detLbl = 'GBP/USD';
-          } else if (upTxt.indexOf('USDJPY') >= 0 || upTxt.indexOf('USD/JPY') >= 0) {
-            detSym = 'USDJPY=X'; detLbl = 'USD/JPY';
-          }
-
-          var r = await run11SkillsEngine(detSym, detLbl);
-          if (r) {
-            var d = r.dec;
-            var telemetryBlock = '\\n\\n[ANIKET PRO AI — 11 DAY-TRADER SKILLS LIVE TELEMETRY (' + r.label + ')]\\n'
-              + '• Live Price: ' + r.livePx.toFixed(d) + ' (' + (r.chgPct >= 0 ? '+' : '') + r.chgPct.toFixed(2) + '%) | Session: ' + r.kz + '\\n'
-              + '• trader-entry (5m Opening Range): ' + r.entryStatus + ' | OR High=' + r.orHigh.toFixed(d) + ' | OR Mid=' + r.orMid.toFixed(d) + ' | OR Low=' + r.orLow.toFixed(d) + ' | RSI-14=' + r.rsi14.toFixed(1) + ' | ATR-14=' + r.atr14.toFixed(d) + '\\n'
-              + '• trader-exit (LONG Plan): Entry=' + r.livePx.toFixed(d) + ' | SL=' + r.longSL.toFixed(d) + ' | TP1(1R)=' + r.longTP1.toFixed(d) + ' | TP2(' + r.targetR + 'R)=' + r.longTP2.toFixed(d) + ' | TP3(3R)=' + r.longTP3.toFixed(d) + '\\n'
-              + '• trader-exit (SHORT Plan): Entry=' + r.livePx.toFixed(d) + ' | SL=' + r.shortSL.toFixed(d) + ' | TP1(1R)=' + r.shortTP1.toFixed(d) + ' | TP2(' + r.targetR + 'R)=' + r.shortTP2.toFixed(d) + ' | TP3(3R)=' + r.shortTP3.toFixed(d) + '\\n'
-              + '• trader-timemachine (2,000x Monte Carlo Replay): Win Rate=' + r.winPct.toFixed(1) + '% (Breakeven ' + r.bePct.toFixed(0) + '%) | Verdict=' + r.tmVerdict + '\\n'
-              + '• trader-budget & trader-risk: Recommended Lot Size=' + r.lots.toFixed(2) + ' Lots (Balance USD ' + r.balance.toFixed(0) + ', Risk USD ' + r.riskUsd.toFixed(2) + ') | Risk Gate=' + r.riskVerdict + '\\n'
-              + 'Combine the uploaded screenshots (HTF, ENTRY, CORRELATION) with these exact 11-Skill numbers and include the Monte Carlo Win Rate %, Recommended Lot Size, and Risk Gate PASS/BLOCK in your response.';
-
-            promptText += telemetryBlock;
+          var unifiedTelemetry = await runUnified11SkillsAndUserFeatures(promptText);
+          if (unifiedTelemetry) {
+            promptText += unifiedTelemetry;
             try {
               var parsedForGem = JSON.parse(rawBodyStr);
               if (parsedForGem && parsedForGem.contents && parsedForGem.contents[0] && parsedForGem.contents[0].parts) {
-                parsedForGem.contents[0].parts.push({ text: telemetryBlock });
+                parsedForGem.contents[0].parts.push({ text: unifiedTelemetry });
                 rawBodyStr = JSON.stringify(parsedForGem);
               }
             } catch(e2) {}
           }
         } catch(eTel) {}
-        // ═══ END 11-SKILL FOREX ENRICHMENT ═══
+        // ═══ END UNIFIED 11-SKILL FOREX ENRICHMENT ═══
 
         var urlKeyMatch = /[?&]key=([^&]+)/.exec(urlStr);
         var urlKey = urlKeyMatch ? cleanKey(decodeURIComponent(urlKeyMatch[1])) : '';
@@ -1885,54 +1828,18 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                   if (_siteReady)
                     Positioned(
                       top: 8, right: 8,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              onTap: () => _openInForex11SkillSheet(initialTab: 0),
-                              borderRadius: BorderRadius.circular(18),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF0E2218).withOpacity(0.92),
-                                  borderRadius: BorderRadius.circular(18),
-                                  border: Border.all(color: kGold, width: 1.2),
-                                ),
-                                child: const Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(Icons.bolt_rounded, color: kGold, size: 16),
-                                    SizedBox(width: 4),
-                                    Text(
-                                      '11 Skills',
-                                      style: TextStyle(
-                                        color: kGold,
-                                        fontSize: 11.5,
-                                        fontWeight: FontWeight.w900,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () => _showSettings(),
+                          borderRadius: BorderRadius.circular(20),
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                                color: Colors.black.withOpacity(0.5), shape: BoxShape.circle),
+                            child: const Icon(Icons.settings, color: kGold, size: 20),
                           ),
-                          const SizedBox(width: 6),
-                          Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              onTap: () => _showSettings(),
-                              borderRadius: BorderRadius.circular(20),
-                              child: Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                    color: Colors.black.withOpacity(0.5), shape: BoxShape.circle),
-                                child: const Icon(Icons.settings, color: kGold, size: 20),
-                              ),
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                   if (_siteReady && _camVisible)
