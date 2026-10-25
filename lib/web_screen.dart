@@ -1001,175 +1001,211 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     //  CLEAN UP SCREENSHOT 2 & SCREENSHOT 3 IN FOREX 'MODE' TAB +
     //  INJECT THE 11 DAY-TRADER SKILLS PANEL DIRECTLY INTO FOREX PAGE
     // ═══════════════════════════════════════════════════════════════════
-    function hideContainingRow(el, maxH, requireInput) {
-      var cur = el;
-      for (var up = 0; up < 5 && cur && cur !== document.body; up++) {
-        var tag = (cur.tagName || '').toUpperCase();
-        if (tag === 'MAIN' || tag === 'BODY' || tag === 'NAV') break;
-        var rect = cur.getBoundingClientRect ? cur.getBoundingClientRect() : { height: 999, width: 999 };
-        var hasInp = !requireInput || (cur.querySelector && cur.querySelector('input, select'));
-        if (hasInp && rect.height > 10 && rect.height <= maxH && (cur.innerText || '').length < 220) {
-          cur.style.setProperty('display', 'none', 'important');
-          return true;
+    function findDeepestContainerWithBoth(txtA, txtB) {
+      var aLow = txtA.toLowerCase(), bLow = txtB.toLowerCase();
+      var candidates = document.querySelectorAll('div, section, article, form, main');
+      var best = null;
+      var bestLen = 9999999;
+      for (var i = 0; i < candidates.length; i++) {
+        var el = candidates[i];
+        if (!el || el.tagName === 'BODY' || el.tagName === 'HTML') continue;
+        var tc = (el.textContent || '').toLowerCase();
+        if (tc.indexOf(aLow) >= 0 && tc.indexOf(bLow) >= 0) {
+          if (tc.length < bestLen) {
+            best = el;
+            bestLen = tc.length;
+          }
         }
-        cur = cur.parentElement;
       }
-      return false;
+      return best;
+    }
+
+    function hideFieldWithoutTouchingSiblings(targetPhrase, forbiddenPhrases) {
+      var tLow = targetPhrase.toLowerCase();
+      var all = document.querySelectorAll('label, span, div, p, details, summary');
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el || (el.id && el.id.indexOf('aniket-') === 0)) continue;
+        var tc = (el.textContent || '').trim().toLowerCase();
+        if (tc.indexOf(tLow) < 0 || tc.length > 180) continue;
+
+        // Walk up as long as parent does NOT contain any forbidden sibling phrase
+        var cur = el;
+        while (cur && cur.parentElement && cur.parentElement !== document.body) {
+          var ptc = (cur.parentElement.textContent || '').toLowerCase();
+          var hitsForbidden = false;
+          for (var f = 0; f < forbiddenPhrases.length; f++) {
+            if (ptc.indexOf(forbiddenPhrases[f].toLowerCase()) >= 0) {
+              hitsForbidden = true;
+              break;
+            }
+          }
+          if (hitsForbidden || ptc.length > 260) break;
+          cur = cur.parentElement;
+        }
+        if (cur && cur !== document.body && cur.tagName !== 'MAIN' && cur.tagName !== 'NAV') {
+          cur.style.setProperty('display', 'none', 'important');
+        }
+      }
+    }
+
+    function build11SkillsPanelHtml(boxSuffix) {
+      var cfg = window.__aniketSkillCfg || loadSkillCfg();
+      var pairsHtml = [
+        ['GC=F', 'XAU/USD (Gold)'],
+        ['BTC-USD', 'BTC/USD (Bitcoin)'],
+        ['EURUSD=X', 'EUR/USD'],
+        ['GBPUSD=X', 'GBP/USD'],
+        ['USDJPY=X', 'USD/JPY'],
+        ['AUDUSD=X', 'AUD/USD'],
+        ['USDCAD=X', 'USD/CAD'],
+        ['SI=F', 'XAG/USD (Silver)'],
+        ['CL=F', 'WTI Crude Oil'],
+        ['NQ=F', 'US100 (Nasdaq)'],
+        ['YM=F', 'US30 (Dow)'],
+        ['DX-Y.NYB', 'DXY (Dollar Index)'],
+        ['NVDA', 'NVDA'],
+        ['TSLA', 'TSLA'],
+        ['AAPL', 'AAPL']
+      ].map(function(p) {
+        var sel = cfg.pair === p[0] ? 'selected' : '';
+        return '<option value="' + p[0] + '" data-lbl="' + p[1] + '" ' + sel + '>' + p[1] + '</option>';
+      }).join('');
+
+      var skillsMeta = [
+        ['s1_scanner', '📊 1. Auto Market Scanner (ORB, 20D Breakout, Bull Flag, RSI)'],
+        ['s2_news', '📰 2. Free Live News & SEC 8-K Radar (0 Quota — Auto Filter)'],
+        ['s3_entry', '⏱️ 3. 5m/1m Opening Range Breakout Entry Timer (OR High/Low)'],
+        ['s4_exit', '🎯 4. Smart Exit Planner (Auto 1.5x ATR / OR-Mid SL + 1R/2R/3R TP)'],
+        ['s5_timemachine', '⏳ 5. Time Machine (2,000x Monte Carlo Win-Rate & Expected R)'],
+        ['s6_budget', '💰 6. Budget & Lot Sizer (Auto Forex Lots from Balance & Risk %)'],
+        ['s7_risk', '🛡️ 7. Pre-Trade Risk Gate (PASS / BLOCK Daily Loss Guard)'],
+        ['s8_broker', '🧾 8. Bracket Order Ticket & Flatten by Close Generator'],
+        ['s9_alerts', '🔔 9. NYSE/Killzone Clock & Auto Stop/Target Price Alerts'],
+        ['s10_analyst', '📈 10. Macro 90D Range & SEC EDGAR XBRL Margin Analyst'],
+        ['s11_pelosi', '🏛️ 11. Smart Money & US Congress PTR Institutional Tracker']
+      ];
+
+      var togglesHtml = skillsMeta.map(function(sm, idx) {
+        var checked = cfg[sm[0]] !== false ? 'checked' : '';
+        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.07);font-size:12.5px;">'
+          + '<span data-open-tab="' + (idx + 1) + '" style="padding-right:10px;line-height:1.35;cursor:pointer;flex:1;">' + sm[1] + '</span>'
+          + '<input type="checkbox" data-skill="' + sm[0] + '" ' + checked + ' style="width:18px;height:18px;accent-color:#D4AF37;cursor:pointer;" />'
+          + '</div>';
+      }).join('');
+
+      return ''
+        + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
+        + '  <div style="font-weight:900;font-size:13.5px;color:#FFD54F;letter-spacing:0.4px;">⚡ FOREX 11 DAY-TRADER PRO SKILLS</div>'
+        + '  <span style="font-size:10.5px;background:rgba(124,252,155,0.18);color:#7CFC9B;padding:3px 8px;border-radius:10px;font-weight:bold;">11/11 Active • 0 Quota</span>'
+        + '</div>'
+        + '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;">'
+        + '  <select class="aniket-skill-pair-sel" style="flex:1;min-width:130px;padding:8px;border-radius:8px;background:#12261C;color:#fff;border:1px solid rgba(212,175,55,0.45);font-weight:bold;font-size:12px;">'
+        +      pairsHtml
+        + '  </select>'
+        + '  <button class="aniket-skill-run-btn" type="button" style="padding:8px 11px;border-radius:8px;background:#D4AF37;color:#000;font-weight:900;border:none;font-size:11.5px;cursor:pointer;">⚡ Live Analyze</button>'
+        + '  <button class="aniket-skill-full-btn" type="button" style="padding:8px 11px;border-radius:8px;background:#173326;color:#7CFC9B;font-weight:900;border:1px solid #7CFC9B;font-size:11.5px;cursor:pointer;">📊 Open 11 Tools</button>'
+        + '</div>'
+        + '<div class="aniket-skill-live-out" style="display:none;margin-bottom:10px;padding:10px;border-radius:8px;background:#07120D;border:1px solid rgba(124,252,155,0.35);font-size:12px;line-height:1.45;color:#E2F1E8;"></div>'
+        + '<div>' + togglesHtml + '</div>';
+    }
+
+    function wire11SkillsContainer(wrap) {
+      if (!wrap || wrap.__wired) return;
+      wrap.__wired = true;
+
+      var selEl = wrap.querySelector('.aniket-skill-pair-sel');
+      if (selEl) {
+        selEl.addEventListener('change', function() {
+          var opt = selEl.options[selEl.selectedIndex];
+          window.__aniketSkillCfg.pair = selEl.value;
+          window.__aniketSkillCfg.pairLabel = opt ? opt.getAttribute('data-lbl') : selEl.value;
+          saveSkillCfg(window.__aniketSkillCfg);
+        });
+      }
+
+      var cbs = wrap.querySelectorAll('input[type=checkbox][data-skill]');
+      for (var c = 0; c < cbs.length; c++) {
+        cbs[c].addEventListener('change', function(ev) {
+          var sk = ev.target.getAttribute('data-skill');
+          window.__aniketSkillCfg[sk] = !!ev.target.checked;
+          saveSkillCfg(window.__aniketSkillCfg);
+        });
+      }
+
+      var tabSpans = wrap.querySelectorAll('span[data-open-tab]');
+      for (var s = 0; s < tabSpans.length; s++) {
+        tabSpans[s].addEventListener('click', function(ev) {
+          var tIdx = ev.currentTarget.getAttribute('data-open-tab') || '0';
+          if (window.FlutterBridge) {
+            window.FlutterBridge.postMessage('OPEN_11SKILL_SHEET:' + tIdx);
+          }
+        });
+      }
+
+      var fullBtn = wrap.querySelector('.aniket-skill-full-btn');
+      if (fullBtn) {
+        fullBtn.addEventListener('click', function() {
+          if (window.FlutterBridge) {
+            window.FlutterBridge.postMessage('OPEN_11SKILL_SHEET:0');
+          }
+        });
+      }
+
+      var runBtn = wrap.querySelector('.aniket-skill-run-btn');
+      if (runBtn) {
+        runBtn.addEventListener('click', async function() {
+          var outBox = wrap.querySelector('.aniket-skill-live-out');
+          if (!outBox) return;
+          outBox.style.display = 'block';
+          outBox.innerHTML = '⏳ Running all 11 Day-Trader Skills on live 5m candles...';
+          var r = await run11SkillsEngine(window.__aniketSkillCfg.pair, window.__aniketSkillCfg.pairLabel);
+          if (!r) {
+            outBox.innerHTML = '⚠️ Could not fetch live candles right now. Check internet connection.';
+            return;
+          }
+          outBox.innerHTML = render11SkillCardHtml(r);
+        });
+      }
     }
 
     function enhanceForexModeAndAnalysisDom() {
       try {
-        // 1. Clean up Screenshot 3 (top Mode fields) & Screenshot 2 (redundant Mode switches & guides)
-        var allNodes = document.querySelectorAll('label, span, div, p, summary, details');
-        for (var i = 0; i < allNodes.length; i++) {
-          var el = allNodes[i];
-          if (!el || (el.id && el.id.indexOf('aniket-') === 0)) continue;
-          if (el.children && el.children.length > 3) continue;
-          var txt = (el.innerText || '').trim();
-          if (!txt || txt.length > 120) continue;
-          var low = txt.toLowerCase();
+        // 1. Clean up Screenshot 3 fields in Mode tab (works even when Mode tab is hidden!)
+        var keepFormSiblings = ['Risk per Trade', 'Account Balance', 'Daily Loss Limit', 'Max Daily Trades', 'A+ Threshold', 'ATR Multiplier', 'Partial Profit'];
+        hideFieldWithoutTouchingSiblings('Twelve Data Key', keepFormSiblings);
+        hideFieldWithoutTouchingSiblings('Min Wait Between Analyze', keepFormSiblings);
+        hideFieldWithoutTouchingSiblings('Live Tolerance (auto)', keepFormSiblings);
+        hideFieldWithoutTouchingSiblings('ATR Value (optional)', keepFormSiblings);
 
-          // Screenshot 3: remove unneeded manual/optional fields replaced by automated 11-skill engine
-          if (low.indexOf('twelve data key') >= 0 ||
-              low === 'atr value (optional)' ||
-              low.indexOf('min wait between analyze') >= 0 ||
-              low.indexOf('live tolerance (auto)') >= 0) {
-            hideContainingRow(el, 115, false);
-            continue;
-          }
+        // 2. Clean up Screenshot 2 switches & bottom guides in Mode tab
+        var keepModeSiblings = ['Show HTF Zones', 'Browser Alerts', 'Live Memory Mode', 'Cache 5 min', 'Premium/Discount', 'OTE Filter', 'IDM Mandatory', 'Kill Zone Filter', 'News 15-min Filter', 'Dynamic ATR SL', 'Partial TP'];
+        hideFieldWithoutTouchingSiblings('News Radar (OFF = quota bache)', keepModeSiblings);
+        hideFieldWithoutTouchingSiblings('Deep Mode (quota khay)', keepModeSiblings);
+        hideFieldWithoutTouchingSiblings('Cross-check (+1 call)', keepModeSiblings);
+        hideFieldWithoutTouchingSiblings('SS Guide (perfect screenshot)', keepModeSiblings);
+        hideFieldWithoutTouchingSiblings('Somossa hole ki korben', keepModeSiblings);
 
-          // Screenshot 2: remove quota-wasting / redundant switches & bottom guides
-          if (low.indexOf('news radar (off = quota bache)') >= 0 ||
-              low.indexOf('deep mode (quota khay)') >= 0 ||
-              low.indexOf('cross-check (+1 call)') >= 0 ||
-              low.indexOf('ss guide (perfect screenshot)') >= 0 ||
-              low.indexOf('somossa hole ki korben') >= 0) {
-            hideContainingRow(el, 95, false);
-            continue;
-          }
+        // 3. Inject 11 Day-Trader Skills Card inside the Mode tab's 🎛️ Modes card (found via deepest container of 'Show HTF Zones' + 'Partial TP')
+        var modesCard = findDeepestContainerWithBoth('Show HTF Zones', 'Partial TP');
+        if (modesCard && !document.getElementById('aniket-11skills-mode-box')) {
+          var modeWrap = document.createElement('div');
+          modeWrap.id = 'aniket-11skills-mode-box';
+          modeWrap.style.cssText = 'margin-top:14px;padding:14px;border-radius:12px;background:#0B1912;border:1.5px solid #D4AF37;color:#F5E6C8;font-family:sans-serif;';
+          modeWrap.innerHTML = build11SkillsPanelHtml('mode');
+          modesCard.appendChild(modeWrap);
+          wire11SkillsContainer(modeWrap);
         }
 
-        // 2. Inject the 11 Day-Trader Skills Suite inside the 'Mode' tab (under 🎛️ Modes)
-        var modesHeading = null;
-        var headings = document.querySelectorAll('h1, h2, h3, h4, div, span');
-        for (var h = 0; h < headings.length; h++) {
-          var ht = (headings[h].innerText || '').trim();
-          if ((ht === '🎛️ Modes' || ht === 'Modes') && headings[h].children.length <= 1) {
-            modesHeading = headings[h];
-            break;
-          }
-        }
-
-        if (modesHeading && modesHeading.parentElement && !document.getElementById('aniket-11skills-mode-box')) {
-          var hostCard = modesHeading.parentElement;
-          var cfg = window.__aniketSkillCfg || loadSkillCfg();
-
-          var wrap = document.createElement('div');
-          wrap.id = 'aniket-11skills-mode-box';
-          wrap.style.cssText = 'margin-top:14px;padding:14px;border-radius:12px;background:#0B1912;border:1px solid rgba(212,175,55,0.45);color:#F5E6C8;font-family:sans-serif;';
-
-          var pairsHtml = [
-            ['GC=F', 'XAU/USD (Gold)'],
-            ['BTC-USD', 'BTC/USD (Bitcoin)'],
-            ['EURUSD=X', 'EUR/USD'],
-            ['GBPUSD=X', 'GBP/USD'],
-            ['USDJPY=X', 'USD/JPY'],
-            ['AUDUSD=X', 'AUD/USD'],
-            ['USDCAD=X', 'USD/CAD'],
-            ['SI=F', 'XAG/USD (Silver)'],
-            ['CL=F', 'WTI Crude Oil'],
-            ['NQ=F', 'US100 (Nasdaq)'],
-            ['YM=F', 'US30 (Dow)'],
-            ['DX-Y.NYB', 'DXY (Dollar Index)'],
-            ['NVDA', 'NVDA'],
-            ['TSLA', 'TSLA'],
-            ['AAPL', 'AAPL']
-          ].map(function(p) {
-            var sel = cfg.pair === p[0] ? 'selected' : '';
-            return '<option value="' + p[0] + '" data-lbl="' + p[1] + '" ' + sel + '>' + p[1] + '</option>';
-          }).join('');
-
-          var skillsMeta = [
-            ['s1_scanner', '📊 1. Auto Market Scanner (ORB, 20D Breakout, Bull Flag, RSI)'],
-            ['s2_news', '📰 2. Free Live News & SEC 8-K Radar (0 Quota — Auto Filter)'],
-            ['s3_entry', '⏱️ 3. 5m/1m Opening Range Breakout Entry Timer (OR High/Low)'],
-            ['s4_exit', '🎯 4. Smart Exit Planner (Auto 1.5x ATR / OR-Mid SL + 1R/2R/3R TP)'],
-            ['s5_timemachine', '⏳ 5. Time Machine (2,000x Monte Carlo Win-Rate & Expected R)'],
-            ['s6_budget', '💰 6. Budget & Lot Sizer (Auto Forex Lots from Balance & Risk %)'],
-            ['s7_risk', '🛡️ 7. Pre-Trade Risk Gate (PASS / BLOCK Daily Loss Guard)'],
-            ['s8_broker', '🧾 8. Bracket Order Ticket & Flatten by Close Generator'],
-            ['s9_alerts', '🔔 9. NYSE/Killzone Clock & Auto Stop/Target Price Alerts'],
-            ['s10_analyst', '📈 10. Macro 90D Range & SEC EDGAR XBRL Margin Analyst'],
-            ['s11_pelosi', '🏛️ 11. Smart Money & US Congress PTR Institutional Tracker']
-          ];
-
-          var togglesHtml = skillsMeta.map(function(sm) {
-            var checked = cfg[sm[0]] !== false ? 'checked' : '';
-            return '<label style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.07);font-size:13px;cursor:pointer;">'
-              + '<span style="padding-right:10px;line-height:1.35;">' + sm[1] + '</span>'
-              + '<input type="checkbox" data-skill="' + sm[0] + '" ' + checked + ' style="width:18px;height:18px;accent-color:#D4AF37;" />'
-              + '</label>';
-          }).join('');
-
-          wrap.innerHTML = ''
-            + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
-            + '  <div style="font-weight:900;font-size:14px;color:#FFD54F;letter-spacing:0.5px;">⚡ 11 DAY-TRADER PRO SKILLS (ACTIVE IN FOREX)</div>'
-            + '  <span style="font-size:11px;background:rgba(124,252,155,0.18);color:#7CFC9B;padding:3px 8px;border-radius:10px;font-weight:bold;">0 Quota Live</span>'
-            + '</div>'
-            + '<div style="display:flex;gap:8px;margin-bottom:10px;">'
-            + '  <select id="aniket-skill-pair" style="flex:1;padding:9px;border-radius:8px;background:#12261C;color:#fff;border:1px solid rgba(212,175,55,0.4);font-weight:bold;font-size:12px;">'
-            +      pairsHtml
-            + '  </select>'
-            + '  <button id="aniket-skill-run-btn" type="button" style="padding:9px 12px;border-radius:8px;background:#D4AF37;color:#000;font-weight:900;border:none;font-size:12px;cursor:pointer;">⚡ Run 11 Skills</button>'
-            + '  <button id="aniket-skill-full-btn" type="button" style="padding:9px 12px;border-radius:8px;background:#1A3A2A;color:#7CFC9B;font-weight:900;border:1px solid #7CFC9B;font-size:12px;cursor:pointer;">📊 Full 11-Skill Tools</button>'
-            + '</div>'
-            + '<div id="aniket-skill-live-out" style="display:none;margin-bottom:10px;padding:10px;border-radius:8px;background:#07120D;border:1px solid rgba(124,252,155,0.35);font-size:12px;line-height:1.45;color:#E2F1E8;"></div>'
-            + '<div>' + togglesHtml + '</div>';
-
-          hostCard.appendChild(wrap);
-
-          var selEl = document.getElementById('aniket-skill-pair');
-          if (selEl) {
-            selEl.addEventListener('change', function() {
-              var opt = selEl.options[selEl.selectedIndex];
-              window.__aniketSkillCfg.pair = selEl.value;
-              window.__aniketSkillCfg.pairLabel = opt ? opt.getAttribute('data-lbl') : selEl.value;
-              saveSkillCfg(window.__aniketSkillCfg);
-            });
-          }
-
-          var cbs = wrap.querySelectorAll('input[type=checkbox][data-skill]');
-          for (var c = 0; c < cbs.length; c++) {
-            cbs[c].addEventListener('change', function(ev) {
-              var sk = ev.target.getAttribute('data-skill');
-              window.__aniketSkillCfg[sk] = !!ev.target.checked;
-              saveSkillCfg(window.__aniketSkillCfg);
-            });
-          }
-
-          var fullBtn = document.getElementById('aniket-skill-full-btn');
-          if (fullBtn) {
-            fullBtn.addEventListener('click', function() {
-              if (window.FlutterBridge) {
-                window.FlutterBridge.postMessage('OPEN_11SKILL_SHEET:0');
-              }
-            });
-          }
-          var runBtn = document.getElementById('aniket-skill-run-btn');
-          if (runBtn) {
-            runBtn.addEventListener('click', async function() {
-              var outBox = document.getElementById('aniket-skill-live-out');
-              if (!outBox) return;
-              outBox.style.display = 'block';
-              outBox.innerHTML = '⏳ Running all 11 Day-Trader Skills on live 5m candles...';
-              var r = await run11SkillsEngine(window.__aniketSkillCfg.pair, window.__aniketSkillCfg.pairLabel);
-              if (!r) {
-                outBox.innerHTML = '⚠️ Could not fetch live candles right now. Check internet connection.';
-                return;
-              }
-              outBox.innerHTML = render11SkillCardHtml(r);
-            });
-          }
+        // 4. ALSO inject the 11 Day-Trader Skills Card on the Forex SS Home Tab (right below 'Key Status' / 'HTF Clear') so user sees it immediately on opening FOREX!
+        var ssHomeCard = findDeepestContainerWithBoth('HTF Clear', 'Key Status');
+        if (ssHomeCard && !document.getElementById('aniket-11skills-ss-box')) {
+          var ssWrap = document.createElement('div');
+          ssWrap.id = 'aniket-11skills-ss-box';
+          ssWrap.style.cssText = 'margin:12px 0;padding:14px;border-radius:12px;background:#0B1912;border:1.5px solid #D4AF37;color:#F5E6C8;font-family:sans-serif;';
+          ssWrap.innerHTML = build11SkillsPanelHtml('ss');
+          ssHomeCard.appendChild(ssWrap);
+          wire11SkillsContainer(ssWrap);
         }
       } catch(e) {}
     }
@@ -1186,7 +1222,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         + '<div>• <b>8. Broker Ticket & 9. Clock:</b> Session=' + r.kz + ' | Flat-By=15:55 ET</div>';
     }
 
-    setInterval(enhanceForexModeAndAnalysisDom, 700);
+    setInterval(enhanceForexModeAndAnalysisDom, 600);
 
     function stripThinkTags(txt) {
       if (!txt) return '';
@@ -1849,18 +1885,54 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                   if (_siteReady)
                     Positioned(
                       top: 8, right: 8,
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: () => _showSettings(),
-                          borderRadius: BorderRadius.circular(20),
-                          child: Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                                color: Colors.black.withOpacity(0.5), shape: BoxShape.circle),
-                            child: const Icon(Icons.settings, color: kGold, size: 20),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: () => _openInForex11SkillSheet(initialTab: 0),
+                              borderRadius: BorderRadius.circular(18),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF0E2218).withOpacity(0.92),
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(color: kGold, width: 1.2),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.bolt_rounded, color: kGold, size: 16),
+                                    SizedBox(width: 4),
+                                    Text(
+                                      '11 Skills',
+                                      style: TextStyle(
+                                        color: kGold,
+                                        fontSize: 11.5,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
                           ),
-                        ),
+                          const SizedBox(width: 6),
+                          Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: () => _showSettings(),
+                              borderRadius: BorderRadius.circular(20),
+                              child: Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.5), shape: BoxShape.circle),
+                                child: const Icon(Icons.settings, color: kGold, size: 20),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   if (_siteReady && _camVisible)
