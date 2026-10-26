@@ -607,23 +607,304 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     } catch (_) {}
   }
 
+  Future<void> _handleForexDartAiRequest(String jsonPayload) async {
+    String reqId = '';
+    try {
+      final map = jsonDecode(jsonPayload) as Map<String, dynamic>;
+      reqId = (map['reqId'] ?? '').toString();
+      final rawKeys = (map['keys'] as List?)?.map((e) => e.toString().trim()).where((e) => e.length >= 16).toList() ?? <String>[];
+      final prompt = (map['prompt'] ?? '').toString();
+      final rawImages = (map['images'] as List?) ?? const [];
+      final stitchedB64 = (map['stitchedB64'] ?? '').toString();
+      final wantJson = map['wantJson'] == true;
+
+      final p = await SharedPreferences.getInstance();
+      final spKeys = (p.getStringList('bin_keys') ?? []).map((e) => e.trim()).where((e) => e.length >= 16);
+      final candidateKeys = <String>[];
+      for (final k in [...rawKeys, ...spKeys]) {
+        final clean = k.replaceAll(RegExp(r'^Bearer\s+', caseSensitive: false), '').replaceAll('"', '').replaceAll("'", '').trim();
+        if (clean.length >= 16 && !candidateKeys.contains(clean)) {
+          candidateKeys.add(clean);
+        }
+      }
+
+      final images = <Map<String, String>>[];
+      for (final item in rawImages) {
+        if (item is Map) {
+          final b64 = (item['b64'] ?? '').toString();
+          final mime = (item['mime'] ?? 'image/jpeg').toString();
+          if (b64.isNotEmpty) {
+            images.add({'mime': mime, 'b64': b64});
+          }
+        }
+      }
+
+      // Single stitched composite image for OpenAI-compatible vision providers (Groq, OpenRouter, Mistral)
+      final singleComposite = stitchedB64.isNotEmpty
+          ? <Map<String, String>>[{'mime': 'image/jpeg', 'b64': stitchedB64}]
+          : (images.isNotEmpty ? <Map<String, String>>[images.first] : <Map<String, String>>[]);
+
+      String? finalOut;
+      String usedProvider = '';
+      for (final key in candidateKeys) {
+        if (key.startsWith('AIza')) {
+          finalOut = await _forexCallGeminiNative(key, prompt, images, wantJson);
+          if (finalOut != null) usedProvider = 'Gemini';
+        } else if (key.startsWith('gsk_')) {
+          finalOut = await _forexCallOpenAiCompatibleNative(
+            endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+            modelsUrl: 'https://api.groq.com/openai/v1/models',
+            key: key,
+            defaultModels: const [
+              'meta-llama/llama-4-scout-17b-16e-instruct',
+              'meta-llama/llama-4-maverick-17b-128e-instruct',
+              'qwen/qwen3.8-27b',
+              'meta-models/muse-spark-open',
+            ],
+            prompt: prompt,
+            images: singleComposite,
+            requireFreeSuffix: false,
+          );
+          if (finalOut != null) usedProvider = 'Groq';
+        } else if (key.startsWith('sk-or-')) {
+          finalOut = await _forexCallOpenAiCompatibleNative(
+            endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+            modelsUrl: 'https://openrouter.ai/api/v1/models',
+            key: key,
+            defaultModels: const [
+              'google/gemma-3-27b-it:free',
+              'qwen/qwen2.5-vl-72b-instruct:free',
+              'qwen/qwen2.5-vl-32b-instruct:free',
+              'mistralai/mistral-small-3.1-24b-instruct:free',
+              'openrouter/free',
+            ],
+            prompt: prompt,
+            images: singleComposite,
+            requireFreeSuffix: true,
+            extraHeaders: const {
+              'HTTP-Referer': 'https://aniketpro.ai',
+              'X-Title': 'ANIKET PRO AI',
+            },
+          );
+          if (finalOut != null) usedProvider = 'OpenRouter';
+        } else {
+          finalOut = await _forexCallOpenAiCompatibleNative(
+            endpoint: 'https://api.mistral.ai/v1/chat/completions',
+            modelsUrl: 'https://api.mistral.ai/v1/models',
+            key: key,
+            defaultModels: const [
+              'pixtral-12b-2409',
+              'pixtral-large-latest',
+              'mistral-small-latest',
+              'ministral-14b-latest',
+              'ministral-8b-latest',
+              'mistral-medium-latest',
+            ],
+            prompt: prompt,
+            images: singleComposite,
+            requireFreeSuffix: false,
+          );
+          if (finalOut != null) usedProvider = 'Mistral';
+        }
+        if (finalOut != null && finalOut.trim().isNotEmpty) {
+          break;
+        }
+      }
+
+      if (finalOut != null && finalOut.trim().isNotEmpty && usedProvider.isNotEmpty) {
+        _toast('⚡ Forex Analysis Ready ($usedProvider + 12 Pro Skills)');
+      }
+
+      if (reqId.isNotEmpty) {
+        final encodedOut = jsonEncode(finalOut ?? '');
+        await _controller.runJavaScript('if(window.__resolveForexDartAi) window.__resolveForexDartAi("$reqId", $encodedOut);');
+      }
+    } catch (_) {
+      if (reqId.isNotEmpty) {
+        try {
+          await _controller.runJavaScript('if(window.__resolveForexDartAi) window.__resolveForexDartAi("$reqId", "");');
+        } catch (_) {}
+      }
+    }
+  }
+
+  Future<String?> _forexCallGeminiNative(
+    String key,
+    String prompt,
+    List<Map<String, String>> images,
+    bool wantJson,
+  ) async {
+    const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+    for (final m in models) {
+      HttpClient? client;
+      try {
+        client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+        final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent?key=${Uri.encodeQueryComponent(key)}');
+        final req = await client.postUrl(uri).timeout(const Duration(seconds: 8));
+        req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
+
+        final parts = <Map<String, dynamic>>[
+          {'text': prompt},
+          for (final img in images)
+            {
+              'inline_data': {
+                'mime_type': img['mime'] ?? 'image/jpeg',
+                'data': img['b64'] ?? '',
+              }
+            }
+        ];
+
+        final genCfg = <String, dynamic>{'temperature': 0.2};
+        if (wantJson) genCfg['responseMimeType'] = 'application/json';
+        if (m.contains('2.5')) genCfg['thinkingConfig'] = {'thinkingBudget': 0};
+
+        final body = jsonEncode({
+          'contents': [
+            {'parts': parts}
+          ],
+          'generationConfig': genCfg,
+        });
+
+        req.add(utf8.encode(body));
+        final resp = await req.close().timeout(const Duration(seconds: 22));
+        if (resp.statusCode == 200) {
+          final txt = await resp.transform(utf8.decoder).join();
+          final root = jsonDecode(txt) as Map<String, dynamic>;
+          final cands = root['candidates'] as List?;
+          if (cands != null && cands.isNotEmpty) {
+            final content = (cands.first as Map)['content'] as Map?;
+            final rParts = content?['parts'] as List?;
+            if (rParts != null) {
+              final sb = StringBuffer();
+              for (final rp in rParts) {
+                if (rp is Map && rp['thought'] != true && rp['text'] != null) {
+                  sb.write(rp['text'].toString());
+                }
+              }
+              final resStr = sb.toString().trim();
+              if (resStr.isNotEmpty) return resStr;
+            }
+          }
+        }
+      } catch (_) {
+      } finally {
+        client?.close(force: true);
+      }
+    }
+    return null;
+  }
+
+  Future<String?> _forexCallOpenAiCompatibleNative({
+    required String endpoint,
+    required String modelsUrl,
+    required String key,
+    required List<String> defaultModels,
+    required String prompt,
+    required List<Map<String, String>> images,
+    required bool requireFreeSuffix,
+    Map<String, String>? extraHeaders,
+  }) async {
+    final models = List<String>.from(defaultModels);
+    HttpClient? discClient;
+    try {
+      discClient = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+      final req = await discClient.getUrl(Uri.parse(modelsUrl)).timeout(const Duration(seconds: 5));
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $key');
+      final resp = await req.close().timeout(const Duration(seconds: 5));
+      if (resp.statusCode == 200) {
+        final txt = await resp.transform(utf8.decoder).join();
+        final root = jsonDecode(txt) as Map<String, dynamic>;
+        final data = root['data'] as List?;
+        if (data != null) {
+          for (final item in data) {
+            if (item is Map) {
+              final id = (item['id'] ?? '').toString();
+              if (id.isEmpty) continue;
+              if (requireFreeSuffix && !id.endsWith(':free')) continue;
+              final low = id.toLowerCase();
+              if (low.contains('llama-4') || low.contains('qwen') || low.contains('vl') ||
+                  low.contains('vision') || low.contains('gemma-3') || low.contains('pixtral') ||
+                  low.contains('ministral')) {
+                if (!models.contains(id)) models.add(id);
+              }
+            }
+          }
+        }
+      }
+    } catch (_) {
+    } finally {
+      discClient?.close(force: true);
+    }
+
+    for (final model in models) {
+      HttpClient? client;
+      try {
+        client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+        final req = await client.postUrl(Uri.parse(endpoint)).timeout(const Duration(seconds: 8));
+        req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
+        req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $key');
+        if (extraHeaders != null) {
+          extraHeaders.forEach((k, v) => req.headers.set(k, v));
+        }
+
+        final contentList = <Map<String, dynamic>>[
+          {'type': 'text', 'text': prompt},
+          for (final img in images)
+            {
+              'type': 'image_url',
+              'image_url': {
+                'url': 'data:${img['mime'] ?? 'image/jpeg'};base64,${img['b64'] ?? ''}'
+              }
+            }
+        ];
+
+        final body = jsonEncode({
+          'model': model,
+          'temperature': 0.2,
+          'max_tokens': 4096,
+          'messages': [
+            {'role': 'user', 'content': contentList}
+          ],
+        });
+
+        req.add(utf8.encode(body));
+        final resp = await req.close().timeout(const Duration(seconds: 24));
+        if (resp.statusCode == 200) {
+          final txt = await resp.transform(utf8.decoder).join();
+          final root = jsonDecode(txt) as Map<String, dynamic>;
+          final choices = root['choices'] as List?;
+          if (choices != null && choices.isNotEmpty) {
+            final msg = (choices.first as Map)['message'] as Map?;
+            final rawContent = (msg?['content'] ?? '').toString();
+            final cleaned = rawContent.replaceAll(RegExp(r'<think>[\s\S]*?</think>', caseSensitive: false), '').trim();
+            if (cleaned.isNotEmpty) return cleaned;
+          }
+        }
+      } catch (_) {
+      } finally {
+        client?.close(force: true);
+      }
+    }
+    return null;
+  }
+
   String _buildForexMultiAiBridgeJs(String flutterKeysJson) {
-    return '''
+    final tpl = r'''
 (function(){
   try {
-    var incomingKeys = $flutterKeysJson || [];
+    var incomingKeys = __FLUTTER_KEYS_JSON__ || [];
     if (!window.__aniketAllKeys) window.__aniketAllKeys = [];
 
     function cleanKey(k) {
       if (!k || typeof k !== 'string') return '';
-      return k.replace(/^Bearer\\s+/i, '').replace(/["']/g, '').trim();
+      return k.replace(/^Bearer\s+/i, '').replace(/["'\s]/g, '').trim();
     }
 
     function deobfKey(s) {
       if (!s || typeof s !== 'string') return '';
       try {
         var d = decodeURIComponent(atob(s));
-        if (d && d.length >= 16) return cleanKey(d);
+        if (d && d.length >= 16 && d.indexOf(' ') < 0) return cleanKey(d);
       } catch(e) {}
       return cleanKey(s);
     }
@@ -638,26 +919,32 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
     function readSiteKeys() {
       var out = [];
+      function addCandidate(rawVal) {
+        var k = deobfKey(rawVal);
+        if (k && k.length >= 16 && out.indexOf(k) < 0) {
+          out.push(k);
+        }
+      }
       try {
         var raw = localStorage.getItem('gemini_keys');
         if (raw) {
           var arr = JSON.parse(raw);
           if (Array.isArray(arr)) {
-            for (var i = 0; i < arr.length; i++) {
-              var k = deobfKey(arr[i]);
-              if (k && k.length >= 16 && out.indexOf(k) < 0) {
-                out.push(k);
-              }
-            }
+            for (var i = 0; i < arr.length; i++) addCandidate(arr[i]);
           }
         }
       } catch(e) {}
       try {
         var single = localStorage.getItem('gemini_key_v1');
-        if (single) {
-          var ks = deobfKey(single);
-          if (ks && ks.length >= 16 && out.indexOf(ks) < 0) {
-            out.push(ks);
+        if (single) addCandidate(single);
+      } catch(e) {}
+      try {
+        var inps = document.querySelectorAll('input');
+        for (var j = 0; j < inps.length; j++) {
+          var v = (inps[j].value || '').trim();
+          if (v.length >= 20 && v.indexOf(' ') < 0 &&
+              (v.indexOf('AIza') === 0 || v.indexOf('gsk_') === 0 || v.indexOf('sk-or-') === 0 || /^[A-Za-z0-9_-]{28,}$/.test(v))) {
+            addCandidate(v);
           }
         }
       } catch(e) {}
@@ -696,6 +983,49 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     if (window.__aniketMultiAiFetchHooked) return;
     window.__aniketMultiAiFetchHooked = true;
 
+    window.__forexDartAiCallbacks = {};
+    window.__resolveForexDartAi = function(reqId, resultText) {
+      var cb = window.__forexDartAiCallbacks[reqId];
+      if (cb) {
+        delete window.__forexDartAiCallbacks[reqId];
+        cb(resultText || '');
+      }
+    };
+
+    function callNativeDartAiFallback(keysList, promptText, rawImages, stitchedB64, wantJson) {
+      return new Promise(function(resolve) {
+        if (!window.FlutterBridge) {
+          resolve('');
+          return;
+        }
+        var reqId = 'req_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+        var timer = setTimeout(function() {
+          if (window.__forexDartAiCallbacks[reqId]) {
+            delete window.__forexDartAiCallbacks[reqId];
+            resolve('');
+          }
+        }, 45000);
+        window.__forexDartAiCallbacks[reqId] = function(resTxt) {
+          clearTimeout(timer);
+          resolve(resTxt || '');
+        };
+        try {
+          window.FlutterBridge.postMessage('FOREX_DART_AI:' + JSON.stringify({
+            reqId: reqId,
+            keys: keysList,
+            prompt: promptText,
+            images: rawImages,
+            stitchedB64: stitchedB64 || '',
+            wantJson: !!wantJson
+          }));
+        } catch(e) {
+          clearTimeout(timer);
+          delete window.__forexDartAiCallbacks[reqId];
+          resolve('');
+        }
+      });
+    }
+
     var origSetItem = localStorage.setItem.bind(localStorage);
     localStorage.setItem = function(k, v) {
       origSetItem(k, v);
@@ -723,10 +1053,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     // ═══════════════════════════════════════════════════════════════════
     //  UNIFIED PRO ANALYSIS ENGINE:
     //  USER'S FOREX FEATURES (HTF/ENTRY/DXY SS + SMC/ICT MODE FILTERS)
-    //  + ALL 11 DAY-TRADER SKILLS RUNNING AUTOMATICALLY ON 'ANALYZE'
+    //  + ALL 11 DAY-TRADER SKILLS + ORDER FLOW / FOOTPRINT / HEATMAP
     // ═══════════════════════════════════════════════════════════════════
-
-    // Official NYSE 2026 & 2027 Holidays & 1:00 PM ET Early Closes (Skill 9: trader-alerts)
     var nyseHolidays = {
       '2026-01-01':1, '2026-01-19':1, '2026-02-16':1, '2026-04-03':1, '2026-05-25':1,
       '2026-06-19':1, '2026-07-03':1, '2026-09-07':1, '2026-11-26':1, '2026-12-25':1,
@@ -735,7 +1063,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     };
     var nyseEarlyCloses = { '2026-11-27':1, '2026-12-24':1, '2027-11-26':1 };
 
-    // Read all user settings & active SMC/ICT switches from the Forex Mode tab
     function readUserForexModeSettings() {
       var res = {
         riskPct: 1.0,
@@ -744,17 +1071,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         maxTrades: 10,
         aPlusThreshold: 8,
         atrMult: 1.5,
-        tp1Pct: 50,
-        showHtfZones: true,
-        liveMemoryMode: false,
-        cache5Min: true,
-        premiumDiscount: true,
-        oteFilter: true,
-        idmMandatory: true,
-        killZoneStrict: false,
-        news15MinFilter: true,
-        dynamicAtrSl: true,
-        partialTp: true
+        tp1Pct: 50
       };
       try {
         var nodes = document.querySelectorAll('label, div, span');
@@ -765,8 +1082,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           if (!t || t.length > 100) continue;
           var parent = el.parentElement;
           if (!parent) continue;
-
-          // Check numeric inputs
           var inp = parent.querySelector('input[type=number], input[type=text], select');
           if (!inp && parent.parentElement) inp = parent.parentElement.querySelector('input[type=number], input[type=text], select');
           if (inp && inp.type !== 'checkbox') {
@@ -781,27 +1096,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
               else if (t.indexOf('partial profit') >= 0) res.tp1Pct = val;
             }
           }
-
-          // Check Mode switches (checkboxes)
-          var cb = parent.querySelector('input[type=checkbox]');
-          if (!cb && parent.parentElement) cb = parent.parentElement.querySelector('input[type=checkbox]');
-          if (cb) {
-            if (t.indexOf('show htf zones') >= 0) res.showHtfZones = !!cb.checked;
-            else if (t.indexOf('live memory mode') >= 0) res.liveMemoryMode = !!cb.checked;
-            else if (t.indexOf('premium/discount') >= 0) res.premiumDiscount = !!cb.checked;
-            else if (t.indexOf('ote filter') >= 0) res.oteFilter = !!cb.checked;
-            else if (t.indexOf('idm mandatory') >= 0) res.idmMandatory = !!cb.checked;
-            else if (t.indexOf('kill zone filter') >= 0) res.killZoneStrict = !!cb.checked;
-            else if (t.indexOf('news 15-min filter') >= 0) res.news15MinFilter = !!cb.checked;
-            else if (t.indexOf('dynamic atr sl') >= 0) res.dynamicAtrSl = !!cb.checked;
-            else if (t.indexOf('partial tp') >= 0) res.partialTp = !!cb.checked;
-          }
         }
       } catch(e) {}
       return res;
     }
 
-    // Wilder RSI-14 (from Skill 1: trader-scanner)
     function calcWilderRsi(closes, period) {
       period = period || 14;
       if (!closes || closes.length <= period) return 50.0;
@@ -822,7 +1121,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       return 100.0 - (100.0 / (1.0 + (avgG / avgL)));
     }
 
-    // Detect which symbol/pair the user is analyzing from the page text, prompt, or Live chart
     function detectActivePair(promptText) {
       var combined = ((promptText || '') + ' ' + ((document.body && document.body.innerText) || '')).toUpperCase();
       var map = [
@@ -842,140 +1140,138 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         ['USDJPY', 'USDJPY=X', 'USD/JPY'],
         ['USD/JPY', 'USDJPY=X', 'USD/JPY'],
         ['AUDUSD', 'AUDUSD=X', 'AUD/USD'],
-        ['AUD/USD', 'AUDUSD=X', 'AUD/USD'],
         ['USDCAD', 'USDCAD=X', 'USD/CAD'],
-        ['USD/CAD', 'USDCAD=X', 'USD/CAD'],
-        ['GBPJPY', 'GBPJPY=X', 'GBP/JPY'],
-        ['EURJPY', 'EURJPY=X', 'EUR/JPY'],
         ['XAGUSD', 'SI=F', 'XAG/USD (Silver)'],
-        ['SILVER', 'SI=F', 'XAG/USD (Silver)'],
         ['USOIL', 'CL=F', 'WTI Crude Oil'],
         ['NAS100', 'NQ=F', 'US100 (Nasdaq)'],
         ['US100', 'NQ=F', 'US100 (Nasdaq)'],
-        ['US30', 'YM=F', 'US30 (Dow)'],
-        ['NVDA', 'NVDA', 'NVDA'],
-        ['TSLA', 'TSLA', 'TSLA'],
-        ['AAPL', 'AAPL', 'AAPL']
+        ['US30', 'YM=F', 'US30 (Dow)']
       ];
-      // Prioritize what is in promptText first
       var pUp = (promptText || '').toUpperCase();
       for (var i = 0; i < map.length; i++) {
-        if (pUp.indexOf(map[i][0]) >= 0) {
-          return { sym: map[i][1], label: map[i][2] };
-        }
+        if (pUp.indexOf(map[i][0]) >= 0) return { sym: map[i][1], label: map[i][2] };
       }
       for (var j = 0; j < map.length; j++) {
-        if (combined.indexOf(map[j][0]) >= 0) {
-          return { sym: map[j][1], label: map[j][2] };
-        }
+        if (combined.indexOf(map[j][0]) >= 0) return { sym: map[j][1], label: map[j][2] };
       }
       return { sym: 'GC=F', label: 'XAU/USD (Gold)' };
     }
 
-    // Master background runner that executes ALL 11 Day-Trader Skills + User's Mode Settings
+    async function fetchCorsSafeCandles(sym, interval, limit) {
+      try {
+        var range = interval === '1d' ? '3mo' : '5d';
+        var yUrl = 'https://query2.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(sym) + '?range=' + range + '&interval=' + interval;
+        var yResp = await origFetch(yUrl, { method: 'GET' });
+        if (yResp && yResp.ok) {
+          var yJson = await yResp.json();
+          var r0 = yJson && yJson.chart && yJson.chart.result && yJson.chart.result[0];
+          if (r0) {
+            var meta = r0.meta || {};
+            var q0 = (r0.indicators && r0.indicators.quote && r0.indicators.quote[0]) || {};
+            var cArr = q0.close || [], hArr = q0.high || [], lArr = q0.low || [], oArr = q0.open || [], vArr = q0.volume || [];
+            var bars = [];
+            for (var i = 0; i < cArr.length; i++) {
+              if (cArr[i] != null && hArr[i] != null && lArr[i] != null) {
+                bars.push({
+                  o: oArr[i] != null ? oArr[i] : cArr[i],
+                  h: hArr[i],
+                  l: lArr[i],
+                  c: cArr[i],
+                  v: vArr[i] || 0
+                });
+              }
+            }
+            if (bars.length >= 15) {
+              return {
+                bars: bars,
+                livePx: meta.regularMarketPrice || bars[bars.length - 1].c,
+                prevClose: meta.chartPreviousClose || meta.previousClose || bars[0].o,
+                source: 'Yahoo Finance Live'
+              };
+            }
+          }
+        }
+      } catch(eY) {}
+
+      try {
+        var binMap = {
+          'GC=F': 'PAXGUSDT',
+          'BTC-USD': 'BTCUSDT',
+          'ETH-USD': 'ETHUSDT',
+          'SOL-USD': 'SOLUSDT',
+          'EURUSD=X': 'EURUSDT',
+          'GBPUSD=X': 'GBPUSDT',
+          'AUDUSD=X': 'AUDUSDT'
+        };
+        var bSym = binMap[sym] || 'PAXGUSDT';
+        var bInt = interval === '1d' ? '1d' : '5m';
+        var bLim = limit || (interval === '1d' ? 90 : 120);
+        var bUrl = 'https://api.binance.com/api/v3/klines?symbol=' + bSym + '&interval=' + bInt + '&limit=' + bLim;
+        var bResp = await origFetch(bUrl, { method: 'GET' });
+        if (bResp && bResp.ok) {
+          var klines = await bResp.json();
+          if (Array.isArray(klines) && klines.length >= 15) {
+            var bBars = [];
+            for (var k = 0; k < klines.length; k++) {
+              var row = klines[k];
+              bBars.push({
+                o: parseFloat(row[1]),
+                h: parseFloat(row[2]),
+                l: parseFloat(row[3]),
+                c: parseFloat(row[4]),
+                v: parseFloat(row[5])
+              });
+            }
+            var lastC = bBars[bBars.length - 1].c;
+            var prevC = bBars.length >= 24 ? bBars[bBars.length - 24].c : bBars[0].o;
+            return {
+              bars: bBars,
+              livePx: lastC,
+              prevClose: prevC,
+              source: 'Binance Live (' + bSym + ')'
+            };
+          }
+        }
+      } catch(eB) {}
+      return null;
+    }
+
     async function runUnified11SkillsAndUserFeatures(promptText) {
       var det = detectActivePair(promptText);
       var sym = det.sym;
       var label = det.label;
       var userCfg = readUserForexModeSettings();
 
-      // Fetch 5-minute intraday bars AND 3-month daily bars + DXY correlation in parallel (0 API quota!)
-      var url5m = 'https://query2.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(sym) + '?range=5d&interval=5m';
-      var url1d = 'https://query2.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(sym) + '?range=3mo&interval=1d';
-      var urlDxy = 'https://query2.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?range=2d&interval=5m';
-      var urlRss = 'https://feeds.finance.yahoo.com/rss/2.0/headline?s=' + encodeURIComponent(sym === 'GC=F' ? 'GC=F' : (sym.indexOf('=X') >= 0 ? 'DX-Y.NYB' : sym)) + '&region=US&lang=en-US';
+      var data5m = await fetchCorsSafeCandles(sym, '5m', 120);
+      var data1d = await fetchCorsSafeCandles(sym, '1d', 90);
+      if (!data5m || !data5m.bars || data5m.bars.length < 15) return null;
 
-      var responses = await Promise.all([
-        origFetch(url5m, { method: 'GET' }).catch(function(){ return null; }),
-        origFetch(url1d, { method: 'GET' }).catch(function(){ return null; }),
-        origFetch(urlDxy, { method: 'GET' }).catch(function(){ return null; }),
-        origFetch(urlRss, { method: 'GET' }).catch(function(){ return null; })
-      ]);
-
-      var resp5m = responses[0], resp1d = responses[1], respDxy = responses[2], respRss = responses[3];
-      if (!resp5m || !resp5m.ok) return null;
-      var j5m = await resp5m.json();
-      var res0 = j5m && j5m.chart && j5m.chart.result && j5m.chart.result[0];
-      if (!res0) return null;
-
-      var meta = res0.meta || {};
-      var q0 = (res0.indicators && res0.indicators.quote && res0.indicators.quote[0]) || {};
-      var cArr = q0.close || [], hArr = q0.high || [], lArr = q0.low || [], oArr = q0.open || [], vArr = q0.volume || [];
-      var bars = [];
-      for (var i = 0; i < cArr.length; i++) {
-        if (cArr[i] != null && hArr[i] != null && lArr[i] != null) {
-          bars.push({
-            o: oArr[i] != null ? oArr[i] : cArr[i],
-            h: hArr[i],
-            l: lArr[i],
-            c: cArr[i],
-            v: vArr[i] || 0
-          });
-        }
-      }
-      if (bars.length < 15) return null;
-
-      var livePx = meta.regularMarketPrice || bars[bars.length - 1].c;
-      var prevClose = meta.chartPreviousClose || meta.previousClose || bars[0].o;
+      var bars = data5m.bars;
+      var livePx = data5m.livePx;
+      var prevClose = data5m.prevClose;
       var chgPct = prevClose > 0 ? (((livePx - prevClose) / prevClose) * 100.0) : 0.0;
       var dec = livePx > 100 ? 2 : (livePx > 10 ? 3 : 5);
 
-      // ── SKILL 1 (trader-scanner) & SKILL 10 (trader-analyst 90D Macro Range) ──
       var dailySetups = [];
       var hi90d = livePx, lo90d = livePx, sma20d = livePx, dailyRsi = 50.0;
-      if (resp1d && resp1d.ok) {
-        try {
-          var j1d = await resp1d.json();
-          var r1d = j1d && j1d.chart && j1d.chart.result && j1d.chart.result[0];
-          var q1d = (r1d && r1d.indicators && r1d.indicators.quote && r1d.indicators.quote[0]) || {};
-          var dc = (q1d.close || []).filter(function(x){ return x != null; });
-          var dh = (q1d.high || []).filter(function(x){ return x != null; });
-          var dl = (q1d.low || []).filter(function(x){ return x != null; });
-          if (dh.length > 0) hi90d = Math.max.apply(null, dh);
-          if (dl.length > 0) lo90d = Math.min.apply(null, dl);
-          if (dc.length >= 21) {
-            dailyRsi = calcWilderRsi(dc, 14);
-            var prior20 = dc.slice(-21, -1);
-            var max20 = Math.max.apply(null, prior20);
-            sma20d = prior20.reduce(function(a,b){ return a + b; }, 0) / prior20.length;
-            if (livePx > max20) dailySetups.push('20D Closing-High Breakout');
-            if (dc[dc.length - 2] < sma20d && livePx > sma20d) dailySetups.push('Reclaimed 20-Day SMA');
-            if (dailyRsi < 32) dailySetups.push('Daily Oversold (RSI ' + dailyRsi.toFixed(1) + ')');
-          }
-        } catch(e1d) {}
+      if (data1d && data1d.bars && data1d.bars.length > 0) {
+        var dbars = data1d.bars;
+        var dc = dbars.map(function(b){ return b.c; });
+        var dh = dbars.map(function(b){ return b.h; });
+        var dl = dbars.map(function(b){ return b.l; });
+        hi90d = Math.max.apply(null, dh);
+        lo90d = Math.min.apply(null, dl);
+        if (dc.length >= 21) {
+          dailyRsi = calcWilderRsi(dc, 14);
+          var prior20 = dc.slice(-21, -1);
+          var max20 = Math.max.apply(null, prior20);
+          sma20d = prior20.reduce(function(a,b){ return a + b; }, 0) / prior20.length;
+          if (livePx > max20) dailySetups.push('20D Closing-High Breakout');
+          if (dc[dc.length - 2] < sma20d && livePx > sma20d) dailySetups.push('Reclaimed 20-Day SMA');
+          if (dailyRsi < 32) dailySetups.push('Daily Oversold (RSI ' + dailyRsi.toFixed(1) + ')');
+        }
       }
 
-      // Live DXY Correlation check
-      var dxyInfo = 'DXY Neutral';
-      if (respDxy && respDxy.ok) {
-        try {
-          var jDxy = await respDxy.json();
-          var rDxy = jDxy && jDxy.chart && jDxy.chart.result && jDxy.chart.result[0];
-          if (rDxy && rDxy.meta) {
-            var dpx = rDxy.meta.regularMarketPrice || 0;
-            var dprev = rDxy.meta.chartPreviousClose || rDxy.meta.previousClose || dpx;
-            var dchg = dprev > 0 ? (((dpx - dprev) / dprev) * 100.0) : 0;
-            dxyInfo = 'DXY @ ' + Number(dpx).toFixed(2) + ' (' + (dchg >= 0 ? '+' : '') + dchg.toFixed(2) + '% -> ' + (dchg >= 0.1 ? 'USD Strong / Bearish Pressure on Gold & EUR' : (dchg <= -0.1 ? 'USD Weak / Bullish Tailwind for Gold & EUR' : 'DXY Flat')) + ')';
-          }
-        } catch(eDxy) {}
-      }
-
-      // ── SKILL 2 (trader-news): Live Yahoo Finance RSS & Red-Folder Catalyst Check ──
-      var headlines = [];
-      if (respRss && respRss.ok) {
-        try {
-          var xmlTxt = await respRss.text();
-          var itemMatches = xmlTxt.match(/<item>[\s\S]*?<\/item>/gi) || [];
-          for (var hm = 0; hm < Math.min(4, itemMatches.length); hm++) {
-            var blk = itemMatches[hm];
-            var tm = /<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>|<title>([\s\S]*?)<\/title>/i.exec(blk);
-            var tStr = ((tm && (tm[1] || tm[2])) || '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').trim();
-            if (tStr) headlines.push(tStr);
-          }
-        } catch(eRss) {}
-      }
-
-      // ── SKILL 3 (trader-entry): 5m Opening Range (OR High/Low/Mid), ATR-14, Wilder RSI-14 & OTE/Premium-Discount ──
       var atrN = Math.min(14, bars.length - 1);
       var trSum = 0;
       for (var a = bars.length - atrN; a < bars.length; a++) {
@@ -994,7 +1290,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       var orAvgVol = orBars.reduce(function(acc, b){ return acc + (b.v || 0); }, 0) / Math.max(1, orBars.length);
       var lastVolRatio = orAvgVol > 0 ? (sess[sess.length - 1].v / orAvgVol) : 1.0;
 
-      // Session Dealing Range for User's Premium/Discount & OTE (0.618-0.786) Filter
       var sessHigh = Math.max.apply(null, sess.map(function(b){ return b.h; }));
       var sessLow  = Math.min.apply(null, sess.map(function(b){ return b.l; }));
       var sessEq   = (sessHigh + sessLow) / 2.0;
@@ -1011,7 +1306,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             ? 'ORB BEARISH BREAKDOWN TRIGGERED (Closed below OR Low ' + orLow.toFixed(dec) + ', Vol ' + lastVolRatio.toFixed(2) + 'x)'
             : 'INSIDE OPENING RANGE (' + orLow.toFixed(dec) + ' – ' + orHigh.toFixed(dec) + ', Mid ' + orMid.toFixed(dec) + ')');
 
-      // ── SKILL 4 (trader-exit): Dynamic ATR SL & Partial TP (TP1=1R, TP2=2R, TP3=3R) ──
       var atrMult = userCfg.atrMult > 0 ? userCfg.atrMult : 1.5;
       var riskDist = atrMult * atr14;
       if (riskDist < livePx * 0.0005) riskDist = livePx * 0.002;
@@ -1027,7 +1321,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       var shortTP2 = livePx - (2.0 * riskDist);
       var shortTP3 = livePx - (3.0 * riskDist);
 
-      // ── SKILL 5 (trader-timemachine): 2,500 Monte Carlo Session Replays + Historical Backtest ──
       var ratios = [];
       for (var rIdx = 1; rIdx < bars.length; rIdx++) {
         var pc = bars[rIdx - 1].c;
@@ -1079,9 +1372,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       var avgR   = sumR / replays;
       var tmVerdict = winPct >= bePct + 4
         ? 'POSITIVE EDGE (+' + avgR.toFixed(2) + 'R Expected | Beats ' + bePct.toFixed(0) + '% Breakeven)'
-        : (Math.abs(winPct - bePct) <= 4 ? 'NEUTRAL / COIN FLIP (' + winPct.toFixed(1) + '% vs ' + bePct.toFixed(0) + '% Breakeven)' : 'LOW PROBABILITY (' + avgR.toFixed(2) + 'R — Wait for Better Pullback)');
+        : (Math.abs(winPct - bePct) <= 4 ? 'NEUTRAL / COIN FLIP (' + winPct.toFixed(1) + '% vs ' + bePct.toFixed(0) + '% Breakeven)' : 'LOW PROBABILITY (' + avgR.toFixed(2) + 'R)');
 
-      // ── SKILL 6 (trader-budget) & SKILL 7 (trader-risk) & SKILL 8 (trader-broker) ──
       var riskUsd = userCfg.balance * (userCfg.riskPct / 100.0);
       var dailyMaxLossUsd = userCfg.balance * (userCfg.dailyLossPct / 100.0);
       var rawUnits = riskDist > 0 ? (riskUsd / riskDist) : 1;
@@ -1090,27 +1382,21 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         : (sym.indexOf('=X') >= 0 ? Math.max(0.01, rawUnits / 100000.0) : Math.max(0.01, rawUnits));
       var riskPass = (riskUsd <= dailyMaxLossUsd) && (targetR >= 1.0);
       var riskVerdict = riskPass
-        ? 'PASS (Trade Risk USD ' + riskUsd.toFixed(2) + ' fits Daily Limit USD ' + dailyMaxLossUsd.toFixed(2) + ' | Max Trades: ' + userCfg.maxTrades + ')'
+        ? 'PASS (Trade Risk USD ' + riskUsd.toFixed(2) + ' fits Daily Limit USD ' + dailyMaxLossUsd.toFixed(2) + ')'
         : 'BLOCK (Trade Risk USD ' + riskUsd.toFixed(2) + ' exceeds Daily Limit USD ' + dailyMaxLossUsd.toFixed(2) + ')';
 
-      // ── SKILL 9 (trader-alerts): BD Killzone & NYSE 2026-2027 Holiday Clock ──
       var nowUtc = new Date();
       var bdDate = new Date(nowUtc.getTime() + 6 * 3600 * 1000);
       var nyDate = new Date(nowUtc.getTime() - 4 * 3600 * 1000);
       var nyIsoDate = nyDate.toISOString().slice(0, 10);
       var bdHr = bdDate.getUTCHours();
       var kz = (bdHr >= 13 && bdHr < 17)
-        ? 'London Killzone (ACTIVE — High Liquidity)'
-        : ((bdHr >= 18 && bdHr < 23) ? 'New York Killzone (ACTIVE — Peak Liquidity)' : 'Asia / Transition Session');
+        ? 'London Killzone (ACTIVE)'
+        : ((bdHr >= 18 && bdHr < 23) ? 'New York Killzone (ACTIVE)' : 'Asia / Transition Session');
       var nyseCalNote = nyseHolidays[nyIsoDate]
         ? 'NYSE Holiday Today'
-        : (nyseEarlyCloses[nyIsoDate] ? 'NYSE Early Close 1:00 PM ET (Flat by 12:55 ET)' : 'Regular Session (Flat by 15:55 ET)');
+        : (nyseEarlyCloses[nyIsoDate] ? 'NYSE Early Close 1:00 PM ET' : 'Regular Session (Flat by 15:55 ET)');
 
-      // ═══════════════════════════════════════════════════════════════════
-      //  SKILL 12: ORDER FLOW, FOOTPRINT DELTA, VOLUME PROFILE (POC/VAH/VAL),
-      //  LIVE ORDERBOOK HEATMAP WALLS & ABSORPTION / WHALE TRAP ENGINE
-      // ═══════════════════════════════════════════════════════════════════
-      // 12A. Session Volume Profile (24-Bucket POC, VAH, VAL & LVN Liquidity Void)
       var vpBuckets = 24;
       var vpMin = sessLow, vpMax = sessHigh;
       var vpStep = Math.max((vpMax - vpMin) / vpBuckets, 1e-6);
@@ -1130,7 +1416,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       }
       var pocPrice = vpMin + (pocIdx + 0.5) * vpStep;
 
-      // Calculate 70% Value Area (VAH & VAL) expanding from POC
       var targetVaVol = totalSessVol * 0.70;
       var curVaVol = vpVols[pocIdx];
       var vaLoIdx = pocIdx, vaHiIdx = pocIdx;
@@ -1150,162 +1435,62 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       var valPrice = vpMin + vaLoIdx * vpStep;
       var vahPrice = vpMin + (vaHiIdx + 1) * vpStep;
 
-      // 12B. Footprint Volume Delta, Cumulative Volume Delta (CVD) & Stacked Imbalance
-      var cvdSession = 0;
-      var last5Delta = 0;
-      var buyImbalanceCount = 0;
-      var sellImbalanceCount = 0;
-      var whalePrints = [];
-      var avgSessBarVol = totalSessVol / Math.max(1, sess.length);
-
+      var cvdSession = 0, last5Delta = 0, buyImbalanceCount = 0, sellImbalanceCount = 0;
       for (var fi = 0; fi < sess.length; fi++) {
         var fb = sess[fi];
         var fRange = Math.max(fb.h - fb.l, 1e-8);
         var fVol = Math.max(fb.v || 100, 1);
         var buyShare = (fb.c - fb.l) / fRange;
         var sellShare = (fb.h - fb.c) / fRange;
-        var bVol = fVol * buyShare;
-        var sVol = fVol * sellShare;
-        var bDelta = bVol - sVol;
+        var bDelta = (fVol * buyShare) - (fVol * sellShare);
         cvdSession += bDelta;
         if (fi >= sess.length - 5) {
           last5Delta += bDelta;
           if (buyShare >= 0.72) buyImbalanceCount++;
           if (sellShare >= 0.72) sellImbalanceCount++;
         }
-        if (fVol >= avgSessBarVol * 2.1 && fi >= sess.length - 8) {
-          whalePrints.push((fb.c >= fb.o ? 'WHALE BUY BUBBLE @ ' : 'WHALE SELL BUBBLE @ ') + fb.c.toFixed(dec) + ' (' + (fVol / Math.max(1, avgSessBarVol)).toFixed(1) + 'x Vol)');
-        }
       }
 
       var stackedImbalanceStr = buyImbalanceCount >= 3
-        ? 'STACKED BUY IMBALANCE (' + buyImbalanceCount + '/5 bars aggressive buyer dominance)'
+        ? 'STACKED BUY IMBALANCE (' + buyImbalanceCount + '/5 bars buyer dominance)'
         : (sellImbalanceCount >= 3
-            ? 'STACKED SELL IMBALANCE (' + sellImbalanceCount + '/5 bars aggressive seller dominance)'
-            : 'Balanced Two-Sided Footprint Flow');
+            ? 'STACKED SELL IMBALANCE (' + sellImbalanceCount + '/5 bars seller dominance)'
+            : 'Balanced Footprint Flow');
 
-      // 12C. Absorption vs Spoofing / Exhaustion Trap Detector
       var lastBar = sess[sess.length - 1];
       var prevBar = sess[Math.max(0, sess.length - 2)];
-      var lbRange = Math.max(lastBar.h - lastBar.l, 1e-8);
       var lbBody  = Math.abs(lastBar.c - lastBar.o);
       var upperWick = lastBar.h - Math.max(lastBar.c, lastBar.o);
       var lowerWick = Math.min(lastBar.c, lastBar.o) - lastBar.l;
 
       var absorptionStatus = 'No Passive Absorption Trap — Clean Price Discovery';
       if (upperWick > lbBody * 1.4 && lastBar.h >= vahPrice - vpStep) {
-        absorptionStatus = 'BEARISH ICEBERG ABSORPTION AT RESISTANCE (' + lastBar.h.toFixed(dec) + '): Aggressive market buys were soaked up by passive limit sellers -> High-Probability Bull Trap / Reversal DOWN!';
+        absorptionStatus = 'BEARISH ICEBERG ABSORPTION AT RESISTANCE (' + lastBar.h.toFixed(dec) + ' -> Bull Trap Warning!)';
       } else if (lowerWick > lbBody * 1.4 && lastBar.l <= valPrice + vpStep) {
-        absorptionStatus = 'BULLISH ICEBERG ABSORPTION AT SUPPORT (' + lastBar.l.toFixed(dec) + '): Aggressive market sells were soaked up by passive limit buyers -> High-Probability Bear Trap / Reversal UP!';
+        absorptionStatus = 'BULLISH ICEBERG ABSORPTION AT SUPPORT (' + lastBar.l.toFixed(dec) + ' -> Bear Trap Warning!)';
       } else if (last5Delta > 0 && lastBar.c < prevBar.c) {
-        absorptionStatus = 'DELTA DIVERGENCE (Hidden Seller Absorption: +Delta but price stalled at ' + lastBar.c.toFixed(dec) + ')';
+        absorptionStatus = 'DELTA DIVERGENCE (Seller Absorption at ' + lastBar.c.toFixed(dec) + ')';
       } else if (last5Delta < 0 && lastBar.c > prevBar.c) {
-        absorptionStatus = 'DELTA DIVERGENCE (Hidden Buyer Absorption: -Delta but price held firm at ' + lastBar.c.toFixed(dec) + ')';
+        absorptionStatus = 'DELTA DIVERGENCE (Buyer Absorption at ' + lastBar.c.toFixed(dec) + ')';
       }
 
-      // 12D. Live Orderbook Liquidity Heatmap Walls (Bid Wall below price & Ask Wall above price)
-      // Queries Binance L2 Orderbook Depth for Crypto/Gold proxy + Volume Profile HVN clusters
       var bidWallPx = valPrice < livePx ? valPrice : orLow;
       var askWallPx = vahPrice > livePx ? vahPrice : orHigh;
-      var heatmapSource = 'Institutional Volume-Depth Clusters';
-
-      try {
-        var binSym = '';
-        if (sym === 'BTC-USD') binSym = 'BTCUSDT';
-        else if (sym === 'ETH-USD') binSym = 'ETHUSDT';
-        else if (sym === 'SOL-USD') binSym = 'SOLUSDT';
-        else if (sym === 'GC=F') binSym = 'PAXGUSDT';
-
-        if (binSym) {
-          var obResp = await origFetch('https://api.binance.com/api/v3/depth?symbol=' + binSym + '&limit=100', { method: 'GET' }).catch(function(){ return null; });
-          if (obResp && obResp.ok) {
-            var obJson = await obResp.json();
-            var bids = (obJson && obJson.bids) || [];
-            var asks = (obJson && obJson.asks) || [];
-            var maxBidQty = 0, bestBidWall = 0;
-            for (var bi = 0; bi < bids.length; bi++) {
-              var bPx = parseFloat(bids[bi][0]), bQ = parseFloat(bids[bi][1]);
-              if (bQ > maxBidQty) { maxBidQty = bQ; bestBidWall = bPx; }
-            }
-            var maxAskQty = 0, bestAskWall = 0;
-            for (var ai = 0; ai < asks.length; ai++) {
-              var aPx = parseFloat(asks[ai][0]), aQ = parseFloat(asks[ai][1]);
-              if (aQ > maxAskQty) { maxAskQty = aQ; bestAskWall = aPx; }
-            }
-            if (bestBidWall > 0 && bestAskWall > 0 && sym !== 'GC=F') {
-              bidWallPx = bestBidWall;
-              askWallPx = bestAskWall;
-              heatmapSource = 'Live L2 Exchange Orderbook Depth (' + binSym + ')';
-            }
-          }
-        }
-      } catch(eOb) {}
-
-      // Also scan buckets above and below livePx for strongest resting HVN walls
-      var bestAboveVol = -1, bestBelowVol = -1;
-      for (var wi = 0; wi < vpBuckets; wi++) {
-        var bCenter = vpMin + (wi + 0.5) * vpStep;
-        if (bCenter > livePx + (vpStep * 0.4) && vpVols[wi] > bestAboveVol) {
-          bestAboveVol = vpVols[wi];
-          if (heatmapSource.indexOf('Live L2') < 0) askWallPx = bCenter;
-        }
-        if (bCenter < livePx - (vpStep * 0.4) && vpVols[wi] > bestBelowVol) {
-          bestBelowVol = vpVols[wi];
-          if (heatmapSource.indexOf('Live L2') < 0) bidWallPx = bCenter;
-        }
-      }
       if (askWallPx <= livePx) askWallPx = livePx + (1.5 * atr14);
       if (bidWallPx >= livePx) bidWallPx = livePx - (1.5 * atr14);
 
       return ''
-        + '\\n\\n══════════════════════════════════════════════════════════════════\\n'
-        + '[ANIKET PRO AI — UNIFIED 11 DAY-TRADER SKILLS + ORDER FLOW / FOOTPRINT / HEATMAP + USER SMC/ICT ENGINE (' + label + ')]\\n'
-        + '══════════════════════════════════════════════════════════════════\\n'
-        + '1. [trader-scanner & Live Market Data]:\\n'
-        + '   • Live Price: ' + livePx.toFixed(dec) + ' (' + (chgPct >= 0 ? '+' : '') + chgPct.toFixed(2) + '%) | 5m Wilder RSI-14: ' + rsi5m.toFixed(1) + ' | Daily RSI-14: ' + dailyRsi.toFixed(1) + '\\n'
-        + '   • 20-Day SMA: ' + sma20d.toFixed(dec) + ' | 90-Day Macro Range (trader-analyst): Low ' + lo90d.toFixed(dec) + ' – High ' + hi90d.toFixed(dec) + '\\n'
-        + '   • Active Scanner Setups: ' + (dailySetups.length > 0 ? dailySetups.join(', ') : 'Intraday SMC Structure Play') + '\\n'
-        + '   • Live DXY Correlation: ' + dxyInfo + '\\n'
-        + '2. [trader-news (Free Live Yahoo RSS & Macro Catalyst Check)]:\\n'
-        + '   • Latest Headlines: ' + (headlines.length > 0 ? headlines.join(' | ') : 'No Red-Folder Shock Headline Detected') + '\\n'
-        + '3. [trader-entry (15m Opening Range) + User SMC/ICT Filters]:\\n'
-        + '   • 5m Opening Range (First 15m): High=' + orHigh.toFixed(dec) + ' | Midpoint=' + orMid.toFixed(dec) + ' | Low=' + orLow.toFixed(dec) + '\\n'
-        + '   • Entry Timer Status: ' + entryStatus + '\\n'
-        + '   • Session Dealing Range (' + sessLow.toFixed(dec) + ' – ' + sessHigh.toFixed(dec) + '): Current Price is in ' + pdZone + '\\n'
-        + '   • OTE Fibonacci Zone (0.618–0.786): Bullish Buy OTE=' + bullOte786.toFixed(dec) + '–' + bullOte618.toFixed(dec) + ' | Bearish Sell OTE=' + bearOte618.toFixed(dec) + '–' + bearOte786.toFixed(dec) + '\\n'
-        + '4. [ORDER FLOW, FOOTPRINT DELTA, VOLUME PROFILE & LIQUIDITY HEATMAP]:\\n'
-        + '   • Volume Profile: Point of Control (POC)=' + pocPrice.toFixed(dec) + ' | Value Area High (VAH)=' + vahPrice.toFixed(dec) + ' | Value Area Low (VAL)=' + valPrice.toFixed(dec) + '\\n'
-        + '   • Heatmap Liquidity Walls (' + heatmapSource + '): Nearest Bid Wall (Buy Support)=' + bidWallPx.toFixed(dec) + ' | Nearest Ask Wall (Sell Resistance)=' + askWallPx.toFixed(dec) + '\\n'
-        + '   • Footprint Delta & CVD: Session CVD=' + (cvdSession >= 0 ? '+Bullish' : '-Bearish') + ' | Last 5-Bar Delta=' + (last5Delta >= 0 ? '+Buying Pressure' : '-Selling Pressure') + ' | ' + stackedImbalanceStr + '\\n'
-        + '   • Absorption / Spoofing Trap Check: ' + absorptionStatus + '\\n'
-        + '   • Whale Prints / Large Bubbles: ' + (whalePrints.length > 0 ? whalePrints.slice(-2).join(' | ') : 'Normal Institutional Flow') + '\\n'
-        + '5. [trader-exit (Dynamic ' + atrMult + 'x ATR-14 SL & Partial TP1/TP2/TP3)]:\\n'
-        + '   • 14-Bar ATR Volatility: ' + atr14.toFixed(dec) + ' (Partial TP1 Split: ' + userCfg.tp1Pct + '%)\\n'
-        + '   • IF BUY (LONG): Entry=' + livePx.toFixed(dec) + ' | Stop-Loss=' + longSL.toFixed(dec) + ' | TP1(1R)=' + longTP1.toFixed(dec) + ' | TP2(2R)=' + longTP2.toFixed(dec) + ' | TP3(3R)=' + longTP3.toFixed(dec) + '\\n'
-        + '   • IF SELL (SHORT): Entry=' + livePx.toFixed(dec) + ' | Stop-Loss=' + shortSL.toFixed(dec) + ' | TP1(1R)=' + shortTP1.toFixed(dec) + ' | TP2(2R)=' + shortTP2.toFixed(dec) + ' | TP3(3R)=' + shortTP3.toFixed(dec) + '\\n'
-        + '6. [trader-timemachine (2,500x Monte Carlo Intraday Simulation)]:\\n'
-        + '   • Target Hit First: ' + ((hitTP / replays) * 100).toFixed(1) + '% | Stop Hit First: ' + ((hitSL / replays) * 100).toFixed(1) + '% | Win Share of Resolved: ' + winPct.toFixed(1) + '% (Breakeven ' + bePct.toFixed(0) + '%)\\n'
-        + '   • Expected Value: ' + (avgR >= 0 ? '+' : '') + avgR.toFixed(2) + 'R | Simulated Close Range (5%–50%–95%): ' + p05.toFixed(dec) + ' -> ' + p50.toFixed(dec) + ' -> ' + p95.toFixed(dec) + '\\n'
-        + '   • Time Machine Verdict: ' + tmVerdict + '\\n'
-        + '7. [trader-budget, trader-risk & trader-broker]:\\n'
-        + '   • Account Balance: USD ' + userCfg.balance.toFixed(0) + ' | Risk per Trade: ' + userCfg.riskPct + '% (USD ' + riskUsd.toFixed(2) + ') | A+ Threshold: ' + userCfg.aPlusThreshold + '/10\\n'
-        + '   • Recommended Position Size: ' + lots.toFixed(2) + ' Standard Lots (' + Math.max(1, Math.floor(rawUnits)) + ' units)\\n'
-        + '   • Pre-Trade Risk Gate: ' + riskVerdict + '\\n'
-        + '8. [trader-alerts & Session Clock]:\\n'
-        + '   • Current Session: ' + kz + ' | Calendar: ' + nyseCalNote + '\\n'
-        + 'MANDATORY INSTRUCTION FOR AI RESPONSE:\\n'
-        + 'Analyze the uploaded screenshots (HTF, ENTRY, CORRELATION — including any Footprint/Heatmap chart screenshots) together with all 11 Day-Trader Skills AND the Order Flow / Footprint / Heatmap metrics above. In your final analysis output, clearly include:\\n'
-        + '  (1) HTF + Entry SMC/ICT Structure, OTE (0.618–0.786) & IDM Sweep,\\n'
-        + '  (2) Order Flow Confirmation: Volume Profile POC (' + pocPrice.toFixed(dec) + '), Heatmap Bid Wall (' + bidWallPx.toFixed(dec) + ') & Ask Wall (' + askWallPx.toFixed(dec) + '), Footprint CVD/Delta & Absorption Trap status,\\n'
-        + '  (3) Exact Entry, Dynamic ATR Stop-Loss, and Partial TP1/TP2/TP3 levels,\\n'
-        + '  (4) Time Machine 2,500x Monte Carlo Win-Rate % & Verdict,\\n'
-        + '  (5) Recommended Lot Size from trader-budget & Pre-Trade Risk Gate (PASS/BLOCK) from trader-risk.\\n';
+        + '\n\n[12 PRO SKILLS + ORDER FLOW LIVE TELEMETRY (' + label + ' — ' + data5m.source + ')]\n'
+        + '• Live Price: ' + livePx.toFixed(dec) + ' (' + (chgPct >= 0 ? '+' : '') + chgPct.toFixed(2) + '%) | 5m RSI-14: ' + rsi5m.toFixed(1) + ' | Daily RSI-14: ' + dailyRsi.toFixed(1) + ' | 20D SMA: ' + sma20d.toFixed(dec) + ' | 90D Range: ' + lo90d.toFixed(dec) + '–' + hi90d.toFixed(dec) + '\n'
+        + '• Opening Range (15m): High=' + orHigh.toFixed(dec) + ' | Mid=' + orMid.toFixed(dec) + ' | Low=' + orLow.toFixed(dec) + ' | Status: ' + entryStatus + '\n'
+        + '• SMC Dealing Range & OTE (0.618–0.786): ' + pdZone + ' | Buy OTE=' + bullOte786.toFixed(dec) + '–' + bullOte618.toFixed(dec) + ' | Sell OTE=' + bearOte618.toFixed(dec) + '–' + bearOte786.toFixed(dec) + '\n'
+        + '• Order Flow & Heatmap: Volume Profile POC=' + pocPrice.toFixed(dec) + ' | VAH=' + vahPrice.toFixed(dec) + ' | VAL=' + valPrice.toFixed(dec) + ' | Bid Wall=' + bidWallPx.toFixed(dec) + ' | Ask Wall=' + askWallPx.toFixed(dec) + ' | CVD=' + (cvdSession >= 0 ? '+Bullish' : '-Bearish') + ' | ' + stackedImbalanceStr + ' | ' + absorptionStatus + '\n'
+        + '• Dynamic ' + atrMult + 'x ATR (' + atr14.toFixed(dec) + ') Exit Plan: LONG [SL=' + longSL.toFixed(dec) + ', TP1=' + longTP1.toFixed(dec) + ', TP2=' + longTP2.toFixed(dec) + ', TP3=' + longTP3.toFixed(dec) + '] | SHORT [SL=' + shortSL.toFixed(dec) + ', TP1=' + shortTP1.toFixed(dec) + ', TP2=' + shortTP2.toFixed(dec) + ', TP3=' + shortTP3.toFixed(dec) + ']\n'
+        + '• Time Machine (2,500x Monte Carlo): Win Rate=' + winPct.toFixed(1) + '% (Breakeven ' + bePct.toFixed(0) + '%) | Expected=' + (avgR >= 0 ? '+' : '') + avgR.toFixed(2) + 'R | Verdict=' + tmVerdict + '\n'
+        + '• Budget & Risk Gate: Recommended Lot=' + lots.toFixed(2) + ' Lots | ' + riskVerdict + ' | Session=' + kz + ' (' + nyseCalNote + ')\n'
+        + 'IMPORTANT: Strictly follow the exact output format (JSON or text) requested by the main prompt above, and include these live Order Flow (POC, Bid/Ask Wall, CVD), Time Machine Win-Rate %, Lot Size, and Risk Gate metrics inside your analysis reason/details!';
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    //  SILENT MODE TAB CLEANUP (SCREENSHOT 2 & SCREENSHOT 3)
-    //  Hides only the unneeded fields/switches without adding any extra clutter boxes!
-    // ═══════════════════════════════════════════════════════════════════
     function hideFieldWithoutTouchingSiblings(targetPhrase, forbiddenPhrases) {
       var tLow = targetPhrase.toLowerCase();
       var all = document.querySelectorAll('label, span, div, p, details, summary');
@@ -1355,7 +1540,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
     function stripThinkTags(txt) {
       if (!txt) return '';
-      return txt.replace(/<think>[\\s\\S]*?<\\/think>/gi, '').trim();
+      return txt.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
     }
 
     async function stitchImagesToDataUrl(imgList) {
@@ -1423,7 +1608,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       });
     }
 
-    async function callOpenAiVisionProvider(endpoint, modelsUrl, key, defaultModels, promptText, imgList, requireFree, extraHeaders) {
+    async function callOpenAiVisionProvider(endpoint, modelsUrl, key, defaultModels, promptText, combinedDataUrl, requireFree, extraHeaders) {
       var models = defaultModels.slice();
       try {
         var mResp = await origFetch(modelsUrl, {
@@ -1446,8 +1631,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           }
         }
       } catch(e) {}
-
-      var combinedDataUrl = await stitchImagesToDataUrl(imgList);
 
       for (var i = 0; i < models.length; i++) {
         var model = models[i];
@@ -1472,7 +1655,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             body: JSON.stringify({
               model: model,
               temperature: 0.2,
-              max_tokens: 2048,
+              max_tokens: 4096,
               messages: [{ role: 'user', content: userContent }]
             })
           });
@@ -1480,7 +1663,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             var j = await resp.json();
             var rawTxt = (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
             var cleaned = stripThinkTags(rawTxt);
-            if (cleaned && cleaned.length > 10) {
+            if (cleaned && cleaned.length > 2) {
               return cleaned;
             }
           }
@@ -1489,23 +1672,16 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       return null;
     }
 
-    async function callGeminiProvider(key, rawBodyStr, origUrlStr) {
-      var origModelMatch = /models\\/([^/:?]+):generateContent/.exec(origUrlStr || '');
-      var origModel = origModelMatch ? origModelMatch[1] : 'gemini-2.0-flash';
-      var models = [origModel, 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
-      var uniqueModels = [];
-      for (var u = 0; u < models.length; u++) {
-        if (uniqueModels.indexOf(models[u]) < 0) uniqueModels.push(models[u]);
-      }
-
-      for (var i = 0; i < uniqueModels.length; i++) {
-        var m = uniqueModels[i];
+    async function callGeminiProvider(key, cleanBodyStr, rawBodyStr) {
+      var models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+      for (var i = 0; i < models.length; i++) {
+        var m = models[i];
         try {
           var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + m + ':generateContent?key=' + encodeURIComponent(key);
           var resp = await origFetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: rawBodyStr
+            body: cleanBodyStr || rawBodyStr
           });
           if (resp && resp.ok) {
             var j = await resp.json();
@@ -1517,10 +1693,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                   finalTxt += parts[p].text;
                 }
               }
-              if (finalTxt.length > 5) {
-                return new Response(JSON.stringify({
-                  candidates: [{ content: { parts: [{ text: finalTxt }] }, finishReason: 'STOP' }]
-                }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+              if (finalTxt.length > 2) {
+                return finalTxt;
               }
             }
           }
@@ -1529,21 +1703,54 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       return null;
     }
 
+    function makeGeminiSuccessResponse(txt) {
+      return new Response(JSON.stringify({
+        candidates: [{
+          content: { role: 'model', parts: [{ text: txt }] },
+          finishReason: 'STOP'
+        }]
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+
     window.fetch = async function(input, init) {
       var urlStr = typeof input === 'string' ? input : (input && input.url ? input.url : '');
-      if (urlStr.indexOf('generativelanguage.googleapis.com') >= 0 && urlStr.indexOf(':generateContent') >= 0) {
+      if (urlStr.indexOf('generativelanguage.googleapis.com') >= 0) {
+        if (urlStr.indexOf(':generateContent') < 0) {
+          return new Response(JSON.stringify({
+            models: [
+              { name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] },
+              { name: 'models/gemini-2.0-flash', supportedGenerationMethods: ['generateContent'] }
+            ]
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+
         var rawBodyStr = (init && init.body) ? init.body.toString() : '{}';
         var promptText = '';
+        var sysText = '';
         var imgList = [];
+        var wantJson = false;
+
         try {
           var parsedBody = JSON.parse(rawBodyStr);
+          var sysObj = parsedBody.system_instruction || parsedBody.systemInstruction;
+          if (sysObj && sysObj.parts) {
+            for (var sp = 0; sp < sysObj.parts.length; sp++) {
+              if (sysObj.parts[sp] && sysObj.parts[sp].text) {
+                sysText += (sysText ? '\n' : '') + sysObj.parts[sp].text;
+              }
+            }
+          }
+          var genCfg = parsedBody.generationConfig || parsedBody.generation_config || {};
+          var mimeResp = (genCfg.responseMimeType || genCfg.response_mime_type || '').toLowerCase();
+          if (mimeResp.indexOf('json') >= 0) wantJson = true;
+
           var contents = (parsedBody && parsedBody.contents) || [];
           for (var c = 0; c < contents.length; c++) {
             var parts = (contents[c] && contents[c].parts) || [];
             for (var p = 0; p < parts.length; p++) {
               var pt = parts[p];
               if (pt.text) {
-                promptText += (promptText ? '\\n\\n' : '') + pt.text;
+                promptText += (promptText ? '\n\n' : '') + pt.text;
               }
               var inl = pt.inlineData || pt.inline_data;
               if (inl && inl.data) {
@@ -1556,30 +1763,43 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           }
         } catch(e) {}
 
-        // ═══ RUN UNIFIED 11 DAY-TRADER SKILLS + USER SMC/ICT ENGINE ON 'ANALYZE' ═══
-        try {
-          var unifiedTelemetry = await runUnified11SkillsAndUserFeatures(promptText);
-          if (unifiedTelemetry) {
-            promptText += unifiedTelemetry;
-            try {
-              var parsedForGem = JSON.parse(rawBodyStr);
-              if (parsedForGem && parsedForGem.contents && parsedForGem.contents[0] && parsedForGem.contents[0].parts) {
-                parsedForGem.contents[0].parts.push({ text: unifiedTelemetry });
-                rawBodyStr = JSON.stringify(parsedForGem);
-              }
-            } catch(e2) {}
-          }
-        } catch(eTel) {}
-        // ═══ END UNIFIED 11-SKILL FOREX ENRICHMENT ═══
+        var fullPrompt = (sysText ? (sysText + '\n\n') : '') + promptText;
+
+        if (imgList.length > 0 || fullPrompt.length > 120) {
+          try {
+            var unifiedTelemetry = await runUnified11SkillsAndUserFeatures(fullPrompt);
+            if (unifiedTelemetry) {
+              fullPrompt += unifiedTelemetry;
+            }
+          } catch(eTel) {}
+        }
+
+        var cleanGemParts = [{ text: fullPrompt }];
+        for (var imIdx = 0; imIdx < imgList.length; imIdx++) {
+          cleanGemParts.push({
+            inline_data: {
+              mime_type: imgList[imIdx].mime || 'image/jpeg',
+              data: imgList[imIdx].b64
+            }
+          });
+        }
+        var cleanGemBody = JSON.stringify({
+          contents: [{ parts: cleanGemParts }],
+          generationConfig: wantJson ? { temperature: 0.2, responseMimeType: 'application/json' } : { temperature: 0.2 }
+        });
+
+        var combinedDataUrl = await stitchImagesToDataUrl(imgList);
+        var stitchedB64 = '';
+        if (combinedDataUrl && combinedDataUrl.indexOf('base64,') >= 0) {
+          stitchedB64 = combinedDataUrl.split('base64,')[1] || '';
+        }
 
         var urlKeyMatch = /[?&]key=([^&]+)/.exec(urlStr);
-        var urlKey = urlKeyMatch ? cleanKey(decodeURIComponent(urlKeyMatch[1])) : '';
+        var urlKey = urlKeyMatch ? deobfKey(decodeURIComponent(urlKeyMatch[1])) : '';
         var siteNow = readSiteKeys();
         var candidateKeys = [];
 
-        if (urlKey && urlKey.length >= 16) {
-          candidateKeys.push(urlKey);
-        }
+        if (urlKey && urlKey.length >= 16) candidateKeys.push(urlKey);
         if (window.__lastWorkingForexKey && window.__lastWorkingForexKey.length >= 16 && candidateKeys.indexOf(window.__lastWorkingForexKey) < 0) {
           candidateKeys.push(window.__lastWorkingForexKey);
         }
@@ -1587,79 +1807,87 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           if (candidateKeys.indexOf(siteNow[s]) < 0) candidateKeys.push(siteNow[s]);
         }
         for (var a = 0; a < (window.__aniketAllKeys || []).length; a++) {
-          var ak = window.__aniketAllKeys[a];
-          if (ak && candidateKeys.indexOf(ak) < 0) candidateKeys.push(ak);
+          var ak = cleanKey(window.__aniketAllKeys[a]);
+          if (ak && ak.length >= 16 && candidateKeys.indexOf(ak) < 0) candidateKeys.push(ak);
         }
 
+        // 1. Primary: Native Dart HttpClient Multi-AI Bridge (100% immune to WebView CORS/CSP!)
+        if (candidateKeys.length > 0 && window.FlutterBridge) {
+          var dartOut = await callNativeDartAiFallback(candidateKeys, fullPrompt, imgList, stitchedB64, wantJson);
+          if (dartOut && dartOut.length > 2) {
+            return makeGeminiSuccessResponse(dartOut);
+          }
+        }
+
+        // 2. Fallback: Direct In-WebView JS Multi-AI Providers
         for (var idx = 0; idx < candidateKeys.length; idx++) {
           var k = candidateKeys[idx];
           if (!k) continue;
 
           if (k.indexOf('AIza') === 0) {
-            var gemResp = await callGeminiProvider(k, rawBodyStr, urlStr);
-            if (gemResp) {
+            var gemTxt = await callGeminiProvider(k, cleanGemBody, rawBodyStr);
+            if (gemTxt) {
               window.__lastWorkingForexKey = k;
-              return gemResp;
+              return makeGeminiSuccessResponse(gemTxt);
             }
           } else if (k.indexOf('gsk_') === 0) {
             var groqTxt = await callOpenAiVisionProvider(
               'https://api.groq.com/openai/v1/chat/completions',
               'https://api.groq.com/openai/v1/models',
               k,
-              ['qwen/qwen3.8-27b', 'meta-models/muse-spark-open', 'meta-llama/llama-4-scout-17b-16e-instruct', 'meta-llama/llama-4-maverick-17b-128e-instruct'],
-              promptText,
-              imgList,
+              ['meta-llama/llama-4-scout-17b-16e-instruct', 'meta-llama/llama-4-maverick-17b-128e-instruct', 'qwen/qwen3.8-27b', 'meta-models/muse-spark-open'],
+              fullPrompt,
+              combinedDataUrl,
               false,
               null
             );
             if (groqTxt) {
               window.__lastWorkingForexKey = k;
-              return new Response(JSON.stringify({
-                candidates: [{ content: { parts: [{ text: groqTxt }] }, finishReason: 'STOP' }]
-              }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+              return makeGeminiSuccessResponse(groqTxt);
             }
           } else if (k.indexOf('sk-or-') === 0) {
             var orTxt = await callOpenAiVisionProvider(
               'https://openrouter.ai/api/v1/chat/completions',
               'https://openrouter.ai/api/v1/models',
               k,
-              ['openrouter/free', 'google/gemma-3-27b-it:free', 'qwen/qwen2.5-vl-72b-instruct:free', 'qwen/qwen2.5-vl-32b-instruct:free', 'mistralai/mistral-small-3.1-24b-instruct:free'],
-              promptText,
-              imgList,
+              ['google/gemma-3-27b-it:free', 'qwen/qwen2.5-vl-72b-instruct:free', 'qwen/qwen2.5-vl-32b-instruct:free', 'mistralai/mistral-small-3.1-24b-instruct:free', 'openrouter/free'],
+              fullPrompt,
+              combinedDataUrl,
               true,
               { 'HTTP-Referer': 'https://aniketpro.ai', 'X-Title': 'ANIKET PRO AI' }
             );
             if (orTxt) {
               window.__lastWorkingForexKey = k;
-              return new Response(JSON.stringify({
-                candidates: [{ content: { parts: [{ text: orTxt }] }, finishReason: 'STOP' }]
-              }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+              return makeGeminiSuccessResponse(orTxt);
             }
           } else {
             var misTxt = await callOpenAiVisionProvider(
               'https://api.mistral.ai/v1/chat/completions',
               'https://api.mistral.ai/v1/models',
               k,
-              ['mistral-small-latest', 'ministral-14b-latest', 'ministral-8b-latest', 'mistral-medium-latest', 'mistral-large-latest'],
-              promptText,
-              imgList,
+              ['pixtral-12b-2409', 'pixtral-large-latest', 'mistral-small-latest', 'ministral-14b-latest', 'ministral-8b-latest', 'mistral-medium-latest'],
+              fullPrompt,
+              combinedDataUrl,
               false,
               null
             );
             if (misTxt) {
               window.__lastWorkingForexKey = k;
-              return new Response(JSON.stringify({
-                candidates: [{ content: { parts: [{ text: misTxt }] }, finishReason: 'STOP' }]
-              }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+              return makeGeminiSuccessResponse(misTxt);
             }
           }
         }
+
+        return new Response(JSON.stringify({
+          error: { code: 429, message: 'All configured API keys are currently busy or rate-limited. Please check your key in the Key tab.' }
+        }), { status: 429, headers: { 'Content-Type': 'application/json' } });
       }
       return origFetch(input, init);
     };
   } catch(e) {}
 })();
 ''';
+    return tpl.replaceFirst('__FLUTTER_KEYS_JSON__', flutterKeysJson);
   }
 
   void _initWebView() {
