@@ -419,17 +419,19 @@ class _GateScreenState extends State<GateScreen> {
             if (_logoTaps >= 7) { _logoTaps = 0; _masterDialog(); }
           },
           child: Container(
-            padding: const EdgeInsets.all(6),
+            padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: Colors.white.withOpacity(0.15),
               border: Border.all(color: Colors.white.withOpacity(0.5), width: 1.5),
             ),
-            child: Container(
-              padding: const EdgeInsets.all(10),
-              decoration: const BoxDecoration(
-                  shape: BoxShape.circle, color: Color(0xFF0E0C08)),
-              child: Image.asset('assets/logo.png', width: 56, height: 56),
+            child: ClipOval(
+              child: Image.asset(
+                'assets/logo.png',
+                width: 72,
+                height: 72,
+                fit: BoxFit.cover,
+              ),
             ),
           ),
         ),
@@ -1182,5 +1184,3 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
     );
   }
 }
-
-// ===== END OF FILE main.dart =====
