@@ -55,6 +55,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadPrefs();
+    _loadAppLogoDataUrl();
     _initWebView();
     _initScreenshotListener();
     _startBanWatch();
@@ -609,7 +610,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }
 
   Future<void> _syncMultiKeysToForexWeb() async {
-    if (!_siteReady) return;
     try {
       final p = await SharedPreferences.getInstance();
       await p.reload();
@@ -1539,24 +1539,90 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       }
     }
 
+    function stripChartEmojiNearHeader(rootEl) {
+      if (!rootEl) return;
+      var chartRe = /[\uD83D\uDCC8\uD83D\uDCC9\uD83D\uDCCA\uD83D\uDCB9📈📉📊💹]/g;
+      try {
+        var walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, null, false);
+        var node;
+        while ((node = walker.nextNode())) {
+          if (node.nodeValue && chartRe.test(node.nodeValue)) {
+            node.nodeValue = node.nodeValue.replace(chartRe, '');
+          }
+        }
+      } catch(e) {}
+      try {
+        var kids = rootEl.querySelectorAll('span, div, i, svg');
+        for (var k = 0; k < kids.length; k++) {
+          var kel = kids[k];
+          if (!kel || kel.id === 'aniket-single-header-logo') continue;
+          var kt = (kel.textContent || '').trim();
+          if (kt === '📈' || kt === '📉' || kt === '📊' || kt === '💹' || (kt.length <= 3 && chartRe.test(kt))) {
+            kel.textContent = '';
+            kel.style.setProperty('display', 'none', 'important');
+          }
+        }
+      } catch(e2) {}
+    }
+
     function applyCustomForexHeaderLogo() {
       try {
         var logoSrc = window.__aniketCustomLogoUrl || '';
         if (!logoSrc) return;
-        var els = document.querySelectorAll('h1, h2, h3, div, span');
+
+        // Find the header element containing 'ANIKET PRO AI'
+        var els = document.querySelectorAll('h1, h2, h3, header, div, span');
+        var targetEl = null;
         for (var i = 0; i < els.length; i++) {
           var el = els[i];
-          if (!el || el.getAttribute('data-logo-applied') === '1') continue;
-          if (el.children && el.children.length > 2) continue;
+          if (!el) continue;
+          var rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { top: 0 };
+          if (rect.top > 220) continue;
           var txt = (el.textContent || '').trim();
-          if (txt.indexOf('ANIKET PRO AI') >= 0 && txt.length < 32) {
-            el.setAttribute('data-logo-applied', '1');
-            var cleanTitle = txt.replace(/[📈📊💹]/g, '').trim();
-            el.innerHTML = '<img src="' + logoSrc + '" style="width:26px;height:26px;border-radius:6px;vertical-align:middle;margin-right:7px;object-fit:cover;border:1.2px solid #C6A962;box-shadow:0 2px 6px rgba(0,0,0,0.45);" /><span>' + cleanTitle + '</span>';
+          if (txt.indexOf('ANIKET PRO AI') >= 0 && txt.length < 36 && txt.indexOf('v1.0') < 0 && txt.indexOf('1.0') < 0) {
+            if (!el.children || el.children.length <= 2) {
+              targetEl = el;
+              break;
+            }
           }
         }
+
+        if (!targetEl) return;
+
+        // Always strip any 📈 / 📉 / 📊 emoji in targetEl AND its parent container!
+        stripChartEmojiNearHeader(targetEl);
+        if (targetEl.parentElement) {
+          stripChartEmojiNearHeader(targetEl.parentElement);
+        }
+
+        // If our single circular logo is already inside the page, just ensure no 📈 came back and return!
+        var existingLogo = document.getElementById('aniket-single-header-logo');
+        if (existingLogo) return;
+
+        targetEl.setAttribute('data-logo-applied', '1');
+        var cleanTitle = (targetEl.textContent || 'ANIKET PRO AI').replace(/[\uD83D\uDCC8\uD83D\uDCC9\uD83D\uDCCA\uD83D\uDCB9📈📉📊💹]/g, '').trim();
+        if (!cleanTitle) cleanTitle = 'ANIKET PRO AI';
+
+        targetEl.innerHTML = ''
+          + '<span id="aniket-single-header-logo" data-logo-applied="1" style="display:inline-flex;align-items:center;justify-content:center;position:relative;width:30px;height:30px;margin-right:8px;vertical-align:middle;">'
+          + '  <img src="' + logoSrc + '" style="width:30px;height:30px;border-radius:50%;object-fit:cover;border:1.8px solid #C6A962;box-shadow:0 2px 8px rgba(0,0,0,0.65);background:#10121E;" />'
+          + '</span>'
+          + '<span data-logo-applied="1" style="vertical-align:middle;">' + cleanTitle + '</span>';
       } catch(e) {}
     }
+
+    // Run immediately + watch DOM mutations so 📈 never flashes even for 1ms!
+    applyCustomForexHeaderLogo();
+    try {
+      if (!window.__aniketHeaderLogoObserver && window.MutationObserver) {
+        window.__aniketHeaderLogoObserver = new MutationObserver(function() {
+          applyCustomForexHeaderLogo();
+        });
+        if (document.documentElement) {
+          window.__aniketHeaderLogoObserver.observe(document.documentElement, { childList: true, subtree: true });
+        }
+      }
+    } catch(eObs) {}
 
     function cleanForexModeTabDom() {
       try {
@@ -1975,8 +2041,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       ..setNavigationDelegate(NavigationDelegate(
         onProgress: (p) {
           _progressN.value = p / 100;
-          if (p >= 40) {
-            try { _controller.runJavaScript(_netlifyHideJs()); } catch (_) {}
+          if (p >= 20) {
+            try {
+              _controller.runJavaScript(_netlifyHideJs());
+              _syncMultiKeysToForexWeb();
+            } catch (_) {}
           }
         },
         onPageStarted: (_) {
