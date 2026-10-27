@@ -593,6 +593,21 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   //  • Supports Gemini (`AIza...`), Groq (`gsk_...`), OpenRouter (`sk-or-...`),
   //    and Mistral keys with automatic failover when a key's quota is full!
   // ═══════════════════════════════════════════════════════════════════
+  String _cachedLogoDataUrl = '';
+
+  Future<String> _loadAppLogoDataUrl() async {
+    if (_cachedLogoDataUrl.isNotEmpty) return _cachedLogoDataUrl;
+    try {
+      final bd = await DefaultAssetBundle.of(context).load('assets/logo.png');
+      final bytes = bd.buffer.asUint8List(bd.offsetInBytes, bd.lengthInBytes);
+      if (bytes.isNotEmpty) {
+        _cachedLogoDataUrl = 'data:image/png;base64,${base64Encode(bytes)}';
+        return _cachedLogoDataUrl;
+      }
+    } catch (_) {}
+    return '';
+  }
+
   Future<void> _syncMultiKeysToForexWeb() async {
     if (!_siteReady) return;
     try {
@@ -603,7 +618,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           .where((e) => e.isNotEmpty)
           .toList();
       final keysJson = jsonEncode(savedKeys);
-      await _controller.runJavaScript(_buildForexMultiAiBridgeJs(keysJson));
+      final logoDataUrl = await _loadAppLogoDataUrl();
+      await _controller.runJavaScript(_buildForexMultiAiBridgeJs(keysJson, logoDataUrl: logoDataUrl));
     } catch (_) {}
   }
 
@@ -888,11 +904,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     return null;
   }
 
-  String _buildForexMultiAiBridgeJs(String flutterKeysJson) {
+  String _buildForexMultiAiBridgeJs(String flutterKeysJson, {String logoDataUrl = ''}) {
     final tpl = r'''
 (function(){
   try {
     var incomingKeys = __FLUTTER_KEYS_JSON__ || [];
+    var customLogoUrl = __FLUTTER_LOGO_URL__ || '';
+    if (customLogoUrl) {
+      window.__aniketCustomLogoUrl = customLogoUrl;
+    }
     if (!window.__aniketAllKeys) window.__aniketAllKeys = [];
 
     function cleanKey(k) {
@@ -1519,8 +1539,28 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       }
     }
 
+    function applyCustomForexHeaderLogo() {
+      try {
+        var logoSrc = window.__aniketCustomLogoUrl || '';
+        if (!logoSrc) return;
+        var els = document.querySelectorAll('h1, h2, h3, div, span');
+        for (var i = 0; i < els.length; i++) {
+          var el = els[i];
+          if (!el || el.getAttribute('data-logo-applied') === '1') continue;
+          if (el.children && el.children.length > 2) continue;
+          var txt = (el.textContent || '').trim();
+          if (txt.indexOf('ANIKET PRO AI') >= 0 && txt.length < 32) {
+            el.setAttribute('data-logo-applied', '1');
+            var cleanTitle = txt.replace(/[📈📊💹]/g, '').trim();
+            el.innerHTML = '<img src="' + logoSrc + '" style="width:26px;height:26px;border-radius:6px;vertical-align:middle;margin-right:7px;object-fit:cover;border:1.2px solid #C6A962;box-shadow:0 2px 6px rgba(0,0,0,0.45);" /><span>' + cleanTitle + '</span>';
+          }
+        }
+      } catch(e) {}
+    }
+
     function cleanForexModeTabDom() {
       try {
+        applyCustomForexHeaderLogo();
         var keepFormSiblings = ['Risk per Trade', 'Account Balance', 'Daily Loss Limit', 'Max Daily Trades', 'A+ Threshold', 'ATR Multiplier', 'Partial Profit'];
         hideFieldWithoutTouchingSiblings('Twelve Data Key', keepFormSiblings);
         hideFieldWithoutTouchingSiblings('Min Wait Between Analyze', keepFormSiblings);
@@ -1887,7 +1927,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   } catch(e) {}
 })();
 ''';
-    return tpl.replaceFirst('__FLUTTER_KEYS_JSON__', flutterKeysJson);
+    return tpl
+        .replaceFirst('__FLUTTER_KEYS_JSON__', flutterKeysJson)
+        .replaceFirst('__FLUTTER_LOGO_URL__', jsonEncode(logoDataUrl));
   }
 
   void _initWebView() {
