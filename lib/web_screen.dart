@@ -609,15 +609,112 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     return '';
   }
 
+  // Tracks keys that recently hit quota limit so fresh keys are tried first
+  final Map<String, DateTime> _keyCooldownUntil = {};
+
+  String _unwrapApiKey(String raw) {
+    var s = raw.replaceAll(RegExp(r'^Bearer\s+', caseSensitive: false), '').replaceAll('"', '').replaceAll("'", '').trim();
+    for (int i = 0; i < 4; i++) {
+      if (s.startsWith('AIza') || s.startsWith('gsk_') || s.startsWith('sk-or-')) {
+        return s;
+      }
+      try {
+        final decodedBytes = base64Decode(s);
+        var decodedStr = utf8.decode(decodedBytes, allowMalformed: false).trim();
+        try {
+          decodedStr = Uri.decodeComponent(decodedStr).trim();
+        } catch (_) {}
+        if (decodedStr.length >= 16 &&
+            !decodedStr.contains(' ') &&
+            RegExp(r'^[\x21-\x7E]+$').hasMatch(decodedStr)) {
+          s = decodedStr;
+          continue;
+        }
+      } catch (_) {}
+      break;
+    }
+    return s;
+  }
+
+  // Quality tier rank: 1 = Gemini (Best native multi-chart vision), 2 = Groq (Llama-4 Maverick/Scout),
+  // 3 = Mistral (Pixtral-Large/12B), 4 = OpenRouter (Qwen-VL-72B/Gemma-3)
+  int _keyQualityTier(String k) {
+    if (k.startsWith('AIza')) return 1;
+    if (k.startsWith('gsk_')) return 2;
+    if (!k.startsWith('sk-or-')) return 3; // Mistral
+    return 4; // OpenRouter
+  }
+
+  String _providerLabelForKey(String k) {
+    if (k.startsWith('AIza')) return 'Gemini';
+    if (k.startsWith('gsk_')) return 'Groq';
+    if (k.startsWith('sk-or-')) return 'OpenRouter';
+    return 'Mistral';
+  }
+
+  List<String> _sortKeysByBestAnalysisQuality(List<String> keys) {
+    final now = DateTime.now();
+    final active = <String>[];
+    final cooledDown = <String>[];
+
+    for (final k in keys) {
+      final until = _keyCooldownUntil[k];
+      if (until != null && until.isAfter(now)) {
+        cooledDown.add(k);
+      } else {
+        active.add(k);
+      }
+    }
+
+    active.sort((a, b) => _keyQualityTier(a).compareTo(_keyQualityTier(b)));
+    cooledDown.sort((a, b) => _keyQualityTier(a).compareTo(_keyQualityTier(b)));
+    return [...active, ...cooledDown];
+  }
+
+  // Detects if an AI response was cut off mid-way (e.g., 60% done before hitting token/quota limit)
+  bool _isPartialOrTruncatedResponse(String txt, String finishReason, bool wantJson) {
+    final clean = txt.trim();
+    if (clean.isEmpty) return true;
+    final fr = finishReason.toUpperCase();
+    if (fr.contains('LENGTH') || fr.contains('MAX_TOKENS') || fr.contains('TOKEN')) {
+      return true;
+    }
+    if (wantJson || clean.startsWith(String.fromCharCode(123)) || clean.contains('```json')) {
+      final openBraces = RegExp(r"\x7B").allMatches(clean).length;
+      final closeBraces = RegExp(r"\x7D").allMatches(clean).length;
+      if (openBraces > 0 && openBraces > closeBraces) {
+        return true; // JSON was cut off mid-way!
+      }
+    }
+    // Check if a long analysis text abruptly ended mid-sentence without closing punctuation
+    if (clean.length >= 80 && !wantJson) {
+      final lastChar = clean[clean.length - 1];
+      if (lastChar == ',' || lastChar == ':' || lastChar == '-' || lastChar == String.fromCharCode(40) || lastChar == '*') {
+        return true;
+      }
+    }
+    return false;
+  }
+
   Future<void> _syncMultiKeysToForexWeb() async {
     try {
       final p = await SharedPreferences.getInstance();
       await p.reload();
-      final savedKeys = (p.getStringList('bin_keys') ?? [])
-          .map((e) => e.trim())
-          .where((e) => e.isNotEmpty)
-          .toList();
-      final keysJson = jsonEncode(savedKeys);
+      final rawSaved = p.getStringList('bin_keys') ?? [];
+      final savedKeys = <String>[];
+      bool repairedAny = false;
+      for (final e in rawSaved) {
+        final clean = _unwrapApiKey(e);
+        if (clean != e.trim()) repairedAny = true;
+        if (clean.length >= 16 && !savedKeys.contains(clean)) {
+          savedKeys.add(clean);
+        }
+      }
+      final sortedSaved = _sortKeysByBestAnalysisQuality(savedKeys);
+      if (repairedAny && sortedSaved.isNotEmpty) {
+        await p.setStringList('bin_keys', sortedSaved);
+      }
+      final keysJson = jsonEncode(sortedSaved);
       final logoDataUrl = await _loadAppLogoDataUrl();
       await _controller.runJavaScript(_buildForexMultiAiBridgeJs(keysJson, logoDataUrl: logoDataUrl));
     } catch (_) {}
@@ -628,107 +725,188 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     try {
       final map = jsonDecode(jsonPayload) as Map<String, dynamic>;
       reqId = (map['reqId'] ?? '').toString();
-      final rawKeys = (map['keys'] as List?)?.map((e) => e.toString().trim()).where((e) => e.length >= 16).toList() ?? <String>[];
+      final rawKeys = (map['keys'] as List?)?.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList() ?? <String>[];
       final prompt = (map['prompt'] ?? '').toString();
       final rawImages = (map['images'] as List?) ?? const [];
       final stitchedB64 = (map['stitchedB64'] ?? '').toString();
       final wantJson = map['wantJson'] == true;
 
       final p = await SharedPreferences.getInstance();
-      final spKeys = (p.getStringList('bin_keys') ?? []).map((e) => e.trim()).where((e) => e.length >= 16);
-      final candidateKeys = <String>[];
+      final spKeys = (p.getStringList('bin_keys') ?? []).map((e) => e.trim()).where((e) => e.isNotEmpty);
+      final unsortedKeys = <String>[];
       for (final k in [...rawKeys, ...spKeys]) {
-        final clean = k.replaceAll(RegExp(r'^Bearer\s+', caseSensitive: false), '').replaceAll('"', '').replaceAll("'", '').trim();
-        if (clean.length >= 16 && !candidateKeys.contains(clean)) {
-          candidateKeys.add(clean);
+        final clean = _unwrapApiKey(k);
+        if (clean.length >= 16 && !unsortedKeys.contains(clean)) {
+          unsortedKeys.add(clean);
         }
       }
+
+      // 1. Sort all candidate keys so the highest-quality analysis key (Gemini -> Groq -> Mistral -> OpenRouter) runs FIRST!
+      final candidateKeys = _sortKeysByBestAnalysisQuality(unsortedKeys);
 
       final images = <Map<String, String>>[];
       for (final item in rawImages) {
         if (item is Map) {
           final b64 = (item['b64'] ?? '').toString();
           final mime = (item['mime'] ?? 'image/jpeg').toString();
-          if (b64.isNotEmpty) {
+          if (b64.length >= 1500) {
             images.add({'mime': mime, 'b64': b64});
           }
         }
       }
 
-      // Single stitched composite image for OpenAI-compatible vision providers (Groq, OpenRouter, Mistral)
-      final singleComposite = stitchedB64.isNotEmpty
+      final singleComposite = (stitchedB64.length >= 1500)
           ? <Map<String, String>>[{'mime': 'image/jpeg', 'b64': stitchedB64}]
           : (images.isNotEmpty ? <Map<String, String>>[images.first] : <Map<String, String>>[]);
 
       String? finalOut;
-      String usedProvider = '';
+      String? partial60Out;
+      String partialProvider = '';
+      final usedProviders = <String>[];
+
       for (final key in candidateKeys) {
+        final provName = _providerLabelForKey(key);
+
+        // If a previous key already completed 60% of the analysis before its quota/token limit ran out,
+        // build a continuation relay prompt so the next key finishes the remaining 40% seamlessly!
+        final activePrompt = (partial60Out != null && partial60Out.isNotEmpty)
+            ? '$prompt\n\n'
+              '══════════════════════════════════════════════════════════════════\n'
+              '[PARTIAL ANALYSIS ALREADY COMPLETED BY PREVIOUS KEY ($partialProvider — 60% DONE)]:\n'
+              '$partial60Out\n'
+              '══════════════════════════════════════════════════════════════════\n'
+              'CONTINUATION INSTRUCTION: The previous API key ran out of quota/tokens after completing the partial analysis above. '
+              'Using the partial analysis above (60%) and the chart/market data, complete the remaining 40% and return the FULL, '
+              '100% complete finalized output (in the exact format/JSON requested by the main prompt) without losing any findings from the first part!'
+            : prompt;
+
+        Map<String, String>? callRes;
         if (key.startsWith('AIza')) {
-          finalOut = await _forexCallGeminiNative(key, prompt, images, wantJson);
-          if (finalOut != null) usedProvider = 'Gemini';
+          callRes = await _forexCallGeminiNative(key, activePrompt, images, wantJson);
         } else if (key.startsWith('gsk_')) {
-          finalOut = await _forexCallOpenAiCompatibleNative(
+          callRes = await _forexCallOpenAiCompatibleNative(
             endpoint: 'https://api.groq.com/openai/v1/chat/completions',
             modelsUrl: 'https://api.groq.com/openai/v1/models',
             key: key,
-            defaultModels: const [
-              'meta-llama/llama-4-scout-17b-16e-instruct',
+            visionModels: const [
               'meta-llama/llama-4-maverick-17b-128e-instruct',
-              'qwen/qwen3.8-27b',
-              'meta-models/muse-spark-open',
+              'meta-llama/llama-4-scout-17b-16e-instruct',
+              'llama-3.2-90b-vision-preview',
+              'llama-3.2-11b-vision-preview',
             ],
-            prompt: prompt,
+            textFallbackModels: const [
+              'llama-3.3-70b-versatile',
+              'llama-3.1-8b-instant',
+              'qwen/qwen3-32b',
+              'deepseek-r1-distill-llama-70b',
+            ],
+            prompt: activePrompt,
             images: singleComposite,
             requireFreeSuffix: false,
+            wantJson: wantJson,
           );
-          if (finalOut != null) usedProvider = 'Groq';
         } else if (key.startsWith('sk-or-')) {
-          finalOut = await _forexCallOpenAiCompatibleNative(
+          callRes = await _forexCallOpenAiCompatibleNative(
             endpoint: 'https://openrouter.ai/api/v1/chat/completions',
             modelsUrl: 'https://openrouter.ai/api/v1/models',
             key: key,
-            defaultModels: const [
-              'google/gemma-3-27b-it:free',
+            visionModels: const [
               'qwen/qwen2.5-vl-72b-instruct:free',
+              'google/gemma-3-27b-it:free',
               'qwen/qwen2.5-vl-32b-instruct:free',
               'mistralai/mistral-small-3.1-24b-instruct:free',
+              'meta-llama/llama-3.2-11b-vision-instruct:free',
               'openrouter/free',
             ],
-            prompt: prompt,
+            textFallbackModels: const [
+              'openrouter/free',
+              'meta-llama/llama-3.3-70b-instruct:free',
+              'google/gemma-3-27b-it:free',
+              'mistralai/mistral-small-3.1-24b-instruct:free',
+            ],
+            prompt: activePrompt,
             images: singleComposite,
             requireFreeSuffix: true,
+            wantJson: wantJson,
             extraHeaders: const {
               'HTTP-Referer': 'https://aniketpro.ai',
               'X-Title': 'ANIKET PRO AI',
             },
           );
-          if (finalOut != null) usedProvider = 'OpenRouter';
         } else {
-          finalOut = await _forexCallOpenAiCompatibleNative(
+          callRes = await _forexCallOpenAiCompatibleNative(
             endpoint: 'https://api.mistral.ai/v1/chat/completions',
             modelsUrl: 'https://api.mistral.ai/v1/models',
             key: key,
-            defaultModels: const [
-              'pixtral-12b-2409',
+            visionModels: const [
               'pixtral-large-latest',
+              'pixtral-12b-2409',
               'mistral-small-latest',
-              'ministral-14b-latest',
+              'ministral-8b-latest',
+              'ministral-3b-latest',
+            ],
+            textFallbackModels: const [
+              'mistral-small-latest',
+              'open-mistral-nemo',
               'ministral-8b-latest',
               'mistral-medium-latest',
             ],
-            prompt: prompt,
+            prompt: activePrompt,
             images: singleComposite,
             requireFreeSuffix: false,
+            wantJson: wantJson,
           );
-          if (finalOut != null) usedProvider = 'Mistral';
         }
-        if (finalOut != null && finalOut.trim().isNotEmpty) {
-          break;
+
+        final outText = (callRes?['text'] ?? '').trim();
+        final finishReason = (callRes?['finishReason'] ?? 'STOP').trim();
+
+        if (outText.isEmpty) {
+          // This key's quota is exhausted or failed -> put on 90s cooldown and move to next key!
+          _keyCooldownUntil[key] = DateTime.now().add(const Duration(seconds: 90));
+          continue;
         }
+
+        // Check if this key only finished ~60% (truncated/cut off by token/quota limit)
+        if (_isPartialOrTruncatedResponse(outText, finishReason, wantJson)) {
+          _keyCooldownUntil[key] = DateTime.now().add(const Duration(seconds: 90));
+          if (partial60Out == null) {
+            partial60Out = outText;
+            partialProvider = provName;
+            usedProviders.add('$provName 60%');
+          } else {
+            // Merge if plain text, or keep the fuller continuation
+            partial60Out = '$partial60Out\n$outText';
+            if (!usedProviders.contains(provName)) usedProviders.add(provName);
+          }
+          // Continue loop so the NEXT key completes the remaining 40%!
+          continue;
+        }
+
+        // Complete 100% response obtained!
+        if (partial60Out != null && partial60Out.isNotEmpty) {
+          usedProviders.add('$provName 40%');
+          // If the continuation returned a full JSON object or full report, use it;
+          // if plain text continuation, combine seamlessly.
+          if (outText.startsWith(String.fromCharCode(123)) || outText.contains('```json') || outText.length >= partial60Out.length) {
+            finalOut = outText;
+          } else {
+            finalOut = '$partial60Out\n\n$outText';
+          }
+        } else {
+          usedProviders.add(provName);
+          finalOut = outText;
+        }
+        break;
       }
 
-      if (finalOut != null && finalOut.trim().isNotEmpty && usedProvider.isNotEmpty) {
-        _toast('⚡ Forex Analysis Ready ($usedProvider + 12 Pro Skills)');
+      // If all remaining keys were exhausted after a 60% partial output, still return the partial output rather than failing
+      if ((finalOut == null || finalOut.isEmpty) && partial60Out != null && partial60Out.isNotEmpty) {
+        finalOut = partial60Out;
+      }
+
+      if (finalOut != null && finalOut.trim().isNotEmpty && usedProviders.isNotEmpty && prompt.length > 120) {
+        _toast('⚡ Analysis Done (${usedProviders.join(" → ")} + 12 Pro Skills)');
       }
 
       if (reqId.isNotEmpty) {
@@ -744,13 +922,13 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
   }
 
-  Future<String?> _forexCallGeminiNative(
+  Future<Map<String, String>?> _forexCallGeminiNative(
     String key,
     String prompt,
     List<Map<String, String>> images,
     bool wantJson,
   ) async {
-    const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+    const models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash-lite', 'gemini-1.5-flash'];
     for (final m in models) {
       HttpClient? client;
       try {
@@ -788,7 +966,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           final root = jsonDecode(txt) as Map<String, dynamic>;
           final cands = root['candidates'] as List?;
           if (cands != null && cands.isNotEmpty) {
-            final content = (cands.first as Map)['content'] as Map?;
+            final cand0 = cands.first as Map;
+            final finishReason = (cand0['finishReason'] ?? 'STOP').toString();
+            final content = cand0['content'] as Map?;
             final rParts = content?['parts'] as List?;
             if (rParts != null) {
               final sb = StringBuffer();
@@ -798,7 +978,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                 }
               }
               final resStr = sb.toString().trim();
-              if (resStr.isNotEmpty) return resStr;
+              if (resStr.isNotEmpty) {
+                return {'text': resStr, 'finishReason': finishReason};
+              }
             }
           }
         }
@@ -810,23 +992,27 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     return null;
   }
 
-  Future<String?> _forexCallOpenAiCompatibleNative({
+  Future<Map<String, String>?> _forexCallOpenAiCompatibleNative({
     required String endpoint,
     required String modelsUrl,
     required String key,
-    required List<String> defaultModels,
+    required List<String> visionModels,
+    required List<String> textFallbackModels,
     required String prompt,
     required List<Map<String, String>> images,
     required bool requireFreeSuffix,
+    required bool wantJson,
     Map<String, String>? extraHeaders,
   }) async {
-    final models = List<String>.from(defaultModels);
+    final vModels = List<String>.from(visionModels);
+    final tModels = List<String>.from(textFallbackModels);
+
     HttpClient? discClient;
     try {
-      discClient = HttpClient()..connectionTimeout = const Duration(seconds: 5);
-      final req = await discClient.getUrl(Uri.parse(modelsUrl)).timeout(const Duration(seconds: 5));
+      discClient = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+      final req = await discClient.getUrl(Uri.parse(modelsUrl)).timeout(const Duration(seconds: 4));
       req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $key');
-      final resp = await req.close().timeout(const Duration(seconds: 5));
+      final resp = await req.close().timeout(const Duration(seconds: 4));
       if (resp.statusCode == 200) {
         final txt = await resp.transform(utf8.decoder).join();
         final root = jsonDecode(txt) as Map<String, dynamic>;
@@ -838,10 +1024,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
               if (id.isEmpty) continue;
               if (requireFreeSuffix && !id.endsWith(':free')) continue;
               final low = id.toLowerCase();
-              if (low.contains('llama-4') || low.contains('qwen') || low.contains('vl') ||
-                  low.contains('vision') || low.contains('gemma-3') || low.contains('pixtral') ||
-                  low.contains('ministral')) {
-                if (!models.contains(id)) models.add(id);
+              if (low.contains('llama-4') || low.contains('vl') || low.contains('vision') ||
+                  low.contains('gemma-3') || low.contains('pixtral')) {
+                if (!vModels.contains(id)) vModels.add(id);
+              } else if (low.contains('llama-3.3') || low.contains('mistral-small') || low.contains('qwen')) {
+                if (!tModels.contains(id)) tModels.add(id);
               }
             }
           }
@@ -852,54 +1039,108 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       discClient?.close(force: true);
     }
 
-    for (final model in models) {
-      HttpClient? client;
-      try {
-        client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
-        final req = await client.postUrl(Uri.parse(endpoint)).timeout(const Duration(seconds: 8));
-        req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
-        req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $key');
-        if (extraHeaders != null) {
-          extraHeaders.forEach((k, v) => req.headers.set(k, v));
+    Map<String, String>? partialCandidate;
+
+    if (images.isNotEmpty) {
+      for (final model in vModels) {
+        final res = await _sendSingleOpenAiRequest(
+          endpoint: endpoint,
+          key: key,
+          model: model,
+          prompt: prompt,
+          images: images,
+          extraHeaders: extraHeaders,
+        );
+        if (res != null && (res['text'] ?? '').isNotEmpty) {
+          if (!_isPartialOrTruncatedResponse(res['text']!, res['finishReason'] ?? 'STOP', wantJson)) {
+            return res;
+          }
+          partialCandidate ??= res;
         }
+      }
+    }
 
-        final contentList = <Map<String, dynamic>>[
-          {'type': 'text', 'text': prompt},
-          for (final img in images)
-            {
-              'type': 'image_url',
-              'image_url': {
-                'url': 'data:${img['mime'] ?? 'image/jpeg'};base64,${img['b64'] ?? ''}'
-              }
-            }
-        ];
+    final fallbackPool = <String>[...tModels, ...vModels];
+    for (final model in fallbackPool) {
+      final contPrompt = (partialCandidate != null)
+          ? '$prompt\n\n[PARTIAL ANALYSIS SO FAR (60%)]:\n${partialCandidate['text']}\n\nComplete the remaining 40% and output the full finalized response:'
+          : prompt;
+      final res = await _sendSingleOpenAiRequest(
+        endpoint: endpoint,
+        key: key,
+        model: model,
+        prompt: contPrompt,
+        images: const [],
+        extraHeaders: extraHeaders,
+      );
+      if (res != null && (res['text'] ?? '').isNotEmpty) {
+        return res;
+      }
+    }
 
-        final body = jsonEncode({
-          'model': model,
-          'temperature': 0.2,
-          'max_tokens': 4096,
-          'messages': [
-            {'role': 'user', 'content': contentList}
-          ],
-        });
+    return partialCandidate;
+  }
 
-        req.add(utf8.encode(body));
-        final resp = await req.close().timeout(const Duration(seconds: 24));
-        if (resp.statusCode == 200) {
-          final txt = await resp.transform(utf8.decoder).join();
-          final root = jsonDecode(txt) as Map<String, dynamic>;
-          final choices = root['choices'] as List?;
-          if (choices != null && choices.isNotEmpty) {
-            final msg = (choices.first as Map)['message'] as Map?;
-            final rawContent = (msg?['content'] ?? '').toString();
-            final cleaned = rawContent.replaceAll(RegExp(r'<think>[\s\S]*?</think>', caseSensitive: false), '').trim();
-            if (cleaned.isNotEmpty) return cleaned;
+  Future<Map<String, String>?> _sendSingleOpenAiRequest({
+    required String endpoint,
+    required String key,
+    required String model,
+    required String prompt,
+    required List<Map<String, String>> images,
+    Map<String, String>? extraHeaders,
+  }) async {
+    HttpClient? client;
+    try {
+      client = HttpClient()..connectionTimeout = const Duration(seconds: 7);
+      final req = await client.postUrl(Uri.parse(endpoint)).timeout(const Duration(seconds: 7));
+      req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $key');
+      if (extraHeaders != null) {
+        extraHeaders.forEach((k, v) => req.headers.set(k, v));
+      }
+
+      final Object messageContent = images.isEmpty
+          ? prompt
+          : <Map<String, dynamic>>[
+              {'type': 'text', 'text': prompt},
+              for (final img in images)
+                {
+                  'type': 'image_url',
+                  'image_url': {
+                    'url': 'data:${img['mime'] ?? 'image/jpeg'};base64,${img['b64'] ?? ''}'
+                  }
+                }
+            ];
+
+      final body = jsonEncode({
+        'model': model,
+        'temperature': 0.2,
+        'max_tokens': 4096,
+        'messages': [
+          {'role': 'user', 'content': messageContent}
+        ],
+      });
+
+      req.add(utf8.encode(body));
+      final resp = await req.close().timeout(const Duration(seconds: 22));
+      if (resp.statusCode == 200) {
+        final txt = await resp.transform(utf8.decoder).join();
+        final root = jsonDecode(txt) as Map<String, dynamic>;
+        final choices = root['choices'] as List?;
+        if (choices != null && choices.isNotEmpty) {
+          final ch0 = choices.first as Map;
+          final finishReason = (ch0['finish_reason'] ?? 'stop').toString();
+          final msg = ch0['message'] as Map?;
+          final rawContent = (msg?['content'] ?? '').toString();
+          final cleaned = rawContent.replaceAll(RegExp(r'<think>[\s\S]*?</think>', caseSensitive: false), '').trim();
+          if (cleaned.isNotEmpty) {
+            return {'text': cleaned, 'finishReason': finishReason};
           }
         }
-      } catch (_) {
-      } finally {
-        client?.close(force: true);
       }
+    } catch (_) {
+    } finally {
+      client?.close(force: true);
     }
     return null;
   }
@@ -922,19 +1163,28 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
     function deobfKey(s) {
       if (!s || typeof s !== 'string') return '';
-      try {
-        var d = decodeURIComponent(atob(s));
-        if (d && d.length >= 16 && d.indexOf(' ') < 0) return cleanKey(d);
-      } catch(e) {}
-      return cleanKey(s);
+      var cur = cleanKey(s);
+      for (var step = 0; step < 4; step++) {
+        if (cur.indexOf('AIza') === 0 || cur.indexOf('gsk_') === 0 || cur.indexOf('sk-or-') === 0) {
+          return cur;
+        }
+        try {
+          var dec = atob(cur);
+          try { dec = decodeURIComponent(dec); } catch(eU) {}
+          dec = cleanKey(dec);
+          if (dec && dec.length >= 16 && dec.indexOf(' ') < 0 && /^[\x21-\x7E]+$/.test(dec)) {
+            cur = dec;
+            continue;
+          }
+        } catch(e) {}
+        break;
+      }
+      return cur;
     }
 
+    // Store plain-text keys in localStorage so the Forex site and Doctor report read them directly without Base64 corruption!
     function obfKey(s) {
-      try {
-        return btoa(encodeURIComponent(cleanKey(s)));
-      } catch(e) {
-        return cleanKey(s);
-      }
+      return deobfKey(s);
     }
 
     function readSiteKeys() {
@@ -983,7 +1233,31 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
     window.__aniketAllKeys = merged;
 
-    if (siteKeys.length === 0 && merged.length > 0) {
+    // Immediately repair localStorage if it had Base64-encoded keys (e.g. Z3NrXz...) or if empty
+    if (merged.length > 0) {
+      var rawGKeys = localStorage.getItem('gemini_keys') || '';
+      var rawG1 = localStorage.getItem('gemini_key_v1') || '';
+      var needsRepair = (siteKeys.length === 0) ||
+          (rawGKeys.indexOf('Z3Nr') >= 0 || rawGKeys.indexOf('QUl6') >= 0 || rawGKeys.indexOf('c2st') >= 0) ||
+          (rawG1.indexOf('Z3Nr') >= 0 || rawG1.indexOf('QUl6') >= 0 || rawG1.indexOf('c2st') >= 0);
+      if (needsRepair) {
+        localStorage.setItem('gemini_keys', JSON.stringify(merged));
+        localStorage.setItem('gemini_key_v1', merged[0]);
+        if (!localStorage.getItem('gemini_key_idx')) {
+          localStorage.setItem('gemini_key_idx', '0');
+        }
+        try {
+          if (typeof window.updateKeyStatus === 'function') window.updateKeyStatus();
+          if (typeof window.renderKeySlots === 'function') window.renderKeySlots();
+        } catch(e) {}
+      }
+      if (window.FlutterBridge) {
+        try {
+          window.FlutterBridge.postMessage('SYNC_KEYS:' + JSON.stringify(merged));
+        } catch(e) {}
+      }
+    }
+    if (false) {
       var encodedArr = merged.map(obfKey);
       localStorage.setItem('gemini_keys', JSON.stringify(encodedArr));
       localStorage.setItem('gemini_key_v1', encodedArr[0]);
@@ -1741,13 +2015,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       for (var i = 0; i < models.length; i++) {
         var model = models[i];
         try {
-          var userContent = [{ type: 'text', text: promptText }];
-          if (combinedDataUrl) {
-            userContent.push({
-              type: 'image_url',
-              image_url: { url: combinedDataUrl }
-            });
-          }
+          var userContent = combinedDataUrl
+            ? [{ type: 'text', text: promptText }, { type: 'image_url', image_url: { url: combinedDataUrl } }]
+            : promptText;
           var headers = {
             'Content-Type': 'application/json',
             'Authorization': 'Bearer ' + key
@@ -1894,7 +2164,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           generationConfig: wantJson ? { temperature: 0.2, responseMimeType: 'application/json' } : { temperature: 0.2 }
         });
 
-        var combinedDataUrl = await stitchImagesToDataUrl(imgList);
+        var realImgs = imgList.filter(function(im){ return im && im.b64 && im.b64.length >= 1500; });
+        var combinedDataUrl = await stitchImagesToDataUrl(realImgs);
         var stitchedB64 = '';
         if (combinedDataUrl && combinedDataUrl.indexOf('base64,') >= 0) {
           stitchedB64 = combinedDataUrl.split('base64,')[1] || '';
@@ -1913,9 +2184,16 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           if (candidateKeys.indexOf(siteNow[s]) < 0) candidateKeys.push(siteNow[s]);
         }
         for (var a = 0; a < (window.__aniketAllKeys || []).length; a++) {
-          var ak = cleanKey(window.__aniketAllKeys[a]);
+          var ak = deobfKey(window.__aniketAllKeys[a]);
           if (ak && ak.length >= 16 && candidateKeys.indexOf(ak) < 0) candidateKeys.push(ak);
         }
+        function jsKeyTier(k) {
+          if (k.indexOf('AIza') === 0) return 1;
+          if (k.indexOf('gsk_') === 0) return 2;
+          if (k.indexOf('sk-or-') < 0) return 3;
+          return 4;
+        }
+        candidateKeys.sort(function(a, b) { return jsKeyTier(a) - jsKeyTier(b); });
 
         // 1. Primary: Native Dart HttpClient Multi-AI Bridge (100% immune to WebView CORS/CSP!)
         if (candidateKeys.length > 0 && window.FlutterBridge) {
@@ -1941,7 +2219,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
               'https://api.groq.com/openai/v1/chat/completions',
               'https://api.groq.com/openai/v1/models',
               k,
-              ['meta-llama/llama-4-scout-17b-16e-instruct', 'meta-llama/llama-4-maverick-17b-128e-instruct', 'qwen/qwen3.8-27b', 'meta-models/muse-spark-open'],
+              ['meta-llama/llama-4-scout-17b-16e-instruct', 'meta-llama/llama-4-maverick-17b-128e-instruct', 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
               fullPrompt,
               combinedDataUrl,
               false,
@@ -2027,8 +2305,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           try {
             final rawList = jsonDecode(m.substring(10)) as List;
             final cleaned = rawList
-                .map((e) => e.toString().trim())
-                .where((e) => e.isNotEmpty)
+                .map((e) => _unwrapApiKey(e.toString()))
+                .where((e) => e.length >= 16)
                 .toSet()
                 .toList();
             if (cleaned.isNotEmpty) {
