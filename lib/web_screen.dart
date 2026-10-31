@@ -4430,7 +4430,8 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
           try {
             final req = await client.postUrl(Uri.parse(endpoint));
             req.headers.set('Content-Type', 'application/json');
-            req.headers.set('Authorization', 'Bearer ${_cleanProviderAuthToken(k)}');
+            final cleanTok = k.replaceFirst(RegExp(r'^(mstrl_|mistral_|mistral:|groq_|groq:|openrouter_|or_)', caseSensitive: false), '').trim();
+            req.headers.set('Authorization', 'Bearer $cleanTok');
             req.add(utf8.encode(jsonEncode({
               'model': model,
               'messages': [
