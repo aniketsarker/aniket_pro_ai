@@ -611,53 +611,89 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
   // Tracks keys that recently hit quota limit so fresh keys are tried first
   final Map<String, DateTime> _keyCooldownUntil = {};
+  String _lastWorkingForexKey = '';
 
   String _unwrapApiKey(String raw) {
-    var s = raw.replaceAll(RegExp(r'^Bearer\s+', caseSensitive: false), '').replaceAll('"', '').replaceAll("'", '').trim();
+    var s = raw
+        .replaceAll(RegExp(r'^Bearer\s+', caseSensitive: false), '')
+        .replaceAll('"', '')
+        .replaceAll("'", '')
+        .trim();
     for (int i = 0; i < 4; i++) {
-      if (s.startsWith('AIza') || s.startsWith('gsk_') || s.startsWith('sk-or-')) {
+      final low = s.toLowerCase();
+      if (s.startsWith('AIza') ||
+          s.startsWith('gsk_') ||
+          s.startsWith('sk-or-') ||
+          low.startsWith('mstrl_') ||
+          low.startsWith('mistral_') ||
+          low.startsWith('mistral:')) {
         return s;
       }
-      try {
-        final decodedBytes = base64Decode(s);
-        var decodedStr = utf8.decode(decodedBytes, allowMalformed: false).trim();
+      // Only decode Base64 if it actually has a known Base64 key prefix:
+      // QUl6 = AIza, Z3Nr = gsk_, c2st = sk-, bXN0cm = mstrl
+      if (s.startsWith('QUl6') ||
+          s.startsWith('Z3Nr') ||
+          s.startsWith('c2st') ||
+          s.startsWith('bXN0cm')) {
         try {
-          decodedStr = Uri.decodeComponent(decodedStr).trim();
+          final decodedBytes = base64Decode(s);
+          var decodedStr = utf8.decode(decodedBytes, allowMalformed: false).trim();
+          try {
+            decodedStr = Uri.decodeComponent(decodedStr).trim();
+          } catch (_) {}
+          if (decodedStr.length >= 16 &&
+              !decodedStr.contains(' ') &&
+              RegExp(r'^[\x21-\x7E]+$').hasMatch(decodedStr)) {
+            s = decodedStr;
+            continue;
+          }
         } catch (_) {}
-        if (decodedStr.length >= 16 &&
-            !decodedStr.contains(' ') &&
-            RegExp(r'^[\x21-\x7E]+$').hasMatch(decodedStr)) {
-          s = decodedStr;
-          continue;
-        }
-      } catch (_) {}
+      }
       break;
     }
     return s;
   }
 
-  // Quality tier rank: 1 = Gemini (Best native multi-chart vision), 2 = Groq (Llama-4 Maverick/Scout),
-  // 3 = Mistral (Pixtral-Large/12B), 4 = OpenRouter (Qwen-VL-72B/Gemma-3)
+  /// Strips website-specific tag prefixes (like `mstrl_`) before calling the real API server
+  String _cleanProviderAuthToken(String rawKey) {
+    final s = _unwrapApiKey(rawKey);
+    return s
+        .replaceFirst(
+          RegExp(r'^(mstrl_|mistral_|mistral:|groq_|groq:|openrouter_|or_)', caseSensitive: false),
+          '',
+        )
+        .trim();
+  }
+
+  // Quality tier rank: prioritize fast non-exhausted providers (Groq Llama-4 Vision, Mistral Pixtral, Gemini, OpenRouter)
   int _keyQualityTier(String k) {
-    if (k.startsWith('AIza')) return 1;
-    if (k.startsWith('gsk_')) return 2;
-    if (!k.startsWith('sk-or-')) return 3; // Mistral
+    final s = _unwrapApiKey(k);
+    final low = s.toLowerCase();
+    if (s == _lastWorkingForexKey && s.isNotEmpty) return 0;
+    if (s.startsWith('gsk_')) return 1;
+    if (low.startsWith('mstrl_') || low.startsWith('mistral_') || (!s.startsWith('AIza') && !s.startsWith('sk-or-'))) return 2;
+    if (s.startsWith('AIza')) return 3;
     return 4; // OpenRouter
   }
 
   String _providerLabelForKey(String k) {
-    if (k.startsWith('AIza')) return 'Gemini';
-    if (k.startsWith('gsk_')) return 'Groq';
-    if (k.startsWith('sk-or-')) return 'OpenRouter';
+    final s = _unwrapApiKey(k);
+    if (s.startsWith('AIza')) return 'Gemini';
+    if (s.startsWith('gsk_')) return 'Groq';
+    if (s.startsWith('sk-or-')) return 'OpenRouter';
     return 'Mistral';
   }
 
-  List<String> _sortKeysByBestAnalysisQuality(List<String> keys) {
+  List<String> _sortKeysByBestAnalysisQuality(List<String> keys, {String preferredKey = ''}) {
     final now = DateTime.now();
     final active = <String>[];
     final cooledDown = <String>[];
+    final cleanPreferred = _unwrapApiKey(preferredKey);
 
-    for (final k in keys) {
+    for (final rawK in keys) {
+      final k = _unwrapApiKey(rawK);
+      if (k.length < 16) continue;
+      if (active.contains(k) || cooledDown.contains(k)) continue;
       final until = _keyCooldownUntil[k];
       if (until != null && until.isAfter(now)) {
         cooledDown.add(k);
@@ -666,7 +702,13 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       }
     }
 
-    active.sort((a, b) => _keyQualityTier(a).compareTo(_keyQualityTier(b)));
+    active.sort((a, b) {
+      if (cleanPreferred.isNotEmpty) {
+        if (a == cleanPreferred && b != cleanPreferred) return -1;
+        if (b == cleanPreferred && a != cleanPreferred) return 1;
+      }
+      return _keyQualityTier(a).compareTo(_keyQualityTier(b));
+    });
     cooledDown.sort((a, b) => _keyQualityTier(a).compareTo(_keyQualityTier(b)));
     return [...active, ...cooledDown];
   }
@@ -726,6 +768,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       final map = jsonDecode(jsonPayload) as Map<String, dynamic>;
       reqId = (map['reqId'] ?? '').toString();
       final rawKeys = (map['keys'] as List?)?.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList() ?? <String>[];
+      final preferredKey = (map['preferredKey'] ?? '').toString().trim();
       final prompt = (map['prompt'] ?? '').toString();
       final rawImages = (map['images'] as List?) ?? const [];
       final stitchedB64 = (map['stitchedB64'] ?? '').toString();
@@ -741,21 +784,21 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         }
       }
 
-      // 1. Sort all candidate keys so the highest-quality analysis key (Gemini -> Groq -> Mistral -> OpenRouter) runs FIRST!
-      final candidateKeys = _sortKeysByBestAnalysisQuality(unsortedKeys);
+      // 1. Sort all candidate keys (respecting active preferredKey & skipping cooled-down keys!)
+      final candidateKeys = _sortKeysByBestAnalysisQuality(unsortedKeys, preferredKey: preferredKey);
 
       final images = <Map<String, String>>[];
       for (final item in rawImages) {
         if (item is Map) {
           final b64 = (item['b64'] ?? '').toString();
           final mime = (item['mime'] ?? 'image/jpeg').toString();
-          if (b64.length >= 1500) {
+          if (b64.length >= 200) {
             images.add({'mime': mime, 'b64': b64});
           }
         }
       }
 
-      final singleComposite = (stitchedB64.length >= 1500)
+      final singleComposite = (stitchedB64.length >= 200)
           ? <Map<String, String>>[{'mime': 'image/jpeg', 'b64': stitchedB64}]
           : (images.isNotEmpty ? <Map<String, String>>[images.first] : <Map<String, String>>[]);
 
@@ -766,6 +809,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
       for (final key in candidateKeys) {
         final provName = _providerLabelForKey(key);
+        final authToken = _cleanProviderAuthToken(key);
 
         // If a previous key already completed 60% of the analysis before its quota/token limit ran out,
         // build a continuation relay prompt so the next key finishes the remaining 40% seamlessly!
@@ -782,51 +826,40 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
         Map<String, String>? callRes;
         if (key.startsWith('AIza')) {
-          callRes = await _forexCallGeminiNative(key, activePrompt, images, wantJson);
+          callRes = await _forexCallGeminiNative(authToken, activePrompt, singleComposite.isNotEmpty ? singleComposite : images, wantJson);
         } else if (key.startsWith('gsk_')) {
           callRes = await _forexCallOpenAiCompatibleNative(
             endpoint: 'https://api.groq.com/openai/v1/chat/completions',
-            modelsUrl: 'https://api.groq.com/openai/v1/models',
-            key: key,
+            key: authToken,
             visionModels: const [
-              'meta-llama/llama-4-maverick-17b-128e-instruct',
               'meta-llama/llama-4-scout-17b-16e-instruct',
-              'llama-3.2-90b-vision-preview',
-              'llama-3.2-11b-vision-preview',
+              'meta-llama/llama-4-maverick-17b-128e-instruct',
             ],
             textFallbackModels: const [
               'llama-3.3-70b-versatile',
               'llama-3.1-8b-instant',
-              'qwen/qwen3-32b',
-              'deepseek-r1-distill-llama-70b',
             ],
             prompt: activePrompt,
             images: singleComposite,
-            requireFreeSuffix: false,
             wantJson: wantJson,
           );
         } else if (key.startsWith('sk-or-')) {
           callRes = await _forexCallOpenAiCompatibleNative(
             endpoint: 'https://openrouter.ai/api/v1/chat/completions',
-            modelsUrl: 'https://openrouter.ai/api/v1/models',
-            key: key,
+            key: authToken,
             visionModels: const [
-              'qwen/qwen2.5-vl-72b-instruct:free',
               'google/gemma-3-27b-it:free',
-              'qwen/qwen2.5-vl-32b-instruct:free',
               'mistralai/mistral-small-3.1-24b-instruct:free',
-              'meta-llama/llama-3.2-11b-vision-instruct:free',
+              'qwen/qwen2.5-vl-32b-instruct:free',
               'openrouter/free',
             ],
             textFallbackModels: const [
               'openrouter/free',
               'meta-llama/llama-3.3-70b-instruct:free',
               'google/gemma-3-27b-it:free',
-              'mistralai/mistral-small-3.1-24b-instruct:free',
             ],
             prompt: activePrompt,
             images: singleComposite,
-            requireFreeSuffix: true,
             wantJson: wantJson,
             extraHeaders: const {
               'HTTP-Referer': 'https://aniketpro.ai',
@@ -834,26 +867,21 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             },
           );
         } else {
+          // Mistral (`mstrl_...` stripped via authToken!)
           callRes = await _forexCallOpenAiCompatibleNative(
             endpoint: 'https://api.mistral.ai/v1/chat/completions',
-            modelsUrl: 'https://api.mistral.ai/v1/models',
-            key: key,
+            key: authToken,
             visionModels: const [
-              'pixtral-large-latest',
               'pixtral-12b-2409',
               'mistral-small-latest',
-              'ministral-8b-latest',
-              'ministral-3b-latest',
+              'pixtral-large-latest',
             ],
             textFallbackModels: const [
               'mistral-small-latest',
               'open-mistral-nemo',
-              'ministral-8b-latest',
-              'mistral-medium-latest',
             ],
             prompt: activePrompt,
             images: singleComposite,
-            requireFreeSuffix: false,
             wantJson: wantJson,
           );
         }
@@ -862,8 +890,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         final finishReason = (callRes?['finishReason'] ?? 'STOP').trim();
 
         if (outText.isEmpty) {
-          // This key's quota is exhausted or failed -> put on 90s cooldown and move to next key!
-          _keyCooldownUntil[key] = DateTime.now().add(const Duration(seconds: 90));
+          // This key's quota is exhausted or failed -> put on 180s cooldown and move to next key immediately!
+          _keyCooldownUntil[key] = DateTime.now().add(const Duration(seconds: 180));
           continue;
         }
 
@@ -875,19 +903,16 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             partialProvider = provName;
             usedProviders.add('$provName 60%');
           } else {
-            // Merge if plain text, or keep the fuller continuation
             partial60Out = '$partial60Out\n$outText';
             if (!usedProviders.contains(provName)) usedProviders.add(provName);
           }
-          // Continue loop so the NEXT key completes the remaining 40%!
           continue;
         }
 
         // Complete 100% response obtained!
+        _lastWorkingForexKey = key;
         if (partial60Out != null && partial60Out.isNotEmpty) {
           usedProviders.add('$provName 40%');
-          // If the continuation returned a full JSON object or full report, use it;
-          // if plain text continuation, combine seamlessly.
           if (outText.startsWith(String.fromCharCode(123)) || outText.contains('```json') || outText.length >= partial60Out.length) {
             finalOut = outText;
           } else {
@@ -900,7 +925,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         break;
       }
 
-      // If all remaining keys were exhausted after a 60% partial output, still return the partial output rather than failing
       if ((finalOut == null || finalOut.isEmpty) && partial60Out != null && partial60Out.isNotEmpty) {
         finalOut = partial60Out;
       }
@@ -928,18 +952,18 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     List<Map<String, String>> images,
     bool wantJson,
   ) async {
-    const models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash-lite', 'gemini-1.5-flash'];
+    const models = ['gemini-2.5-flash', 'gemini-2.0-flash'];
     for (final m in models) {
       HttpClient? client;
       try {
-        client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+        client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
         final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent?key=${Uri.encodeQueryComponent(key)}');
-        final req = await client.postUrl(uri).timeout(const Duration(seconds: 8));
+        final req = await client.postUrl(uri).timeout(const Duration(seconds: 6));
         req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
 
         final parts = <Map<String, dynamic>>[
           {'text': prompt},
-          for (final img in images)
+          for (final img in images.take(2))
             {
               'inline_data': {
                 'mime_type': img['mime'] ?? 'image/jpeg',
@@ -960,7 +984,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         });
 
         req.add(utf8.encode(body));
-        final resp = await req.close().timeout(const Duration(seconds: 22));
+        final resp = await req.close().timeout(const Duration(seconds: 10));
         if (resp.statusCode == 200) {
           final txt = await resp.transform(utf8.decoder).join();
           final root = jsonDecode(txt) as Map<String, dynamic>;
@@ -983,6 +1007,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
               }
             }
           }
+        } else if (resp.statusCode == 429 || resp.statusCode == 403 || resp.statusCode == 400) {
+          // Quota exhausted or key invalid -> stop trying more Gemini models on this key immediately!
+          break;
         }
       } catch (_) {
       } finally {
@@ -994,55 +1021,18 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
   Future<Map<String, String>?> _forexCallOpenAiCompatibleNative({
     required String endpoint,
-    required String modelsUrl,
     required String key,
     required List<String> visionModels,
     required List<String> textFallbackModels,
     required String prompt,
     required List<Map<String, String>> images,
-    required bool requireFreeSuffix,
     required bool wantJson,
     Map<String, String>? extraHeaders,
   }) async {
-    final vModels = List<String>.from(visionModels);
-    final tModels = List<String>.from(textFallbackModels);
-
-    HttpClient? discClient;
-    try {
-      discClient = HttpClient()..connectionTimeout = const Duration(seconds: 4);
-      final req = await discClient.getUrl(Uri.parse(modelsUrl)).timeout(const Duration(seconds: 4));
-      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $key');
-      final resp = await req.close().timeout(const Duration(seconds: 4));
-      if (resp.statusCode == 200) {
-        final txt = await resp.transform(utf8.decoder).join();
-        final root = jsonDecode(txt) as Map<String, dynamic>;
-        final data = root['data'] as List?;
-        if (data != null) {
-          for (final item in data) {
-            if (item is Map) {
-              final id = (item['id'] ?? '').toString();
-              if (id.isEmpty) continue;
-              if (requireFreeSuffix && !id.endsWith(':free')) continue;
-              final low = id.toLowerCase();
-              if (low.contains('llama-4') || low.contains('vl') || low.contains('vision') ||
-                  low.contains('gemma-3') || low.contains('pixtral')) {
-                if (!vModels.contains(id)) vModels.add(id);
-              } else if (low.contains('llama-3.3') || low.contains('mistral-small') || low.contains('qwen')) {
-                if (!tModels.contains(id)) tModels.add(id);
-              }
-            }
-          }
-        }
-      }
-    } catch (_) {
-    } finally {
-      discClient?.close(force: true);
-    }
-
     Map<String, String>? partialCandidate;
 
     if (images.isNotEmpty) {
-      for (final model in vModels) {
+      for (final model in visionModels) {
         final res = await _sendSingleOpenAiRequest(
           endpoint: endpoint,
           key: key,
@@ -1051,6 +1041,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           images: images,
           extraHeaders: extraHeaders,
         );
+        if (res != null && (res['status'] == '401' || res['status'] == '403')) {
+          // Invalid API key -> break immediately without trying more models!
+          return null;
+        }
         if (res != null && (res['text'] ?? '').isNotEmpty) {
           if (!_isPartialOrTruncatedResponse(res['text']!, res['finishReason'] ?? 'STOP', wantJson)) {
             return res;
@@ -1060,8 +1054,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       }
     }
 
-    final fallbackPool = <String>[...tModels, ...vModels];
-    for (final model in fallbackPool) {
+    for (final model in textFallbackModels) {
       final contPrompt = (partialCandidate != null)
           ? '$prompt\n\n[PARTIAL ANALYSIS SO FAR (60%)]:\n${partialCandidate['text']}\n\nComplete the remaining 40% and output the full finalized response:'
           : prompt;
@@ -1073,6 +1066,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         images: const [],
         extraHeaders: extraHeaders,
       );
+      if (res != null && (res['status'] == '401' || res['status'] == '403')) {
+        return null;
+      }
       if (res != null && (res['text'] ?? '').isNotEmpty) {
         return res;
       }
@@ -1091,8 +1087,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   }) async {
     HttpClient? client;
     try {
-      client = HttpClient()..connectionTimeout = const Duration(seconds: 7);
-      final req = await client.postUrl(Uri.parse(endpoint)).timeout(const Duration(seconds: 7));
+      client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+      final req = await client.postUrl(Uri.parse(endpoint)).timeout(const Duration(seconds: 6));
       req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
       req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $key');
       if (extraHeaders != null) {
@@ -1103,7 +1099,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           ? prompt
           : <Map<String, dynamic>>[
               {'type': 'text', 'text': prompt},
-              for (final img in images)
+              for (final img in images.take(1))
                 {
                   'type': 'image_url',
                   'image_url': {
@@ -1115,14 +1111,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       final body = jsonEncode({
         'model': model,
         'temperature': 0.2,
-        'max_tokens': 4096,
+        'max_tokens': 2048,
         'messages': [
           {'role': 'user', 'content': messageContent}
         ],
       });
 
       req.add(utf8.encode(body));
-      final resp = await req.close().timeout(const Duration(seconds: 22));
+      final resp = await req.close().timeout(const Duration(seconds: 10));
       if (resp.statusCode == 200) {
         final txt = await resp.transform(utf8.decoder).join();
         final root = jsonDecode(txt) as Map<String, dynamic>;
@@ -1134,9 +1130,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           final rawContent = (msg?['content'] ?? '').toString();
           final cleaned = rawContent.replaceAll(RegExp(r'<think>[\s\S]*?</think>', caseSensitive: false), '').trim();
           if (cleaned.isNotEmpty) {
-            return {'text': cleaned, 'finishReason': finishReason};
+            return {'text': cleaned, 'finishReason': finishReason, 'status': '200'};
           }
         }
+      } else {
+        return {'text': '', 'finishReason': 'ERROR', 'status': '${resp.statusCode}'};
       }
     } catch (_) {
     } finally {
@@ -1165,21 +1163,35 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       if (!s || typeof s !== 'string') return '';
       var cur = cleanKey(s);
       for (var step = 0; step < 4; step++) {
-        if (cur.indexOf('AIza') === 0 || cur.indexOf('gsk_') === 0 || cur.indexOf('sk-or-') === 0) {
+        var low = cur.toLowerCase();
+        if (cur.indexOf('AIza') === 0 ||
+            cur.indexOf('gsk_') === 0 ||
+            cur.indexOf('sk-or-') === 0 ||
+            low.indexOf('mstrl_') === 0 ||
+            low.indexOf('mistral_') === 0 ||
+            low.indexOf('mistral:') === 0) {
           return cur;
         }
-        try {
-          var dec = atob(cur);
-          try { dec = decodeURIComponent(dec); } catch(eU) {}
-          dec = cleanKey(dec);
-          if (dec && dec.length >= 16 && dec.indexOf(' ') < 0 && /^[\x21-\x7E]+$/.test(dec)) {
-            cur = dec;
-            continue;
-          }
-        } catch(e) {}
+        // Only Base64-decode if it starts with a known Base64-encoded prefix
+        if (cur.indexOf('QUl6') === 0 || cur.indexOf('Z3Nr') === 0 || cur.indexOf('c2st') === 0 || cur.indexOf('bXN0cm') === 0) {
+          try {
+            var dec = atob(cur);
+            try { dec = decodeURIComponent(dec); } catch(eU) {}
+            dec = cleanKey(dec);
+            if (dec && dec.length >= 16 && dec.indexOf(' ') < 0 && /^[\x21-\x7E]+$/.test(dec)) {
+              cur = dec;
+              continue;
+            }
+          } catch(e) {}
+        }
         break;
       }
       return cur;
+    }
+
+    function cleanProviderAuthToken(rawKey) {
+      var k = deobfKey(rawKey);
+      return k.replace(/^(mstrl_|mistral_|mistral:|groq_|groq:|openrouter_|or_)/i, '').trim();
     }
 
     // Store plain-text keys in localStorage so the Forex site and Doctor report read them directly without Base64 corruption!
@@ -1213,7 +1225,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         for (var j = 0; j < inps.length; j++) {
           var v = (inps[j].value || '').trim();
           if (v.length >= 20 && v.indexOf(' ') < 0 &&
-              (v.indexOf('AIza') === 0 || v.indexOf('gsk_') === 0 || v.indexOf('sk-or-') === 0 || /^[A-Za-z0-9_-]{28,}$/.test(v))) {
+              (v.indexOf('AIza') === 0 || v.indexOf('gsk_') === 0 || v.indexOf('sk-or-') === 0 || v.toLowerCase().indexOf('mstrl_') === 0 || /^[A-Za-z0-9_-]{28,}$/.test(v))) {
             addCandidate(v);
           }
         }
@@ -1257,22 +1269,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         } catch(e) {}
       }
     }
-    if (false) {
-      var encodedArr = merged.map(obfKey);
-      localStorage.setItem('gemini_keys', JSON.stringify(encodedArr));
-      localStorage.setItem('gemini_key_v1', encodedArr[0]);
-      if (!localStorage.getItem('gemini_key_idx')) {
-        localStorage.setItem('gemini_key_idx', '0');
-      }
-      try {
-        if (typeof window.updateKeyStatus === 'function') window.updateKeyStatus();
-        if (typeof window.renderKeySlots === 'function') window.renderKeySlots();
-      } catch(e) {}
-    } else if (siteKeys.length > incomingKeys.length && window.FlutterBridge) {
-      try {
-        window.FlutterBridge.postMessage('SYNC_KEYS:' + JSON.stringify(merged));
-      } catch(e) {}
-    }
 
     if (window.__aniketMultiAiFetchHooked) return;
     window.__aniketMultiAiFetchHooked = true;
@@ -1286,7 +1282,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       }
     };
 
-    function callNativeDartAiFallback(keysList, promptText, rawImages, stitchedB64, wantJson) {
+    function callNativeDartAiFallback(keysList, preferredKey, promptText, rawImages, stitchedB64, wantJson) {
       return new Promise(function(resolve) {
         if (!window.FlutterBridge) {
           resolve('');
@@ -1298,17 +1294,20 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             delete window.__forexDartAiCallbacks[reqId];
             resolve('');
           }
-        }, 45000);
+        }, 16000);
         window.__forexDartAiCallbacks[reqId] = function(resTxt) {
           clearTimeout(timer);
           resolve(resTxt || '');
         };
         try {
+          // Send only compact stitchedB64 (or at most 1 image if stitchedB64 is empty) so FlutterBridge is ultra-fast!
+          var compactImgs = (!stitchedB64 && rawImages && rawImages.length > 0) ? [rawImages[0]] : [];
           window.FlutterBridge.postMessage('FOREX_DART_AI:' + JSON.stringify({
             reqId: reqId,
             keys: keysList,
+            preferredKey: preferredKey || '',
             prompt: promptText,
-            images: rawImages,
+            images: compactImgs,
             stitchedB64: stitchedB64 || '',
             wantJson: !!wantJson
           }));
@@ -1343,6 +1342,20 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     };
 
     var origFetch = window.fetch.bind(window);
+
+    function fetchWithTimeout(url, opts, timeoutMs) {
+      timeoutMs = timeoutMs || 2800;
+      if (typeof AbortController !== 'undefined') {
+        var ctrl = new AbortController();
+        var id = setTimeout(function() { try { ctrl.abort(); } catch(e) {} }, timeoutMs);
+        var mergedOpts = Object.assign({}, opts || {}, { signal: ctrl.signal });
+        return origFetch(url, mergedOpts).finally(function() { clearTimeout(id); });
+      }
+      return Promise.race([
+        origFetch(url, opts || {}),
+        new Promise(function(_, rej) { setTimeout(function() { rej(new Error('timeout')); }, timeoutMs); })
+      ]);
+    }
 
     // ═══════════════════════════════════════════════════════════════════
     //  UNIFIED PRO ANALYSIS ENGINE:
@@ -1453,9 +1466,52 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
     async function fetchCorsSafeCandles(sym, interval, limit) {
       try {
+        var binMap = {
+          'GC=F': 'PAXGUSDT',
+          'BTC-USD': 'BTCUSDT',
+          'ETH-USD': 'ETHUSDT',
+          'SOL-USD': 'SOLUSDT',
+          'EURUSD=X': 'EURUSDT',
+          'GBPUSD=X': 'GBPUSDT',
+          'AUDUSD=X': 'AUDUSDT'
+        };
+        var bSym = binMap[sym];
+        if (bSym) {
+          var bInt = interval === '1d' ? '1d' : '5m';
+          var bLim = limit || (interval === '1d' ? 90 : 120);
+          var bUrl = 'https://api.binance.com/api/v3/klines?symbol=' + bSym + '&interval=' + bInt + '&limit=' + bLim;
+          var bResp = await fetchWithTimeout(bUrl, { method: 'GET' }, 2200);
+          if (bResp && bResp.ok) {
+            var klines = await bResp.json();
+            if (Array.isArray(klines) && klines.length >= 15) {
+              var bBars = [];
+              for (var k = 0; k < klines.length; k++) {
+                var row = klines[k];
+                bBars.push({
+                  o: parseFloat(row[1]),
+                  h: parseFloat(row[2]),
+                  l: parseFloat(row[3]),
+                  c: parseFloat(row[4]),
+                  v: parseFloat(row[5])
+                });
+              }
+              var lastC = bBars[bBars.length - 1].c;
+              var prevC = bBars.length >= 24 ? bBars[bBars.length - 24].c : bBars[0].o;
+              return {
+                bars: bBars,
+                livePx: lastC,
+                prevClose: prevC,
+                source: 'Binance Live (' + bSym + ')'
+              };
+            }
+          }
+        }
+      } catch(eB) {}
+
+      try {
         var range = interval === '1d' ? '3mo' : '5d';
         var yUrl = 'https://query2.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(sym) + '?range=' + range + '&interval=' + interval;
-        var yResp = await origFetch(yUrl, { method: 'GET' });
+        var yResp = await fetchWithTimeout(yUrl, { method: 'GET' }, 2500);
         if (yResp && yResp.ok) {
           var yJson = await yResp.json();
           var r0 = yJson && yJson.chart && yJson.chart.result && yJson.chart.result[0];
@@ -1486,58 +1542,29 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           }
         }
       } catch(eY) {}
-
-      try {
-        var binMap = {
-          'GC=F': 'PAXGUSDT',
-          'BTC-USD': 'BTCUSDT',
-          'ETH-USD': 'ETHUSDT',
-          'SOL-USD': 'SOLUSDT',
-          'EURUSD=X': 'EURUSDT',
-          'GBPUSD=X': 'GBPUSDT',
-          'AUDUSD=X': 'AUDUSDT'
-        };
-        var bSym = binMap[sym] || 'PAXGUSDT';
-        var bInt = interval === '1d' ? '1d' : '5m';
-        var bLim = limit || (interval === '1d' ? 90 : 120);
-        var bUrl = 'https://api.binance.com/api/v3/klines?symbol=' + bSym + '&interval=' + bInt + '&limit=' + bLim;
-        var bResp = await origFetch(bUrl, { method: 'GET' });
-        if (bResp && bResp.ok) {
-          var klines = await bResp.json();
-          if (Array.isArray(klines) && klines.length >= 15) {
-            var bBars = [];
-            for (var k = 0; k < klines.length; k++) {
-              var row = klines[k];
-              bBars.push({
-                o: parseFloat(row[1]),
-                h: parseFloat(row[2]),
-                l: parseFloat(row[3]),
-                c: parseFloat(row[4]),
-                v: parseFloat(row[5])
-              });
-            }
-            var lastC = bBars[bBars.length - 1].c;
-            var prevC = bBars.length >= 24 ? bBars[bBars.length - 24].c : bBars[0].o;
-            return {
-              bars: bBars,
-              livePx: lastC,
-              prevClose: prevC,
-              source: 'Binance Live (' + bSym + ')'
-            };
-          }
-        }
-      } catch(eB) {}
       return null;
     }
+
+    window.__aniketTelemetryCache = {};
 
     async function runUnified11SkillsAndUserFeatures(promptText) {
       var det = detectActivePair(promptText);
       var sym = det.sym;
       var label = det.label;
-      var userCfg = readUserForexModeSettings();
 
-      var data5m = await fetchCorsSafeCandles(sym, '5m', 120);
-      var data1d = await fetchCorsSafeCandles(sym, '1d', 90);
+      // Return cached 12-skill telemetry if fetched within the last 45 seconds!
+      var cached = window.__aniketTelemetryCache[sym];
+      if (cached && (Date.now() - cached.ts < 45000)) {
+        return cached.text;
+      }
+
+      var userCfg = readUserForexModeSettings();
+      var pairRes = await Promise.all([
+        fetchCorsSafeCandles(sym, '5m', 120),
+        fetchCorsSafeCandles(sym, '1d', 90)
+      ]);
+      var data5m = pairRes[0];
+      var data1d = pairRes[1];
       if (!data5m || !data5m.bars || data5m.bars.length < 15) return null;
 
       var bars = data5m.bars;
@@ -1773,7 +1800,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       if (askWallPx <= livePx) askWallPx = livePx + (1.5 * atr14);
       if (bidWallPx >= livePx) bidWallPx = livePx - (1.5 * atr14);
 
-      return ''
+      var outTelemetry = ''
         + '\n\n[12 PRO SKILLS + ORDER FLOW LIVE TELEMETRY (' + label + ' — ' + data5m.source + ')]\n'
         + '• Live Price: ' + livePx.toFixed(dec) + ' (' + (chgPct >= 0 ? '+' : '') + chgPct.toFixed(2) + '%) | 5m RSI-14: ' + rsi5m.toFixed(1) + ' | Daily RSI-14: ' + dailyRsi.toFixed(1) + ' | 20D SMA: ' + sma20d.toFixed(dec) + ' | 90D Range: ' + lo90d.toFixed(dec) + '–' + hi90d.toFixed(dec) + '\n'
         + '• Opening Range (15m): High=' + orHigh.toFixed(dec) + ' | Mid=' + orMid.toFixed(dec) + ' | Low=' + orLow.toFixed(dec) + ' | Status: ' + entryStatus + '\n'
@@ -1783,6 +1810,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         + '• Time Machine (2,500x Monte Carlo): Win Rate=' + winPct.toFixed(1) + '% (Breakeven ' + bePct.toFixed(0) + '%) | Expected=' + (avgR >= 0 ? '+' : '') + avgR.toFixed(2) + 'R | Verdict=' + tmVerdict + '\n'
         + '• Budget & Risk Gate: Recommended Lot=' + lots.toFixed(2) + ' Lots | ' + riskVerdict + ' | Session=' + kz + ' (' + nyseCalNote + ')\n'
         + 'IMPORTANT: Strictly follow the exact output format (JSON or text) requested by the main prompt above, and include these live Order Flow (POC, Bid/Ask Wall, CVD), Time Machine Win-Rate %, Lot Size, and Risk Gate metrics inside your analysis reason/details!';
+
+      window.__aniketTelemetryCache[sym] = { ts: Date.now(), text: outTelemetry };
+      return outTelemetry;
     }
 
     function hideFieldWithoutTouchingSiblings(targetPhrase, forbiddenPhrases) {
@@ -1844,7 +1874,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         var logoSrc = window.__aniketCustomLogoUrl || '';
         if (!logoSrc) return;
 
-        // Find the header element containing 'ANIKET PRO AI'
         var els = document.querySelectorAll('h1, h2, h3, header, div, span');
         var targetEl = null;
         for (var i = 0; i < els.length; i++) {
@@ -1863,13 +1892,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
         if (!targetEl) return;
 
-        // Always strip any 📈 / 📉 / 📊 emoji in targetEl AND its parent container!
         stripChartEmojiNearHeader(targetEl);
         if (targetEl.parentElement) {
           stripChartEmojiNearHeader(targetEl.parentElement);
         }
 
-        // If our single circular logo is already inside the page, just ensure no 📈 came back and return!
         var existingLogo = document.getElementById('aniket-single-header-logo');
         if (existingLogo) return;
 
@@ -1885,7 +1912,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       } catch(e) {}
     }
 
-    // Run immediately + watch DOM mutations so 📈 never flashes even for 1ms!
     applyCustomForexHeaderLogo();
     try {
       if (!window.__aniketHeaderLogoObserver && window.MutationObserver) {
@@ -1925,9 +1951,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
     async function stitchImagesToDataUrl(imgList) {
       if (!imgList || imgList.length === 0) return null;
-      if (imgList.length === 1) {
-        return 'data:' + (imgList[0].mime || 'image/jpeg') + ';base64,' + imgList[0].b64;
-      }
       return new Promise(function(resolve) {
         var loaded = [];
         var remaining = imgList.length;
@@ -1953,8 +1976,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             resolve('data:' + (imgList[0].mime || 'image/jpeg') + ';base64,' + imgList[0].b64);
             return;
           }
-          var targetW = 1024;
-          var pad = 28;
+          var targetW = 860;
+          var pad = 24;
           var totalH = 0;
           var scaledDims = [];
           for (var k = 0; k < valid.length; k++) {
@@ -1965,7 +1988,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           }
           var canvas = document.createElement('canvas');
           canvas.width = targetW;
-          canvas.height = Math.min(totalH, 4096);
+          canvas.height = Math.min(totalH, 3200);
           var ctx = canvas.getContext('2d');
           ctx.fillStyle = '#0D0E15';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -1977,71 +2000,52 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             ctx.fillStyle = '#181B2C';
             ctx.fillRect(0, y, targetW, barH);
             ctx.fillStyle = '#FFD54F';
-            ctx.font = 'bold 15px sans-serif';
-            ctx.fillText('FOREX CHART #' + (m + 1) + ' OF ' + valid.length, 12, y + Math.max(14, barH - 6));
+            ctx.font = 'bold 14px sans-serif';
+            ctx.fillText('FOREX CHART #' + (m + 1) + ' OF ' + valid.length, 12, y + Math.max(13, barH - 5));
             y += barH;
             ctx.drawImage(valid[m], 0, y, targetW, drawH);
             y += drawH;
           }
-          resolve(canvas.toDataURL('image/jpeg', 0.84));
+          resolve(canvas.toDataURL('image/jpeg', 0.76));
         }
       });
     }
 
-    async function callOpenAiVisionProvider(endpoint, modelsUrl, key, defaultModels, promptText, combinedDataUrl, requireFree, extraHeaders) {
-      var models = defaultModels.slice();
-      try {
-        var mResp = await origFetch(modelsUrl, {
-          method: 'GET',
-          headers: { 'Authorization': 'Bearer ' + key }
-        });
-        if (mResp && mResp.ok) {
-          var mJson = await mResp.json();
-          var data = (mJson && mJson.data) || [];
-          for (var d = 0; d < data.length; d++) {
-            var id = (data[d] && data[d].id) || '';
-            if (!id) continue;
-            if (requireFree && id.indexOf(':free') < 0) continue;
-            var low = id.toLowerCase();
-            if (low.indexOf('qwen') >= 0 || low.indexOf('vl') >= 0 || low.indexOf('vision') >= 0 ||
-                low.indexOf('gemma-3') >= 0 || low.indexOf('ministral') >= 0 || low.indexOf('pixtral') >= 0 ||
-                low.indexOf('llama-4') >= 0) {
-              if (models.indexOf(id) < 0) models.push(id);
-            }
-          }
-        }
-      } catch(e) {}
-
-      for (var i = 0; i < models.length; i++) {
-        var model = models[i];
+    async function callOpenAiVisionProvider(endpoint, key, defaultModels, promptText, combinedDataUrl, extraHeaders) {
+      var authToken = cleanProviderAuthToken(key);
+      for (var i = 0; i < defaultModels.length; i++) {
+        var model = defaultModels[i];
         try {
-          var userContent = combinedDataUrl
+          var isTextOnly = (model.indexOf('llama-3.3') >= 0 || model.indexOf('llama-3.1') >= 0 || model.indexOf('nemo') >= 0);
+          var userContent = (combinedDataUrl && !isTextOnly)
             ? [{ type: 'text', text: promptText }, { type: 'image_url', image_url: { url: combinedDataUrl } }]
             : promptText;
           var headers = {
             'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + key
+            'Authorization': 'Bearer ' + authToken
           };
           if (extraHeaders) {
             for (var hk in extraHeaders) headers[hk] = extraHeaders[hk];
           }
-          var resp = await origFetch(endpoint, {
+          var resp = await fetchWithTimeout(endpoint, {
             method: 'POST',
             headers: headers,
             body: JSON.stringify({
               model: model,
               temperature: 0.2,
-              max_tokens: 4096,
+              max_tokens: 2048,
               messages: [{ role: 'user', content: userContent }]
             })
-          });
+          }, 9000);
           if (resp && resp.ok) {
             var j = await resp.json();
             var rawTxt = (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
             var cleaned = stripThinkTags(rawTxt);
-            if (cleaned && cleaned.length > 2) {
+            if (cleaned && cleaned.length > 1) {
               return cleaned;
             }
+          } else if (resp && (resp.status === 401 || resp.status === 403)) {
+            break;
           }
         } catch(e) {}
       }
@@ -2049,16 +2053,16 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
 
     async function callGeminiProvider(key, cleanBodyStr, rawBodyStr) {
-      var models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+      var models = ['gemini-2.5-flash', 'gemini-2.0-flash'];
       for (var i = 0; i < models.length; i++) {
         var m = models[i];
         try {
           var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + m + ':generateContent?key=' + encodeURIComponent(key);
-          var resp = await origFetch(url, {
+          var resp = await fetchWithTimeout(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: cleanBodyStr || rawBodyStr
-          });
+          }, 9000);
           if (resp && resp.ok) {
             var j = await resp.json();
             var parts = j && j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts;
@@ -2069,10 +2073,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                   finalTxt += parts[p].text;
                 }
               }
-              if (finalTxt.length > 2) {
+              if (finalTxt.length > 1) {
                 return finalTxt;
               }
             }
+          } else if (resp && (resp.status === 429 || resp.status === 403 || resp.status === 400)) {
+            break;
           }
         } catch(e) {}
       }
@@ -2087,6 +2093,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         }]
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
+
+    var __lastSuccessCache = { ts: 0, sig: '', out: '' };
 
     window.fetch = async function(input, init) {
       var urlStr = typeof input === 'string' ? input : (input && input.url ? input.url : '');
@@ -2141,6 +2149,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
         var fullPrompt = (sysText ? (sysText + '\n\n') : '') + promptText;
 
+        var callSig = (wantJson ? 'J:' : 'T:') + imgList.length + ':' + fullPrompt.slice(0, 120);
+        if (Date.now() - __lastSuccessCache.ts < 5000 && __lastSuccessCache.sig === callSig && __lastSuccessCache.out) {
+          return makeGeminiSuccessResponse(__lastSuccessCache.out);
+        }
+
         if (imgList.length > 0 || fullPrompt.length > 120) {
           try {
             var unifiedTelemetry = await runUnified11SkillsAndUserFeatures(fullPrompt);
@@ -2150,21 +2163,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           } catch(eTel) {}
         }
 
-        var cleanGemParts = [{ text: fullPrompt }];
-        for (var imIdx = 0; imIdx < imgList.length; imIdx++) {
-          cleanGemParts.push({
-            inline_data: {
-              mime_type: imgList[imIdx].mime || 'image/jpeg',
-              data: imgList[imIdx].b64
-            }
-          });
-        }
-        var cleanGemBody = JSON.stringify({
-          contents: [{ parts: cleanGemParts }],
-          generationConfig: wantJson ? { temperature: 0.2, responseMimeType: 'application/json' } : { temperature: 0.2 }
-        });
-
-        var realImgs = imgList.filter(function(im){ return im && im.b64 && im.b64.length >= 1500; });
+        var realImgs = imgList.filter(function(im){ return im && im.b64 && im.b64.length >= 200; });
         var combinedDataUrl = await stitchImagesToDataUrl(realImgs);
         var stitchedB64 = '';
         if (combinedDataUrl && combinedDataUrl.indexOf('base64,') >= 0) {
@@ -2187,23 +2186,31 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           var ak = deobfKey(window.__aniketAllKeys[a]);
           if (ak && ak.length >= 16 && candidateKeys.indexOf(ak) < 0) candidateKeys.push(ak);
         }
-        function jsKeyTier(k) {
-          if (k.indexOf('AIza') === 0) return 1;
-          if (k.indexOf('gsk_') === 0) return 2;
-          if (k.indexOf('sk-or-') < 0) return 3;
-          return 4;
-        }
-        candidateKeys.sort(function(a, b) { return jsKeyTier(a) - jsKeyTier(b); });
 
-        // 1. Primary: Native Dart HttpClient Multi-AI Bridge (100% immune to WebView CORS/CSP!)
+        // 1. Primary: Native Dart HttpClient Multi-AI Bridge (100% immune to WebView CORS/CSP & finishes in 3-5s!)
         if (candidateKeys.length > 0 && window.FlutterBridge) {
-          var dartOut = await callNativeDartAiFallback(candidateKeys, fullPrompt, imgList, stitchedB64, wantJson);
-          if (dartOut && dartOut.length > 2) {
+          var dartOut = await callNativeDartAiFallback(candidateKeys, urlKey, fullPrompt, realImgs, stitchedB64, wantJson);
+          if (dartOut && dartOut.length > 1) {
+            __lastSuccessCache = { ts: Date.now(), sig: callSig, out: dartOut };
             return makeGeminiSuccessResponse(dartOut);
           }
         }
 
-        // 2. Fallback: Direct In-WebView JS Multi-AI Providers
+        // 2. Fast JS Fallback if needed
+        var cleanGemParts = [{ text: fullPrompt }];
+        for (var imIdx = 0; imIdx < realImgs.slice(0, 2).length; imIdx++) {
+          cleanGemParts.push({
+            inline_data: {
+              mime_type: realImgs[imIdx].mime || 'image/jpeg',
+              data: realImgs[imIdx].b64
+            }
+          });
+        }
+        var cleanGemBody = JSON.stringify({
+          contents: [{ parts: cleanGemParts }],
+          generationConfig: wantJson ? { temperature: 0.2, responseMimeType: 'application/json' } : { temperature: 0.2 }
+        });
+
         for (var idx = 0; idx < candidateKeys.length; idx++) {
           var k = candidateKeys[idx];
           if (!k) continue;
@@ -2212,51 +2219,49 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             var gemTxt = await callGeminiProvider(k, cleanGemBody, rawBodyStr);
             if (gemTxt) {
               window.__lastWorkingForexKey = k;
+              __lastSuccessCache = { ts: Date.now(), sig: callSig, out: gemTxt };
               return makeGeminiSuccessResponse(gemTxt);
             }
           } else if (k.indexOf('gsk_') === 0) {
             var groqTxt = await callOpenAiVisionProvider(
               'https://api.groq.com/openai/v1/chat/completions',
-              'https://api.groq.com/openai/v1/models',
               k,
-              ['meta-llama/llama-4-scout-17b-16e-instruct', 'meta-llama/llama-4-maverick-17b-128e-instruct', 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
+              ['meta-llama/llama-4-scout-17b-16e-instruct', 'meta-llama/llama-4-maverick-17b-128e-instruct', 'llama-3.3-70b-versatile'],
               fullPrompt,
               combinedDataUrl,
-              false,
               null
             );
             if (groqTxt) {
               window.__lastWorkingForexKey = k;
+              __lastSuccessCache = { ts: Date.now(), sig: callSig, out: groqTxt };
               return makeGeminiSuccessResponse(groqTxt);
             }
           } else if (k.indexOf('sk-or-') === 0) {
             var orTxt = await callOpenAiVisionProvider(
               'https://openrouter.ai/api/v1/chat/completions',
-              'https://openrouter.ai/api/v1/models',
               k,
-              ['google/gemma-3-27b-it:free', 'qwen/qwen2.5-vl-72b-instruct:free', 'qwen/qwen2.5-vl-32b-instruct:free', 'mistralai/mistral-small-3.1-24b-instruct:free', 'openrouter/free'],
+              ['google/gemma-3-27b-it:free', 'mistralai/mistral-small-3.1-24b-instruct:free', 'openrouter/free'],
               fullPrompt,
               combinedDataUrl,
-              true,
               { 'HTTP-Referer': 'https://aniketpro.ai', 'X-Title': 'ANIKET PRO AI' }
             );
             if (orTxt) {
               window.__lastWorkingForexKey = k;
+              __lastSuccessCache = { ts: Date.now(), sig: callSig, out: orTxt };
               return makeGeminiSuccessResponse(orTxt);
             }
           } else {
             var misTxt = await callOpenAiVisionProvider(
               'https://api.mistral.ai/v1/chat/completions',
-              'https://api.mistral.ai/v1/models',
               k,
-              ['pixtral-12b-2409', 'pixtral-large-latest', 'mistral-small-latest', 'ministral-14b-latest', 'ministral-8b-latest', 'mistral-medium-latest'],
+              ['pixtral-12b-2409', 'mistral-small-latest', 'open-mistral-nemo'],
               fullPrompt,
               combinedDataUrl,
-              false,
               null
             );
             if (misTxt) {
               window.__lastWorkingForexKey = k;
+              __lastSuccessCache = { ts: Date.now(), sig: callSig, out: misTxt };
               return makeGeminiSuccessResponse(misTxt);
             }
           }
@@ -2298,6 +2303,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         } else if (m.startsWith('TAB:')) {
           final t = m.substring(4).trim().toUpperCase();
           if (mounted) setState(() => _camVisible = (t == 'SS'));
+        } else if (m.startsWith('FOREX_DART_AI:')) {
+          _handleForexDartAiRequest(m.substring(14));
         } else if (m.startsWith('OPEN_11SKILL_SHEET:')) {
           final tabIdx = int.tryParse(m.substring(19).trim()) ?? 0;
           if (mounted) _openInForex11SkillSheet(initialTab: tabIdx);
@@ -4423,7 +4430,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
           try {
             final req = await client.postUrl(Uri.parse(endpoint));
             req.headers.set('Content-Type', 'application/json');
-            req.headers.set('Authorization', 'Bearer $k');
+            req.headers.set('Authorization', 'Bearer ${_cleanProviderAuthToken(k)}');
             req.add(utf8.encode(jsonEncode({
               'model': model,
               'messages': [
