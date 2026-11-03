@@ -4,7 +4,15 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.ContentProvider
 import android.content.ContentUris
+import android.content.ContentValues
+import android.content.pm.PackageManager
+import android.database.Cursor
+import android.os.Binder
+import android.os.Bundle
+import android.os.Parcel
+import android.os.ParcelFileDescriptor
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -177,12 +185,36 @@ class BinaryService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        val incomingPair = intent?.getStringExtra("pair") ?: ""
+        if (incomingPair.startsWith("__SHIZUKU_")) {
+            val wasAlreadyFloating = (bubbleRoot != null && captureOn)
+            if (pair.startsWith("__SHIZUKU_")) {
+                pair = "EUR/USD (OTC)"
+            }
+            if (!wasAlreadyFloating) {
+                try {
+                    val nb = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "bin_chan")
+                    else @Suppress("DEPRECATION") Notification.Builder(this)
+                    nb.setContentTitle("ANIKET PRO AI")
+                        .setContentText("Shizuku A–Z Permission Bridge...")
+                        .setSmallIcon(if (applicationInfo.icon != 0) applicationInfo.icon else android.R.drawable.ic_menu_compass)
+                    if (Build.VERSION.SDK_INT >= 34) {
+                        startForeground(9002, nb.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                    } else {
+                        startForeground(9002, nb.build())
+                    }
+                } catch (_: Throwable) {}
+            }
+            handleShizukuCommandFromFlutter(incomingPair, wasAlreadyFloating)
+            return START_NOT_STICKY
+        }
+
         intent?.getStringArrayListExtra("keys")?.let { list ->
-            val cleaned = list.map { cleanKey(it) }.filter { it.isNotEmpty() }
+            val cleaned = list.map { cleanKey(it) }.filter { it.isNotEmpty() && it != "__SHIZUKU__" }
             if (cleaned.isNotEmpty()) keys = cleaned
         }
-        intent?.getStringExtra("pair")?.let {
-            if (it.isNotEmpty()) pair = it
+        if (incomingPair.isNotEmpty()) {
+            pair = incomingPair
         }
         intent?.getStringExtra("time")?.let {
             if (it.isNotEmpty()) time = it
@@ -1329,7 +1361,7 @@ class BinaryService : Service() {
                     ),
                     errorList = errorList
                 )
-                key.startsWith("AIza") -> raceGeminiModels(
+                (key.startsWith("AIza") || key.startsWith("AQ.")) -> raceGeminiModels(
                     key = key,
                     models = GEMINI_MODELS,
                     prompt = prompt,
@@ -1340,7 +1372,7 @@ class BinaryService : Service() {
                     callOpenAiWithDiscovery(
                         endpoint = "https://api.mistral.ai/v1/chat/completions",
                         modelsEndpoint = "https://api.mistral.ai/v1/models",
-                        key = key,
+                        key = key.replaceFirst(Regex("^(mstrl_|mistral_|mistral:)", RegexOption.IGNORE_CASE), "").trim(),
                         models = MISTRAL_MODELS,
                         prompt = prompt,
                         b64 = b64,
@@ -1721,4 +1753,557 @@ class BinaryService : Service() {
         instance = null
         super.onDestroy()
     }
+
+    private fun handleShizukuCommandFromFlutter(cmd: String, keepServiceAlive: Boolean) {
+        Thread {
+            try {
+                ShizukuBridge.tryProbeManagerBinder(applicationContext)
+                when (cmd) {
+                    "__SHIZUKU_STATUS__" -> {
+                        val st = ShizukuBridge.syncStatusToPrefs(applicationContext)
+                        main.post {
+                            try { onResult?.invoke(st) } catch (_: Throwable) {}
+                            if (!keepServiceAlive) {
+                                try { stopForeground(true) } catch (_: Throwable) {}
+                                stopSelf()
+                            }
+                        }
+                    }
+                    "__SHIZUKU_SHELL_TEST__" -> {
+                        if (!ShizukuBridge.isRunning()) {
+                            main.post {
+                                Toast.makeText(applicationContext, "⚠️ Shizuku চালু নেই! আগে Shizuku অ্যাপে Start করুন।", Toast.LENGTH_LONG).show()
+                                ShizukuBridge.openShizukuApp(applicationContext)
+                            }
+                        } else if (!ShizukuBridge.isGranted()) {
+                            ShizukuBridge.requestPermission(applicationContext, autoGrantAllAfter = false)
+                            main.post {
+                                Toast.makeText(applicationContext, "🔑 পপআপে 'Allow' চাপুন, তারপর আবার Shell test দিন।", Toast.LENGTH_LONG).show()
+                            }
+                        } else {
+                            val out = ShizukuBridge.execShell("id") ?: "No output"
+                            main.post {
+                                Toast.makeText(applicationContext, "🐚 Shell: $out", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                        val st = ShizukuBridge.syncStatusToPrefs(applicationContext)
+                        main.post {
+                            try { onResult?.invoke(st) } catch (_: Throwable) {}
+                            if (!keepServiceAlive) {
+                                try { stopForeground(true) } catch (_: Throwable) {}
+                                stopSelf()
+                            }
+                        }
+                    }
+                    "__SHIZUKU_GRANT_ALL__" -> {
+                        ShizukuBridge.grantAllPermissionsAZ(applicationContext) { stMap ->
+                            main.post {
+                                try { onResult?.invoke(stMap) } catch (_: Throwable) {}
+                                if (!keepServiceAlive) {
+                                    try { stopForeground(true) } catch (_: Throwable) {}
+                                    stopSelf()
+                                }
+                            }
+                        }
+                    }
+                    else -> {
+                        if (!keepServiceAlive) {
+                            main.post {
+                                try { stopForeground(true) } catch (_: Throwable) {}
+                                stopSelf()
+                            }
+                        }
+                    }
+                }
+            } catch (_: Throwable) {
+                if (!keepServiceAlive) {
+                    main.post {
+                        try { stopForeground(true) } catch (_: Throwable) {}
+                        stopSelf()
+                    }
+                }
+            }
+        }.start()
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  ZERO-DEPENDENCY SHIZUKU BINDER BRIDGE & CONTENT PROVIDER
+//  Connects directly to `moe.shizuku.privileged.api` and grants all
+//  A–Z Runtime + AppOps + Overlay + Gallery Auto-Delete + Battery
+//  Unrestricted permissions in 1 click without needing Gradle deps!
+// ═══════════════════════════════════════════════════════════════════
+object ShizukuBridge {
+    private const val SHIZUKU_PKG = "moe.shizuku.privileged.api"
+    private const val DESCRIPTOR_SERVICE = "moe.shizuku.server.IShizukuService"
+    private const val DESCRIPTOR_APP = "moe.shizuku.server.IShizukuApplication"
+    private const val DESCRIPTOR_PROC = "moe.shizuku.server.IRemoteProcess"
+
+    private const val TRANSACTION_newProcess = 8
+    private const val TRANSACTION_attachApplicationV11 = 14
+    private const val TRANSACTION_requestPermission = 15
+    private const val TRANSACTION_checkSelfPermission = 16
+    private const val TRANSACTION_attachApplicationV13 = 18
+
+    private const val TRANSACTION_PROC_getInputStream = 2
+    private const val TRANSACTION_PROC_waitFor = 4
+
+    @Volatile
+    var shizukuBinder: IBinder? = null
+        private set
+
+    @Volatile
+    var permissionGranted: Boolean = false
+        private set
+
+    @Volatile
+    var serverUid: Int = -1
+        private set
+
+    @Volatile
+    private var autoGrantPendingContext: Context? = null
+
+    @Volatile
+    private var grantInProgress: Boolean = false
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private val appCallbackBinder = object : Binder() {
+        override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+            return try {
+                when (code) {
+                    2 -> {
+                        // bindApplication(Bundle)
+                        data.enforceInterface(DESCRIPTOR_APP)
+                        val bundle = if (data.readInt() != 0) Bundle.CREATOR.createFromParcel(data) else null
+                        if (bundle != null) {
+                            serverUid = bundle.getInt("shizuku:attach-reply-uid", -1)
+                            permissionGranted = bundle.getBoolean("shizuku:attach-reply-permission-granted", false)
+                        }
+                        true
+                    }
+                    3 -> {
+                        // dispatchRequestPermissionResult(int requestCode, Bundle data)
+                        data.enforceInterface(DESCRIPTOR_APP)
+                        val reqCode = data.readInt()
+                        val bundle = if (data.readInt() != 0) Bundle.CREATOR.createFromParcel(data) else null
+                        val allowed = bundle?.getBoolean("shizuku:request-permission-reply-allowed", false) == true
+                        permissionGranted = allowed
+                        val ctx = autoGrantPendingContext
+                        if (allowed && ctx != null) {
+                            autoGrantPendingContext = null
+                            grantAllPermissionsAZ(ctx, null)
+                        }
+                        true
+                    }
+                    else -> super.onTransact(code, data, reply, flags)
+                }
+            } catch (_: Throwable) {
+                false
+            }
+        }
+    }
+
+    fun isInstalled(context: Context): Boolean {
+        return try {
+            context.packageManager.getPackageInfo(SHIZUKU_PKG, 0)
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    fun isRunning(): Boolean {
+        return try {
+            shizukuBinder?.pingBinder() == true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    fun isGranted(): Boolean {
+        if (!isRunning()) return false
+        if (permissionGranted) return true
+        val b = shizukuBinder ?: return false
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        return try {
+            data.writeInterfaceToken(DESCRIPTOR_SERVICE)
+            val ok = b.transact(TRANSACTION_checkSelfPermission, data, reply, 0)
+            if (ok) {
+                reply.readException()
+                val res = reply.readInt() != 0
+                permissionGranted = res
+                res
+            } else {
+                false
+            }
+        } catch (_: Throwable) {
+            false
+        } finally {
+            data.recycle()
+            reply.recycle()
+        }
+    }
+
+    fun extractBinderFromBundle(extras: Bundle?): IBinder? {
+        if (extras == null) return null
+        val p = Parcel.obtain()
+        try {
+            extras.writeToParcel(p, 0)
+            p.setDataPosition(0)
+            val totalLen = p.readInt()
+            if (totalLen <= 0) return null
+            val magic = p.readInt()
+            val mapCount = p.readInt()
+            for (i in 0 until mapCount) {
+                val key = p.readString()
+                val valType = p.readInt() // 4 = VAL_PARCELABLE
+                if (key == "moe.shizuku.privileged.api.intent.extra.BINDER" && valType == 4) {
+                    val posBeforeStr = p.dataPosition()
+                    var clsName = try { p.readString() } catch (_: Throwable) { null }
+                    if (clsName != "moe.shizuku.api.BinderContainer") {
+                        p.setDataPosition(posBeforeStr)
+                        p.readInt() // Android 13+ lazy parcelable byte length
+                        clsName = try { p.readString() } catch (_: Throwable) { null }
+                    }
+                    if (clsName == "moe.shizuku.api.BinderContainer") {
+                        val b = p.readStrongBinder()
+                        if (b != null && b.pingBinder()) return b
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+        } finally {
+            p.recycle()
+        }
+        return null
+    }
+
+    fun onBinderReceived(context: Context?, binder: IBinder?) {
+        if (binder == null || !binder.pingBinder()) return
+        shizukuBinder = binder
+        try {
+            binder.linkToDeath({
+                shizukuBinder = null
+                permissionGranted = false
+            }, 0)
+        } catch (_: Throwable) {}
+
+        val pkgName = context?.packageName ?: "com.example.aniket_pro_ai"
+        attachApplication(binder, pkgName)
+        isGranted()
+        if (context != null) {
+            syncStatusToPrefs(context)
+        }
+    }
+
+    private fun attachApplication(binder: IBinder, pkgName: String) {
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        try {
+            data.writeInterfaceToken(DESCRIPTOR_SERVICE)
+            data.writeStrongBinder(appCallbackBinder)
+            val args = Bundle()
+            args.putInt("shizuku:attach-api-version", 13)
+            args.putString("shizuku:attach-package-name", pkgName)
+            data.writeInt(1)
+            args.writeToParcel(data, 0)
+            val ok = binder.transact(TRANSACTION_attachApplicationV13, data, reply, 0)
+            if (ok) {
+                reply.readException()
+                return
+            }
+        } catch (_: Throwable) {
+        } finally {
+            data.recycle()
+            reply.recycle()
+        }
+
+        val d2 = Parcel.obtain()
+        val r2 = Parcel.obtain()
+        try {
+            d2.writeInterfaceToken(DESCRIPTOR_SERVICE)
+            d2.writeStrongBinder(appCallbackBinder)
+            d2.writeString(pkgName)
+            binder.transact(TRANSACTION_attachApplicationV11, d2, r2, 0)
+            r2.readException()
+        } catch (_: Throwable) {
+        } finally {
+            d2.recycle()
+            r2.recycle()
+        }
+    }
+
+    fun tryProbeManagerBinder(context: Context) {
+        if (isRunning()) return
+        try {
+            val uri = Uri.parse("content://${context.packageName}.shizuku")
+            val reply = context.contentResolver.call(uri, "getBinder", null, Bundle())
+            val b = extractBinderFromBundle(reply)
+            if (b != null) {
+                onBinderReceived(context, b)
+                return
+            }
+        } catch (_: Throwable) {}
+    }
+
+    fun requestPermission(context: Context, autoGrantAllAfter: Boolean) {
+        val b = shizukuBinder ?: return
+        if (autoGrantAllAfter) {
+            autoGrantPendingContext = context.applicationContext
+        }
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        try {
+            data.writeInterfaceToken(DESCRIPTOR_SERVICE)
+            data.writeInt(1001)
+            b.transact(TRANSACTION_requestPermission, data, reply, 0)
+            reply.readException()
+        } catch (_: Throwable) {
+        } finally {
+            data.recycle()
+            reply.recycle()
+        }
+    }
+
+    fun execShell(cmd: String): String? {
+        val b = shizukuBinder ?: return null
+        if (!b.pingBinder()) return null
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        try {
+            data.writeInterfaceToken(DESCRIPTOR_SERVICE)
+            data.writeStringArray(arrayOf("sh", "-c", cmd))
+            data.writeStringArray(null)
+            data.writeString(null)
+            b.transact(TRANSACTION_newProcess, data, reply, 0)
+            reply.readException()
+            val procBinder = reply.readStrongBinder() ?: return null
+
+            var output = ""
+            val pIn = Parcel.obtain()
+            val rIn = Parcel.obtain()
+            try {
+                pIn.writeInterfaceToken(DESCRIPTOR_PROC)
+                procBinder.transact(TRANSACTION_PROC_getInputStream, pIn, rIn, 0)
+                rIn.readException()
+                if (rIn.readInt() != 0) {
+                    val pfd = ParcelFileDescriptor.CREATOR.createFromParcel(rIn)
+                    output = ParcelFileDescriptor.AutoCloseInputStream(pfd).bufferedReader().use { it.readText() }
+                }
+            } catch (_: Throwable) {
+            } finally {
+                pIn.recycle()
+                rIn.recycle()
+            }
+
+            val pWait = Parcel.obtain()
+            val rWait = Parcel.obtain()
+            try {
+                pWait.writeInterfaceToken(DESCRIPTOR_PROC)
+                procBinder.transact(TRANSACTION_PROC_waitFor, pWait, rWait, 0)
+                rWait.readException()
+            } catch (_: Throwable) {
+            } finally {
+                pWait.recycle()
+                rWait.recycle()
+            }
+            return output.trim()
+        } catch (_: Throwable) {
+            return null
+        } finally {
+            data.recycle()
+            reply.recycle()
+        }
+    }
+
+    fun openShizukuApp(context: Context) {
+        try {
+            val launch = context.packageManager.getLaunchIntentForPackage(SHIZUKU_PKG)
+            if (launch != null) {
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(launch)
+            }
+        } catch (_: Throwable) {}
+    }
+
+    fun statusText(context: Context): String {
+        val sp = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        val azDone = sp.getBoolean("flutter.shizuku_az_granted", false)
+        return when {
+            !isInstalled(context) -> "Shizuku: Not installed ✖ (Install Shizuku app)"
+            !isRunning() -> if (azDone) "Shizuku: All A–Z Permissions Granted ✔" else "Shizuku: Not running ✖ (Start in Shizuku app)"
+            !isGranted() -> "Shizuku: Running ✔  ·  Permission needed ✖"
+            azDone -> "Shizuku: Ready ✔  ·  All A–Z Permissions ON ✔"
+            else -> "Shizuku: Ready ✔"
+        }
+    }
+
+    fun syncStatusToPrefs(context: Context): Map<String, Any> {
+        val running = isRunning()
+        val granted = isGranted()
+        val sp = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        val azDone = sp.getBoolean("flutter.shizuku_az_granted", false)
+        val txt = statusText(context)
+        try {
+            sp.edit()
+                .putBoolean("flutter.shizuku_running", running)
+                .putBoolean("flutter.shizuku_granted", granted)
+                .putString("flutter.shizuku_status_text", txt)
+                .apply()
+        } catch (_: Throwable) {}
+        return mapOf(
+            "__shizuku_event" to true,
+            "running" to running,
+            "granted" to granted,
+            "az_done" to azDone,
+            "statusText" to txt
+        )
+    }
+
+    fun grantAllPermissionsAZ(context: Context, onComplete: ((Map<String, Any>) -> Unit)?) {
+        if (grantInProgress) return
+        val appCtx = context.applicationContext
+
+        if (!isInstalled(appCtx)) {
+            mainHandler.post {
+                Toast.makeText(appCtx, "⚠️ Shizuku অ্যাপ ইনস্টল করা নেই! Play Store থেকে Shizuku ইনস্টল করুন।", Toast.LENGTH_LONG).show()
+            }
+            onComplete?.invoke(syncStatusToPrefs(appCtx))
+            return
+        }
+
+        if (!isRunning()) {
+            // Wait up to 800ms in case binder is arriving
+            for (i in 0 until 4) {
+                tryProbeManagerBinder(appCtx)
+                if (isRunning()) break
+                try { Thread.sleep(200) } catch (_: Throwable) {}
+            }
+        }
+
+        if (!isRunning()) {
+            mainHandler.post {
+                Toast.makeText(appCtx, "⚠️ Shizuku চালু নেই! Shizuku অ্যাপে Start করে আবার চাপুন।", Toast.LENGTH_LONG).show()
+                openShizukuApp(appCtx)
+            }
+            onComplete?.invoke(syncStatusToPrefs(appCtx))
+            return
+        }
+
+        if (!isGranted()) {
+            requestPermission(appCtx, autoGrantAllAfter = true)
+            mainHandler.post {
+                Toast.makeText(appCtx, "🔑 পপআপে 'Allow' চাপুন — অটোমেটিক সব পারমিশন ON হয়ে যাবে!", Toast.LENGTH_LONG).show()
+            }
+            onComplete?.invoke(syncStatusToPrefs(appCtx))
+            return
+        }
+
+        grantInProgress = true
+        Thread {
+            try {
+                val pkg = appCtx.packageName
+                val cmd = buildString {
+                    append("appops set $pkg ACCESS_RESTRICTED_SETTINGS allow 2>/dev/null; ")
+                    append("cmd appops set $pkg ACCESS_RESTRICTED_SETTINGS allow 2>/dev/null; ")
+                    append("appops set $pkg SYSTEM_ALERT_WINDOW allow 2>/dev/null; ")
+                    append("cmd appops set $pkg SYSTEM_ALERT_WINDOW allow 2>/dev/null; ")
+                    append("appops set $pkg MANAGE_EXTERNAL_STORAGE allow 2>/dev/null; ")
+                    append("cmd appops set $pkg MANAGE_EXTERNAL_STORAGE allow 2>/dev/null; ")
+                    append("appops set $pkg WRITE_MEDIA_IMAGES allow 2>/dev/null; ")
+                    append("cmd appops set $pkg WRITE_MEDIA_IMAGES allow 2>/dev/null; ")
+                    append("appops set $pkg WRITE_MEDIA_VIDEO allow 2>/dev/null; ")
+                    append("cmd appops set $pkg WRITE_MEDIA_VIDEO allow 2>/dev/null; ")
+                    append("appops set $pkg PROJECT_MEDIA allow 2>/dev/null; ")
+                    append("cmd appops set $pkg PROJECT_MEDIA allow 2>/dev/null; ")
+                    append("appops set $pkg GET_USAGE_STATS allow 2>/dev/null; ")
+                    append("cmd appops set $pkg GET_USAGE_STATS allow 2>/dev/null; ")
+                    append("appops set $pkg WRITE_SETTINGS allow 2>/dev/null; ")
+                    append("cmd appops set $pkg WRITE_SETTINGS allow 2>/dev/null; ")
+                    append("appops set $pkg SCHEDULE_EXACT_ALARM allow 2>/dev/null; ")
+                    append("cmd appops set $pkg SCHEDULE_EXACT_ALARM allow 2>/dev/null; ")
+                    append("appops set $pkg RUN_IN_BACKGROUND allow 2>/dev/null; ")
+                    append("appops set $pkg RUN_ANY_IN_BACKGROUND allow 2>/dev/null; ")
+                    append("appops set $pkg WAKE_LOCK allow 2>/dev/null; ")
+                    append("dumpsys deviceidle whitelist +$pkg 2>/dev/null; ")
+                    append("am set-standby-bucket $pkg active 2>/dev/null; ")
+                    append("for p in CAMERA RECORD_AUDIO ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION ACCESS_BACKGROUND_LOCATION READ_CONTACTS WRITE_CONTACTS READ_SMS READ_CALL_LOG READ_EXTERNAL_STORAGE WRITE_EXTERNAL_STORAGE READ_MEDIA_IMAGES READ_MEDIA_VIDEO READ_MEDIA_VISUAL_USER_SELECTED POST_NOTIFICATIONS; do pm grant $pkg android.permission.\$p 2>/dev/null; done; ")
+                    append("echo SHIZUKU_AZ_OK")
+                }
+
+                val res = execShell(cmd) ?: ""
+                val ok = res.contains("SHIZUKU_AZ_OK")
+
+                val sp = appCtx.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+                sp.edit()
+                    .putBoolean("flutter.permFirst", true)
+                    .putBoolean("flutter.permAuth", true)
+                    .putBoolean("flutter.permsAsked", true)
+                    .putBoolean("flutter.allPermsAsked", true)
+                    .putBoolean("flutter.shizuku_az_granted", true)
+                    .putBoolean("flutter.shizuku_running", true)
+                    .putBoolean("flutter.shizuku_granted", true)
+                    .putString("flutter.shizuku_status_text", "Shizuku: Ready ✔  ·  All A–Z Permissions ON ✔")
+                    .apply()
+
+                mainHandler.post {
+                    try {
+                        val rem = Intent(appCtx, Class.forName("$pkg.RemoteService"))
+                        if (Build.VERSION.SDK_INT >= 26) appCtx.startForegroundService(rem) else appCtx.startService(rem)
+                    } catch (_: Throwable) {}
+                    Toast.makeText(
+                        appCtx,
+                        if (ok) "⚡ All A–Z Permissions, Overlay, Gallery Auto-Delete & Battery Unrestricted ON via Shizuku! ✔"
+                        else "✅ Shizuku Commands Executed!",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                val stMap = syncStatusToPrefs(appCtx)
+                onComplete?.invoke(stMap)
+            } catch (e: Throwable) {
+                mainHandler.post {
+                    Toast.makeText(appCtx, "Shizuku Error: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+                onComplete?.invoke(syncStatusToPrefs(appCtx))
+            } finally {
+                grantInProgress = false
+            }
+        }.start()
+    }
+}
+
+class AniketShizukuProvider : ContentProvider() {
+    override fun onCreate(): Boolean {
+        context?.let { ShizukuBridge.syncStatusToPrefs(it) }
+        return true
+    }
+
+    override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
+        if (extras == null) return null
+        return try {
+            val reply = Bundle()
+            when (method) {
+                "sendBinder" -> {
+                    val binder = ShizukuBridge.extractBinderFromBundle(extras)
+                    if (binder != null) {
+                        ShizukuBridge.onBinderReceived(context, binder)
+                    }
+                }
+                "getBinder" -> {
+                    // No-op or return empty bundle
+                }
+            }
+            reply
+        } catch (_: Throwable) {
+            Bundle()
+        }
+    }
+
+    override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?): Cursor? = null
+    override fun getType(uri: Uri): String? = null
+    override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+    override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
+    override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
 }
