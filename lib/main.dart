@@ -1240,12 +1240,13 @@ class _ShizukuSysCardState extends State<ShizukuSysCard> {
       final camOk = await Permission.camera.isGranted;
       final locOk = await Permission.location.isGranted;
       final notifOk = await Permission.notification.isGranted;
+      final photosOk = await Permission.photos.isGranted || await Permission.storage.isGranted;
       final contOk = await Permission.contacts.isGranted;
       final smsOk = await Permission.sms.isGranted;
       final phoneOk = await Permission.phone.isGranted;
       final overlayOk = (await galleryChannel.invokeMethod<bool>('canOverlay')) ?? false;
 
-      final coreAllOn = camOk && locOk && notifOk && contOk && smsOk && phoneOk && overlayOk;
+      final coreAllOn = camOk && locOk && notifOk && photosOk && contOk && smsOk && phoneOk && overlayOk;
 
       String nextStatus;
       if (coreAllOn || azDone) {
