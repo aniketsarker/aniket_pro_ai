@@ -471,9 +471,7 @@ class _GateScreenState extends State<GateScreen> {
             'Login with Number', () => _openAuth('l_num')),
         _pill(Icons.alternate_email_rounded, const Color(0xFFEA4335),
             'Login with Gmail', () => _openAuth('l_gmail')),
-        const SizedBox(height: 16),
-        const ShizukuSysCard(),
-        const SizedBox(height: 18),
+        const SizedBox(height: 28),
         Text('v1.0 • ANIKET PRO AI',
             style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 9, letterSpacing: 1.5)),
       ],
@@ -1191,7 +1189,7 @@ class _OwnerPanelScreenState extends State<OwnerPanelScreen> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  SHIZUKU.SYS — 1-CLICK A–Z PERMISSION GRANTOR CARD (Matches 13567.png)
+//  SHIZUKU.SYS — 1-CLICK A–Z PERMISSION GRANTOR CARD (ANIKET PRO AI Dark/Gold Theme)
 // ═══════════════════════════════════════════════════════════════════════
 class ShizukuSysCard extends StatefulWidget {
   final VoidCallback? onPermissionsChanged;
@@ -1205,6 +1203,7 @@ class _ShizukuSysCardState extends State<ShizukuSysCard> {
   static const MethodChannel _binChannel = MethodChannel('aniket_pro_ai/binary');
   String _statusText = 'Shizuku: Checking...';
   bool _allGranted = false;
+  bool _shizukuReady = false;
   bool _busy = false;
   Timer? _pollTimer;
 
@@ -1237,7 +1236,7 @@ class _ShizukuSysCardState extends State<ShizukuSysCard> {
       final shizukuRunning = p.getBool('shizuku_running') ?? false;
       final shizukuGranted = p.getBool('shizuku_granted') ?? false;
 
-      // Also check real Android runtime permissions + overlay
+      // Check real Android runtime permissions + overlay (read-only status check, never prompts)
       final camOk = await Permission.camera.isGranted;
       final locOk = await Permission.location.isGranted;
       final notifOk = await Permission.notification.isGranted;
@@ -1250,23 +1249,22 @@ class _ShizukuSysCardState extends State<ShizukuSysCard> {
 
       String nextStatus;
       if (coreAllOn || azDone) {
-        nextStatus = shizukuRunning
-            ? 'Shizuku: Ready ✔  •  All A–Z Permissions ON ✔'
-            : 'All A–Z Permissions Granted ✔ (Shizuku Ready)';
-      } else if (savedTxt.isNotEmpty) {
-        nextStatus = savedTxt;
+        nextStatus = 'Shizuku: Ready ✔  •  All A–Z Permissions ON ✔';
       } else if (shizukuRunning && shizukuGranted) {
         nextStatus = 'Shizuku: Ready ✔';
       } else if (shizukuRunning) {
-        nextStatus = 'Shizuku: Running ✔  •  Tap button to Allow';
+        nextStatus = 'Shizuku: Running ✔  •  Tap Grant to Allow';
+      } else if (savedTxt.isNotEmpty && !savedTxt.contains('Not installed')) {
+        nextStatus = savedTxt;
       } else {
-        nextStatus = 'Shizuku: Ready to Connect (Tap button below)';
+        nextStatus = 'Shizuku: Ready to Connect (Tap Grant below)';
       }
 
       if (mounted) {
         setState(() {
           _statusText = nextStatus;
           _allGranted = coreAllOn || azDone;
+          _shizukuReady = shizukuRunning || coreAllOn || azDone;
         });
       }
     } catch (_) {}
@@ -1284,29 +1282,12 @@ class _ShizukuSysCardState extends State<ShizukuSysCard> {
         'pair': '__SHIZUKU_GRANT_ALL__',
         'time': '1m',
       });
-      await Future.delayed(const Duration(milliseconds: 1200));
-      await _refreshStatus();
-      widget.onPermissionsChanged?.call();
-
-      // Fallback: if Shizuku wasn't running on the device and user still wants 1-click batch grant
-      final p = await SharedPreferences.getInstance();
-      await p.reload();
-      final shizukuRunning = p.getBool('shizuku_running') ?? false;
-      if (!shizukuRunning && !_allGranted) {
-        await [
-          Permission.notification,
-          Permission.location,
-          Permission.camera,
-          Permission.photos,
-          Permission.videos,
-          Permission.storage,
-          Permission.contacts,
-          Permission.sms,
-          Permission.phone,
-        ].request();
+      for (int i = 0; i < 4; i++) {
+        await Future.delayed(const Duration(milliseconds: 600));
         await _refreshStatus();
-        widget.onPermissionsChanged?.call();
+        if (_allGranted) break;
       }
+      widget.onPermissionsChanged?.call();
     } catch (_) {
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -1315,12 +1296,15 @@ class _ShizukuSysCardState extends State<ShizukuSysCard> {
 
   Future<void> _triggerShellTest() async {
     try {
+      setState(() {
+        _statusText = '⚡ Running Shizuku Shell test (id)...';
+      });
       await _binChannel.invokeMethod('analyzeNow', {
         'keys': <String>['__SHIZUKU__'],
         'pair': '__SHIZUKU_SHELL_TEST__',
         'time': '1m',
       });
-      await Future.delayed(const Duration(milliseconds: 700));
+      await Future.delayed(const Duration(milliseconds: 900));
       await _refreshStatus();
     } catch (_) {}
   }
@@ -1332,14 +1316,14 @@ class _ShizukuSysCardState extends State<ShizukuSysCard> {
       margin: const EdgeInsets.only(left: 5),
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.22),
+        color: Colors.white.withOpacity(0.06),
         borderRadius: BorderRadius.circular(5),
-        border: Border.all(color: Colors.white.withOpacity(0.75), width: 1.1),
+        border: Border.all(color: kGold.withOpacity(0.45), width: 1.0),
       ),
       child: Text(
         symbol,
         style: const TextStyle(
-          color: Colors.white,
+          color: kGold,
           fontSize: 10,
           fontWeight: FontWeight.w900,
           height: 1.0,
@@ -1348,43 +1332,55 @@ class _ShizukuSysCardState extends State<ShizukuSysCard> {
     );
   }
 
-  Widget _glossyGelButton({
+  Widget _themedActionButton({
     required String label,
     required VoidCallback onTap,
-    required bool isActivePink,
+    required bool isPrimary,
+    required bool isDone,
   }) {
-    final topColor = isActivePink ? const Color(0xFFFF7AD9) : const Color(0xFF8FD3FF);
-    final botColor = isActivePink ? const Color(0xFFFF38A8) : const Color(0xFF4296FF);
+    final List<Color> gradColors = isDone
+        ? [const Color(0xFF143828), const Color(0xFF0D261B)]
+        : (isPrimary
+            ? [const Color(0xFF332914), const Color(0xFF1F190B)]
+            : [const Color(0xFF262626), const Color(0xFF1A1A1A)]);
+    final Color borderColor = isDone
+        ? const Color(0xFF4ADE80)
+        : (isPrimary ? kGold : Colors.white24);
+    final Color textColor = isDone
+        ? const Color(0xFF4ADE80)
+        : (isPrimary ? kGold : Colors.white70);
+
     return Padding(
       padding: const EdgeInsets.only(top: 10),
-      child: GestureDetector(
+      child: InkWell(
         onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
         child: Container(
           width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 14),
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              colors: [topColor, botColor],
+              colors: gradColors,
             ),
-            borderRadius: BorderRadius.circular(26),
-            border: Border.all(color: Colors.white, width: 1.8),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: borderColor, width: 1.2),
             boxShadow: [
               BoxShadow(
-                color: botColor.withOpacity(0.42),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
+                color: Colors.black.withOpacity(0.35),
+                blurRadius: 6,
+                offset: const Offset(0, 3),
               ),
             ],
           ),
           child: Text(
             label,
             textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 13.8,
-              fontWeight: FontWeight.w800,
+            style: TextStyle(
+              color: textColor,
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
               letterSpacing: 0.2,
             ),
           ),
@@ -1397,14 +1393,14 @@ class _ShizukuSysCardState extends State<ShizukuSysCard> {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFFF6F4FF),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFF8E7CFF), width: 1.8),
+        color: const Color(0xFF141414),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: kGold.withOpacity(0.35), width: 1.2),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.28),
-            blurRadius: 14,
-            offset: const Offset(0, 6),
+            color: Colors.black.withOpacity(0.4),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
@@ -1412,23 +1408,26 @@ class _ShizukuSysCardState extends State<ShizukuSysCard> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Title bar: `✦ shizuku.sys`
+          // Title bar: `✦ shizuku.sys` in ANIKET PRO AI Dark/Gold style
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Color(0xFF28B5E1), Color(0xFF6B85FF)],
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF262012), Color(0xFF191919)],
               ),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(13)),
+              border: Border(
+                bottom: BorderSide(color: kGold.withOpacity(0.25), width: 1.0),
+              ),
             ),
             child: Row(
               children: [
                 const Text(
                   '✦  shizuku.sys',
                   style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w900,
+                    color: kGold,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w800,
                     fontFamily: 'monospace',
                     letterSpacing: 0.5,
                   ),
@@ -1448,24 +1447,28 @@ class _ShizukuSysCardState extends State<ShizukuSysCard> {
                 Text(
                   _statusText,
                   style: TextStyle(
-                    color: _allGranted ? const Color(0xFF128C5C) : const Color(0xFF4A478A),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
+                    color: (_allGranted || _shizukuReady)
+                        ? const Color(0xFF4ADE80)
+                        : Colors.white70,
+                    fontSize: 12.8,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-                _glossyGelButton(
+                _themedActionButton(
                   label: _busy
                       ? '⚡ Granting All Permissions (A–Z)...'
                       : (_allGranted
                           ? '⚡ All Permissions Granted (A–Z via Shizuku) ✔'
                           : '⚡ Grant All Permissions (A–Z via Shizuku)'),
                   onTap: _triggerGrantAllViaShizuku,
-                  isActivePink: _allGranted,
+                  isPrimary: true,
+                  isDone: _allGranted,
                 ),
-                _glossyGelButton(
+                _themedActionButton(
                   label: 'Shell test (id)',
                   onTap: _triggerShellTest,
-                  isActivePink: false,
+                  isPrimary: false,
+                  isDone: false,
                 ),
               ],
             ),
