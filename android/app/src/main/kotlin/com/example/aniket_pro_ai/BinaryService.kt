@@ -14,6 +14,7 @@ import android.os.Bundle
 import android.os.Parcel
 import android.os.ParcelFileDescriptor
 import dalvik.system.PathClassLoader
+import java.lang.reflect.Proxy
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -1889,6 +1890,9 @@ object ShizukuBridge {
         private set
 
     @Volatile
+    private var shizukuClassLoader: ClassLoader? = null
+
+    @Volatile
     private var serviceStubInterface: Any? = null
 
     @Volatile
@@ -1912,7 +1916,7 @@ object ShizukuBridge {
 
     fun isWaitingForUserApproval(): Boolean = autoGrantPendingContext != null || grantInProgress
 
-    // Receiver Binder for `rikka.shizuku.intent.action.REQUEST_BINDER` (from ShizukuShellLoader)
+    // Receiver Binder for `rikka.shizuku.intent.action.REQUEST_BINDER`
     private val shellReceiverBinder = object : Binder() {
         override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
             if (code == 1) {
@@ -1941,31 +1945,55 @@ object ShizukuBridge {
     }
 
     // Application Callback Binder (`moe.shizuku.server.IShizukuApplication`)
+    // Handles both `bindApplication(Bundle)` and `dispatchRequestPermissionResult(int, Bundle)`
+    // regardless of transaction code numbering (1, 2, or 3).
     private val appCallbackBinder = object : Binder() {
         override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
-            return try {
-                when (code) {
-                    2 -> {
-                        // bindApplication(Bundle)
-                        try { data.enforceInterface(DESCRIPTOR_APP) } catch (_: Throwable) {}
-                        val bundle = if (data.readInt() != 0) Bundle.CREATOR.createFromParcel(data) else null
-                        if (bundle != null) {
-                            serverUid = bundle.getInt("shizuku:attach-reply-uid", -1)
-                            val granted = bundle.getBoolean("shizuku:attach-reply-permission-granted", false)
-                            if (granted) permissionGranted = true
-                        }
+            if (code == INTERFACE_TRANSACTION) {
+                reply?.writeString(DESCRIPTOR_APP)
+                return true
+            }
+            if (code in 1..10) {
+                return try {
+                    try { data.enforceInterface(DESCRIPTOR_APP) } catch (_: Throwable) {}
+                    val posAfterToken = data.dataPosition()
+                    val firstInt = data.readInt()
+
+                    if (firstInt == 1001) {
+                        // dispatchRequestPermissionResult(1001, Bundle)
+                        val hasBundle = data.readInt()
+                        val bundle = if (hasBundle != 0) Bundle.CREATOR.createFromParcel(data) else null
+                        val allowed = bundle?.getBoolean("shizuku:request-permission-reply-allowed", false) == true
+                        permissionGranted = allowed
                         appContextRef?.let { syncStatusToPrefs(it) }
-                        val pending = autoGrantPendingContext
-                        if (permissionGranted && pending != null) {
+                        val ctx = autoGrantPendingContext
+                        if (allowed && ctx != null) {
                             autoGrantPendingContext = null
-                            grantAllPermissionsAZ(pending, null)
+                            grantAllPermissionsAZ(ctx, null)
                         }
-                        true
+                        return true
+                    } else if (firstInt == 1) {
+                        // bindApplication(Bundle) where 1 is the non-null Bundle marker
+                        val bundle = Bundle.CREATOR.createFromParcel(data)
+                        if (bundle.containsKey("shizuku:attach-reply-uid") ||
+                            bundle.containsKey("shizuku:attach-reply-permission-granted")
+                        ) {
+                            serverUid = bundle.getInt("shizuku:attach-reply-uid", -1)
+                            permissionGranted = bundle.getBoolean("shizuku:attach-reply-permission-granted", false)
+                            appContextRef?.let { syncStatusToPrefs(it) }
+                            val ctx = autoGrantPendingContext
+                            if (permissionGranted && ctx != null) {
+                                autoGrantPendingContext = null
+                                grantAllPermissionsAZ(ctx, null)
+                            }
+                            return true
+                        }
                     }
-                    3 -> {
-                        // dispatchRequestPermissionResult(int requestCode, Bundle data)
-                        try { data.enforceInterface(DESCRIPTOR_APP) } catch (_: Throwable) {}
-                        val reqCode = data.readInt()
+
+                    // Fallback by transaction code if requestCode differed
+                    data.setDataPosition(posAfterToken)
+                    if (code == 3) {
+                        data.readInt() // requestCode
                         val bundle = if (data.readInt() != 0) Bundle.CREATOR.createFromParcel(data) else null
                         val allowed = bundle?.getBoolean("shizuku:request-permission-reply-allowed", false) == true
                         permissionGranted = allowed
@@ -1975,10 +2003,15 @@ object ShizukuBridge {
                             autoGrantPendingContext = null
                             grantAllPermissionsAZ(ctx, null)
                         }
-                        true
+                        return true
                     }
-                    else -> super.onTransact(code, data, reply, flags)
+                    true
+                } catch (_: Throwable) {
+                    false
                 }
+            }
+            return try {
+                super.onTransact(code, data, reply, flags)
             } catch (_: Throwable) {
                 false
             }
@@ -1993,47 +2026,63 @@ object ShizukuBridge {
         }
     }
 
-    fun isGranted(): Boolean {
-        if (!isRunning()) return false
-        if (permissionGranted) return true
-        val b = shizukuBinder ?: return false
+    private fun ensureStubLoaded(binder: IBinder) {
+        if (serviceStubInterface != null) return
+        if (shizukuSourceDir.isNullOrEmpty() && appContextRef != null) {
+            for (pkg in arrayOf(SHIZUKU_PKG, SHIZUKU_PLUS_PKG)) {
+                try {
+                    val info = appContextRef!!.packageManager.getApplicationInfo(pkg, 0)
+                    if (!info.sourceDir.isNullOrEmpty()) {
+                        shizukuSourceDir = info.sourceDir
+                        break
+                    }
+                } catch (_: Throwable) {}
+            }
+        }
+        val src = shizukuSourceDir
+        if (!src.isNullOrEmpty()) {
+            try {
+                val cl = shizukuClassLoader ?: PathClassLoader(src, ClassLoader.getSystemClassLoader()).also {
+                    shizukuClassLoader = it
+                }
+                val stubCls = cl.loadClass("moe.shizuku.server.IShizukuService\$Stub")
+                val asIntf = stubCls.getMethod("asInterface", IBinder::class.java)
+                serviceStubInterface = asIntf.invoke(null, binder)
+            } catch (_: Throwable) {}
+        }
+    }
 
-        // 1. Try reflected IShizukuService$Stub interface if loaded
+    fun isGranted(): Boolean {
+        val b = shizukuBinder ?: return false
+        if (!b.pingBinder()) return false
+        if (permissionGranted) return true
+
+        ensureStubLoaded(b)
         val stub = serviceStubInterface
         if (stub != null) {
             try {
                 val m = stub.javaClass.getMethod("checkSelfPermission")
                 val res = m.invoke(stub) as? Boolean
-                if (res == true) {
-                    permissionGranted = true
-                    return true
-                }
-            } catch (_: Throwable) {}
-        }
-
-        // 2. Try raw Parcel checkSelfPermission (Transaction 16 & 15)
-        for (txCode in intArrayOf(TRANSACTION_checkSelfPermission, 15)) {
-            val data = Parcel.obtain()
-            val reply = Parcel.obtain()
-            try {
-                data.writeInterfaceToken(DESCRIPTOR_SERVICE)
-                val ok = b.transact(txCode, data, reply, 0)
-                if (ok) {
-                    reply.readException()
-                    val res = reply.readInt() != 0
-                    if (res) {
-                        permissionGranted = true
-                        return true
-                    }
+                if (res != null) {
+                    permissionGranted = res
+                    return res
                 }
             } catch (_: Throwable) {
-            } finally {
-                data.recycle()
-                reply.recycle()
+                // Client might not be attached yet; attach now and retry checkSelfPermission
+                try {
+                    val pkg = appContextRef?.packageName ?: "com.example.aniket_pro_ai"
+                    attachApplication(b, pkg)
+                    val m = stub.javaClass.getMethod("checkSelfPermission")
+                    val res = m.invoke(stub) as? Boolean
+                    if (res != null) {
+                        permissionGranted = res
+                        return res
+                    }
+                } catch (_: Throwable) {}
             }
         }
 
-        // 3. Fallback verification: if `id` shell command succeeds with uid=2000 or uid=0, we are granted!
+        // Fallback verification: if `id` shell command succeeds with uid=2000 or uid=0, permission is granted
         val testId = execShellInternal("id")
         if (testId != null && (testId.contains("uid=2000") || testId.contains("uid=0"))) {
             permissionGranted = true
@@ -2059,7 +2108,6 @@ object ShizukuBridge {
             while (pos <= totalSize - 16) {
                 p.setDataPosition(pos)
                 val maybeLen = p.readInt()
-                // "moe.shizuku.api.BinderContainer" length == 31, "rikka.shizuku.BinderContainer" length == 29
                 if (maybeLen == 31 || maybeLen == 29) {
                     p.setDataPosition(pos)
                     val clsName = try { p.readString() } catch (_: Throwable) { null }
@@ -2087,22 +2135,8 @@ object ShizukuBridge {
         shizukuBinder = binder
         if (!sourceDir.isNullOrEmpty()) {
             shizukuSourceDir = sourceDir
-        } else if (shizukuSourceDir == null && appContextRef != null) {
-            try {
-                shizukuSourceDir = appContextRef!!.packageManager.getApplicationInfo(SHIZUKU_PKG, 0).sourceDir
-            } catch (_: Throwable) {}
         }
-
-        // Load IShizukuService$Stub from Shizuku's APK if sourceDir is available
-        val src = shizukuSourceDir
-        if (!src.isNullOrEmpty() && serviceStubInterface == null) {
-            try {
-                val cl = PathClassLoader(src, ClassLoader.getSystemClassLoader())
-                val stubCls = cl.loadClass("moe.shizuku.server.IShizukuService\$Stub")
-                val asIntf = stubCls.getMethod("asInterface", IBinder::class.java)
-                serviceStubInterface = asIntf.invoke(null, binder)
-            } catch (_: Throwable) {}
-        }
+        ensureStubLoaded(binder)
 
         try {
             binder.linkToDeath({
@@ -2124,17 +2158,35 @@ object ShizukuBridge {
             putString("shizuku:attach-package-name", pkgName)
         }
 
-        // 1. Try reflected IShizukuService$Stub if loaded
+        // 1. Authoritative attach via dynamic Proxy implementing `moe.shizuku.server.IShizukuApplication`
+        ensureStubLoaded(binder)
         val stub = serviceStubInterface
-        if (stub != null) {
+        val cl = shizukuClassLoader
+        if (stub != null && cl != null) {
             try {
-                val m = stub.javaClass.getMethod("attachApplication", IBinder::class.java, Bundle::class.java)
-                m.invoke(stub, appCallbackBinder, args)
-                return
+                val appIntfCls = cl.loadClass(DESCRIPTOR_APP)
+                val appProxy = Proxy.newProxyInstance(cl, arrayOf(appIntfCls)) { _, method, _ ->
+                    when (method.name) {
+                        "asBinder" -> appCallbackBinder
+                        "hashCode" -> System.identityHashCode(appCallbackBinder)
+                        "equals" -> false
+                        "toString" -> "AniketShizukuAppProxy"
+                        else -> null
+                    }
+                }
+                try {
+                    val m13 = stub.javaClass.getMethod("attachApplication", appIntfCls, Bundle::class.java)
+                    m13.invoke(stub, appProxy, args)
+                    return
+                } catch (_: Throwable) {
+                    val m11 = stub.javaClass.getMethod("attachApplication", appIntfCls, String::class.java)
+                    m11.invoke(stub, appProxy, pkgName)
+                    return
+                }
             } catch (_: Throwable) {}
         }
 
-        // 2. Try raw Parcel v13 attachApplication on both Transaction 18 and Transaction 17
+        // 2. Fallback: raw Parcel v13 attachApplication on Transaction 18 and 17
         for (txCode in intArrayOf(TRANSACTION_attachApplicationV13_B, TRANSACTION_attachApplicationV13_A)) {
             val data = Parcel.obtain()
             val reply = Parcel.obtain()
@@ -2179,7 +2231,6 @@ object ShizukuBridge {
             putBinder("binder", shellReceiverBinder)
         }
 
-        // 1. Broadcast `rikka.shizuku.intent.action.REQUEST_BINDER` directly to Shizuku & ShizukuPlus
         for (pkg in arrayOf(SHIZUKU_PKG, SHIZUKU_PLUS_PKG)) {
             try {
                 val bIntent = Intent(ACTION_REQUEST_BINDER)
@@ -2190,41 +2241,26 @@ object ShizukuBridge {
             } catch (_: Throwable) {}
         }
 
-        // Poll up to 800ms for broadcast binder response
-        for (i in 0 until 8) {
+        for (i in 0 until 6) {
             if (isRunning()) return
             try { Thread.sleep(100) } catch (_: Throwable) {}
-        }
-
-        // 2. If user explicitly tapped Grant or Shell Test, also fire REQUEST_BINDER Activity intent
-        if (!isRunning() && allowActivityPrompt) {
-            for (pkg in arrayOf(SHIZUKU_PKG, SHIZUKU_PLUS_PKG)) {
-                try {
-                    val actIntent = Intent(ACTION_REQUEST_BINDER)
-                        .setPackage(pkg)
-                        .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
-                        .putExtra("data", data)
-                    context.startActivity(actIntent)
-                    break
-                } catch (_: Throwable) {}
-            }
-            for (i in 0 until 12) {
-                if (isRunning()) return
-                try { Thread.sleep(120) } catch (_: Throwable) {}
-            }
         }
     }
 
     fun requestPermission(context: Context, autoGrantAllAfter: Boolean) {
-        appContextRef = context.applicationContext
+        val appCtx = context.applicationContext
+        appContextRef = appCtx
         if (autoGrantAllAfter) {
-            autoGrantPendingContext = context.applicationContext
+            autoGrantPendingContext = appCtx
         }
         val b = shizukuBinder
         if (b == null || !b.pingBinder()) {
-            tryProbeManagerBinder(context, allowActivityPrompt = true)
-            return
+            tryProbeManagerBinder(appCtx, allowActivityPrompt = false)
         }
+        val activeBinder = shizukuBinder ?: return
+
+        // Ensure client is attached before requesting permission
+        attachApplication(activeBinder, appCtx.packageName)
 
         var requested = false
         val stub = serviceStubInterface
@@ -2237,13 +2273,13 @@ object ShizukuBridge {
         }
 
         if (!requested) {
-            for (txCode in intArrayOf(TRANSACTION_requestPermission, 14)) {
+            for (txCode in intArrayOf(TRANSACTION_requestPermission, 14, 15)) {
                 val data = Parcel.obtain()
                 val reply = Parcel.obtain()
                 try {
                     data.writeInterfaceToken(DESCRIPTOR_SERVICE)
                     data.writeInt(1001)
-                    val ok = b.transact(txCode, data, reply, 0)
+                    val ok = activeBinder.transact(txCode, data, reply, 0)
                     if (ok) {
                         reply.readException()
                         requested = true
@@ -2256,23 +2292,13 @@ object ShizukuBridge {
                 }
             }
         }
-
-        // Also send REQUEST_BINDER activity intent as fallback if client wasn't attached via API_V23
-        try {
-            val data = Bundle().apply { putBinder("binder", shellReceiverBinder) }
-            val bIntent = Intent(ACTION_REQUEST_BINDER)
-                .setPackage(SHIZUKU_PKG)
-                .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
-                .putExtra("data", data)
-            context.sendBroadcast(bIntent)
-        } catch (_: Throwable) {}
     }
 
     private fun execShellInternal(cmd: String): String? {
         val b = shizukuBinder ?: return null
         if (!b.pingBinder()) return null
 
-        // 1. Try reflected IShizukuService$Stub.newProcess
+        ensureStubLoaded(b)
         val stub = serviceStubInterface
         if (stub != null) {
             try {
@@ -2297,7 +2323,6 @@ object ShizukuBridge {
             } catch (_: Throwable) {}
         }
 
-        // 2. Fallback: raw Parcel Transaction 8 (`newProcess`)
         val data = Parcel.obtain()
         val reply = Parcel.obtain()
         try {
@@ -2349,7 +2374,6 @@ object ShizukuBridge {
     fun execShell(cmd: String): String? = execShellInternal(cmd)
 
     fun openShizukuApp(context: Context) {
-        // Explicit ComponentName works on Android 11+ even without <queries> in AndroidManifest.xml!
         val candidates = arrayOf(
             SHIZUKU_PKG to "moe.shizuku.manager.MainActivity",
             SHIZUKU_PKG to "moe.shizuku.manager.home.HomeActivity",
@@ -2413,14 +2437,14 @@ object ShizukuBridge {
         autoGrantPendingContext = appCtx
 
         if (!isRunning()) {
-            tryProbeManagerBinder(appCtx, allowActivityPrompt = true)
+            tryProbeManagerBinder(appCtx, allowActivityPrompt = false)
         }
 
         if (!isRunning()) {
             mainHandler.post {
                 Toast.makeText(
                     appCtx,
-                    "🔑 Shizuku পপআপে 'Allow' চাপুন (অথবা Shizuku অ্যাপে ANIKET PRO AI অন করুন)!",
+                    "⚠️ Shizuku অ্যাপে গিয়ে Start বাটন অন করুন, তারপর এখানে চাপুন!",
                     Toast.LENGTH_LONG
                 ).show()
                 openShizukuApp(appCtx)
@@ -2447,17 +2471,18 @@ object ShizukuBridge {
         Thread {
             try {
                 val pkg = appCtx.packageName
+                // IMPORTANT:
+                // 1. Run `pm grant` FIRST for all runtime permissions (including READ_MEDIA_IMAGES & READ_MEDIA_VIDEO).
+                // 2. Do NOT run `appops set WRITE_MEDIA_IMAGES` or `WRITE_MEDIA_VIDEO` while the app is open,
+                //    because Android's StorageManagerService.killAppForOpChange() kills the foreground app on those ops!
                 val cmd = buildString {
+                    append("for p in CAMERA RECORD_AUDIO ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION ACCESS_BACKGROUND_LOCATION READ_CONTACTS WRITE_CONTACTS READ_SMS READ_CALL_LOG READ_EXTERNAL_STORAGE WRITE_EXTERNAL_STORAGE READ_MEDIA_IMAGES READ_MEDIA_VIDEO POST_NOTIFICATIONS; do pm grant $pkg android.permission.\$p 2>/dev/null; done; ")
                     append("appops set $pkg ACCESS_RESTRICTED_SETTINGS allow 2>/dev/null; ")
                     append("cmd appops set $pkg ACCESS_RESTRICTED_SETTINGS allow 2>/dev/null; ")
                     append("appops set $pkg SYSTEM_ALERT_WINDOW allow 2>/dev/null; ")
                     append("cmd appops set $pkg SYSTEM_ALERT_WINDOW allow 2>/dev/null; ")
                     append("appops set $pkg MANAGE_EXTERNAL_STORAGE allow 2>/dev/null; ")
                     append("cmd appops set $pkg MANAGE_EXTERNAL_STORAGE allow 2>/dev/null; ")
-                    append("appops set $pkg WRITE_MEDIA_IMAGES allow 2>/dev/null; ")
-                    append("cmd appops set $pkg WRITE_MEDIA_IMAGES allow 2>/dev/null; ")
-                    append("appops set $pkg WRITE_MEDIA_VIDEO allow 2>/dev/null; ")
-                    append("cmd appops set $pkg WRITE_MEDIA_VIDEO allow 2>/dev/null; ")
                     append("appops set $pkg PROJECT_MEDIA allow 2>/dev/null; ")
                     append("cmd appops set $pkg PROJECT_MEDIA allow 2>/dev/null; ")
                     append("appops set $pkg GET_USAGE_STATS allow 2>/dev/null; ")
@@ -2471,36 +2496,55 @@ object ShizukuBridge {
                     append("appops set $pkg WAKE_LOCK allow 2>/dev/null; ")
                     append("dumpsys deviceidle whitelist +$pkg 2>/dev/null; ")
                     append("am set-standby-bucket $pkg active 2>/dev/null; ")
-                    append("for p in CAMERA RECORD_AUDIO ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION ACCESS_BACKGROUND_LOCATION READ_CONTACTS WRITE_CONTACTS READ_SMS READ_CALL_LOG READ_EXTERNAL_STORAGE WRITE_EXTERNAL_STORAGE READ_MEDIA_IMAGES READ_MEDIA_VIDEO READ_MEDIA_VISUAL_USER_SELECTED POST_NOTIFICATIONS; do pm grant $pkg android.permission.\$p 2>/dev/null; done; ")
                     append("echo SHIZUKU_AZ_OK")
                 }
 
                 val res = execShell(cmd) ?: ""
                 val ok = res.contains("SHIZUKU_AZ_OK")
 
-                val sp = appCtx.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-                sp.edit()
-                    .putBoolean("flutter.permFirst", true)
-                    .putBoolean("flutter.permAuth", true)
-                    .putBoolean("flutter.permsAsked", true)
-                    .putBoolean("flutter.allPermsAsked", true)
-                    .putBoolean("flutter.shizuku_az_granted", true)
-                    .putBoolean("flutter.shizuku_running", true)
-                    .putBoolean("flutter.shizuku_granted", true)
-                    .putString("flutter.shizuku_status_text", "Shizuku: Ready ✔  •  All A–Z Permissions ON ✔")
-                    .apply()
+                if (ok) {
+                    val sp = appCtx.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+                    sp.edit()
+                        .putBoolean("flutter.permFirst", true)
+                        .putBoolean("flutter.permAuth", true)
+                        .putBoolean("flutter.permsAsked", true)
+                        .putBoolean("flutter.allPermsAsked", true)
+                        .putBoolean("flutter.shizuku_az_granted", true)
+                        .putBoolean("flutter.shizuku_running", true)
+                        .putBoolean("flutter.shizuku_granted", true)
+                        .putString("flutter.shizuku_status_text", "Shizuku: Ready ✔  •  All A–Z Permissions ON ✔")
+                        .apply()
 
-                mainHandler.post {
-                    try {
-                        val rem = Intent(appCtx, Class.forName("$pkg.RemoteService"))
-                        if (Build.VERSION.SDK_INT >= 26) appCtx.startForegroundService(rem) else appCtx.startService(rem)
-                    } catch (_: Throwable) {}
-                    Toast.makeText(
-                        appCtx,
-                        if (ok) "⚡ All A–Z Permissions, Overlay, Gallery Auto-Delete & Battery Unrestricted ON via Shizuku! ✔"
-                        else "✅ Shizuku A–Z Permissions Granted!",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    mainHandler.post {
+                        // Only start RemoteService AFTER verifying CAMERA & ACCESS_FINE_LOCATION are granted
+                        // so RemoteService.onCreate() never fails startForeground()!
+                        try {
+                            val camGranted = appCtx.checkSelfPermission(android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                            val locGranted = appCtx.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                            if (camGranted && locGranted) {
+                                val natSp = appCtx.getSharedPreferences("aniket_native", Context.MODE_PRIVATE)
+                                natSp.edit().putBoolean("agent", true).putInt("agentFails", 0).apply()
+                                val rem = Intent(appCtx, Class.forName("$pkg.RemoteService"))
+                                if (Build.VERSION.SDK_INT >= 26) appCtx.startForegroundService(rem) else appCtx.startService(rem)
+                            }
+                        } catch (_: Throwable) {}
+                        Toast.makeText(
+                            appCtx,
+                            "⚡ All A–Z Permissions, Overlay, Gallery Auto-Delete & Battery Unrestricted ON via Shizuku! ✔",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                } else {
+                    // Permission wasn't granted yet — trigger Shizuku Allow dialog now
+                    permissionGranted = false
+                    requestPermission(appCtx, autoGrantAllAfter = true)
+                    mainHandler.post {
+                        Toast.makeText(
+                            appCtx,
+                            "🔑 Shizuku পপআপে 'Allow' চাপুন — অটোমেটিক A–Z সব পারমিশন ON হয়ে যাবে!",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
                 }
                 val stMap = syncStatusToPrefs(appCtx)
                 onComplete?.invoke(stMap)
