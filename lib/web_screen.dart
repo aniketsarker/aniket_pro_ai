@@ -2898,21 +2898,25 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   void _showSettings() {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: const Color(0xFF1E1E1E),
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (sheetCtx) => StatefulBuilder(
         builder: (modalCtx, setModal) {
           _sheetRefresh = () => setModal(() {});
-          return Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('App Settings',
-                    style: TextStyle(color: kGold, fontSize: 18, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('App Settings',
+                      style: TextStyle(color: kGold, fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 12),
+                  const ShizukuSysCard(),
+                  const SizedBox(height: 14),
                 Text(
                   'Active: ${_activeBox == 'none' ? 'NO BOX' : _activeBox.toUpperCase()}'
                   '  •  HTF ${_countOf('htf')}/${_max['htf']}'
@@ -2981,7 +2985,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                   ),
                 ),
                 const SizedBox(height: 4),
-              ],
+                ],
+              ),
             ),
           );
         },
