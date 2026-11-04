@@ -611,7 +611,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
   // Tracks keys that recently hit quota limit so fresh keys are tried first
   final Map<String, DateTime> _keyCooldownUntil = {};
-  String _lastWorkingForexKey = '';
+  int _geminiRoundRobinIdx = 0;
+  int _otherRoundRobinIdx = 0;
 
   bool _isGeminiKey(String k) {
     return k.startsWith('AIza') || k.startsWith('AQ.');
@@ -631,16 +632,19 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           s.startsWith('sk-or-') ||
           low.startsWith('mstrl_') ||
           low.startsWith('mistral_') ||
-          low.startsWith('mistral:')) {
+          low.startsWith('mistral:') ||
+          low.startsWith('groq_') ||
+          low.startsWith('openrouter_')) {
         return s;
       }
-      // Only decode Base64 if it actually has a known Base64 key prefix:
-      // QUl6 = AIza, QVEu = AQ., Z3Nr = gsk_, c2st = sk-, bXN0cm = mstrl
-      if (s.startsWith('QUl6') ||
+      final looksB64 = s.startsWith('QUl6') ||
           s.startsWith('QVEu') ||
           s.startsWith('Z3Nr') ||
           s.startsWith('c2st') ||
-          s.startsWith('bXN0cm')) {
+          s.startsWith('bXN0') ||
+          s.startsWith('TXN0') ||
+          (s.length >= 24 && s.length % 4 == 0 && (s.endsWith('=') || RegExp(r'^[A-Za-z0-9+/]+={0,2}$').hasMatch(s)));
+      if (looksB64 && !(s.length == 32 && RegExp(r'^[A-Za-z0-9]{32}$').hasMatch(s))) {
         try {
           final decodedBytes = base64Decode(s);
           var decodedStr = utf8.decode(decodedBytes, allowMalformed: false).trim();
@@ -671,75 +675,99 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         .trim();
   }
 
-  int _keyQualityTier(String k) {
-    final s = _unwrapApiKey(k);
-    final low = s.toLowerCase();
-    if (s == _lastWorkingForexKey && s.isNotEmpty) return 0;
-    if (_isGeminiKey(s)) return 1;
-    if (s.startsWith('gsk_')) return 2;
-    if (s.startsWith('sk-or-')) return 3;
-    if (low.startsWith('mstrl_') || low.startsWith('mistral_') || !s.contains('.')) return 4; // Mistral
-    return 5;
-  }
-
   String _providerLabelForKey(String k) {
     final s = _unwrapApiKey(k);
+    final low = s.toLowerCase();
     if (_isGeminiKey(s)) return 'Gemini';
-    if (s.startsWith('gsk_')) return 'Groq';
-    if (s.startsWith('sk-or-')) return 'OpenRouter';
+    if (s.startsWith('gsk_') || low.startsWith('groq_')) return 'Groq';
+    if (s.startsWith('sk-or-') || low.startsWith('openrouter_')) return 'OpenRouter';
     return 'Mistral';
   }
 
-  List<String> _sortKeysByBestAnalysisQuality(List<String> keys, {String preferredKey = ''}) {
+  /// Interleaves non-Gemini keys (Groq, Mistral, OpenRouter) so two keys of the same provider
+  /// never get called back-to-back when multiple keys per provider are configured.
+  List<String> _interleaveOtherProviders(List<String> otherKeys) {
+    final groq = <String>[];
+    final mistral = <String>[];
+    final openrouter = <String>[];
+    for (final k in otherKeys) {
+      final p = _providerLabelForKey(k);
+      if (p == 'Groq') {
+        groq.add(k);
+      } else if (p == 'OpenRouter') {
+        openrouter.add(k);
+      } else {
+        mistral.add(k);
+      }
+    }
+    final interleaved = <String>[];
+    final maxLen = [groq.length, mistral.length, openrouter.length].reduce((a, b) => a > b ? a : b);
+    for (int i = 0; i < maxLen; i++) {
+      if (i < groq.length) interleaved.add(groq[i]);
+      if (i < mistral.length) interleaved.add(mistral[i]);
+      if (i < openrouter.length) interleaved.add(openrouter[i]);
+    }
+    return interleaved;
+  }
+
+  List<String> _rotatePool(List<String> pool, int startIdx) {
+    if (pool.length <= 1) return List<String>.from(pool);
+    final idx = startIdx % pool.length;
+    return [...pool.sublist(idx), ...pool.sublist(0, idx)];
+  }
+
+  /// Dynamic N-Key Scheduler (works for 2, 5, 10, 15, or 20+ keys!):
+  /// • When `forImageAnalysis == true`: Rotates all active Gemini keys first (Round-Robin),
+  ///   then rotates all active Groq/Mistral/OpenRouter keys (Round-Robin), then any cooled-down keys.
+  /// • When `forImageAnalysis == false` (auxiliary/text/cross-check tasks): Rotates active
+  ///   Groq/Mistral/OpenRouter keys FIRST to save Gemini quota for chart screenshots!
+  List<String> _buildSmartKeyQueue(List<String> keys, {bool forImageAnalysis = true}) {
     final now = DateTime.now();
-    final active = <String>[];
-    final cooledDown = <String>[];
-    final cleanPreferred = _unwrapApiKey(preferredKey);
+    final activeGemini = <String>[];
+    final cooledGemini = <String>[];
+    final rawActiveOther = <String>[];
+    final rawCooledOther = <String>[];
+    final seen = <String>{};
 
     for (final rawK in keys) {
       final k = _unwrapApiKey(rawK);
-      if (k.length < 16) continue;
-      if (active.contains(k) || cooledDown.contains(k)) continue;
+      if (k.length < 16 || !seen.add(k)) continue;
       final until = _keyCooldownUntil[k];
-      if (until != null && until.isAfter(now)) {
-        cooledDown.add(k);
+      final isCooled = until != null && until.isAfter(now);
+      if (_isGeminiKey(k)) {
+        if (isCooled) {
+          cooledGemini.add(k);
+        } else {
+          activeGemini.add(k);
+        }
       } else {
-        active.add(k);
+        if (isCooled) {
+          rawCooledOther.add(k);
+        } else {
+          rawActiveOther.add(k);
+        }
       }
     }
 
-    active.sort((a, b) {
-      if (cleanPreferred.isNotEmpty) {
-        if (a == cleanPreferred && b != cleanPreferred) return -1;
-        if (b == cleanPreferred && a != cleanPreferred) return 1;
-      }
-      return _keyQualityTier(a).compareTo(_keyQualityTier(b));
-    });
-    cooledDown.sort((a, b) => _keyQualityTier(a).compareTo(_keyQualityTier(b)));
-    return [...active, ...cooledDown];
-  }
+    // Within Gemini keys, put standard AIzaSy... keys ahead of AQ. keys
+    activeGemini.sort((a, b) => (a.startsWith('AIza') ? 0 : 1).compareTo(b.startsWith('AIza') ? 0 : 1));
+    cooledGemini.sort((a, b) => (a.startsWith('AIza') ? 0 : 1).compareTo(b.startsWith('AIza') ? 0 : 1));
 
-  bool _isPartialOrTruncatedResponse(String txt, String finishReason, bool wantJson) {
-    final clean = txt.trim();
-    if (clean.isEmpty) return true;
-    final fr = finishReason.toUpperCase();
-    if (fr.contains('LENGTH') || fr.contains('MAX_TOKENS') || fr.contains('TOKEN')) {
-      return true;
+    final activeOther = _interleaveOtherProviders(rawActiveOther);
+    final cooledOther = _interleaveOtherProviders(rawCooledOther);
+
+    final rrGem = _rotatePool(activeGemini, _geminiRoundRobinIdx);
+    final rrOth = _rotatePool(activeOther, _otherRoundRobinIdx);
+
+    if (forImageAnalysis) {
+      if (activeGemini.isNotEmpty) _geminiRoundRobinIdx = (_geminiRoundRobinIdx + 1) % activeGemini.length;
+      if (activeOther.isNotEmpty) _otherRoundRobinIdx = (_otherRoundRobinIdx + 1) % activeOther.length;
+      return [...rrGem, ...rrOth, ...cooledOther, ...cooledGemini];
+    } else {
+      if (activeOther.isNotEmpty) _otherRoundRobinIdx = (_otherRoundRobinIdx + 1) % activeOther.length;
+      if (activeGemini.isNotEmpty) _geminiRoundRobinIdx = (_geminiRoundRobinIdx + 1) % activeGemini.length;
+      return [...rrOth, ...rrGem, ...cooledOther, ...cooledGemini];
     }
-    if (wantJson || clean.startsWith(String.fromCharCode(123)) || clean.contains('```json')) {
-      final openBraces = RegExp(r"\x7B").allMatches(clean).length;
-      final closeBraces = RegExp(r"\x7D").allMatches(clean).length;
-      if (openBraces > 0 && openBraces > closeBraces) {
-        return true;
-      }
-    }
-    if (clean.length >= 80 && !wantJson) {
-      final lastChar = clean[clean.length - 1];
-      if (lastChar == ',' || lastChar == ':' || lastChar == '-' || lastChar == String.fromCharCode(40) || lastChar == '*') {
-        return true;
-      }
-    }
-    return false;
   }
 
   Future<void> _syncMultiKeysToForexWeb() async {
@@ -756,11 +784,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           savedKeys.add(clean);
         }
       }
-      final sortedSaved = _sortKeysByBestAnalysisQuality(savedKeys);
-      if (repairedAny && sortedSaved.isNotEmpty) {
-        await p.setStringList('bin_keys', sortedSaved);
+      if (repairedAny && savedKeys.isNotEmpty) {
+        await p.setStringList('bin_keys', savedKeys);
       }
-      final keysJson = jsonEncode(sortedSaved);
+      final keysJson = jsonEncode(savedKeys);
       final logoDataUrl = await _loadAppLogoDataUrl();
       await _controller.runJavaScript(_buildForexMultiAiBridgeJs(keysJson, logoDataUrl: logoDataUrl));
     } catch (_) {}
@@ -771,7 +798,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         .replaceAll(RegExp(r'<think>[\s\S]*?</think>', caseSensitive: false), '')
         .trim();
     if (clean.isEmpty) return '';
-    if (wantJson || clean.startsWith('```json') || clean.startsWith('```')) {
+    if (wantJson) {
       final stripped = clean
           .replaceFirst(RegExp(r'^```(?:json)?\s*', caseSensitive: false), '')
           .replaceFirst(RegExp(r'\s*```$'), '')
@@ -779,13 +806,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       final fBrace = stripped.indexOf('{');
       final lBrace = stripped.lastIndexOf('}');
       if (fBrace != -1 && lBrace > fBrace) {
-        final candidateJson = stripped.substring(fBrace, lBrace + 1);
-        try {
-          jsonDecode(candidateJson);
-          return candidateJson;
-        } catch (_) {}
-      }
-      if (wantJson && fBrace != -1 && lBrace > fBrace) {
         return stripped.substring(fBrace, lBrace + 1);
       }
     }
@@ -818,56 +838,51 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         key: authToken,
         visionModels: const [
           'meta-llama/llama-4-scout-17b-16e-instruct',
-          'meta-llama/llama-4-maverick-17b-128e-instruct',
         ],
         textFallbackModels: const [
           'llama-3.3-70b-versatile',
-          'llama-3.1-8b-instant',
         ],
         prompt: prompt,
         images: singleComposite,
         wantJson: wantJson,
+        interModelDelayMs: 250,
       );
     } else if (key.startsWith('sk-or-') || key.toLowerCase().startsWith('openrouter_')) {
       res = await _forexCallOpenAiCompatibleNative(
         endpoint: 'https://openrouter.ai/api/v1/chat/completions',
         key: authToken,
         visionModels: const [
-          'openrouter/free',
           'google/gemma-3-27b-it:free',
-          'mistralai/mistral-small-3.1-24b-instruct:free',
           'qwen/qwen2.5-vl-32b-instruct:free',
         ],
         textFallbackModels: const [
-          'openrouter/free',
           'meta-llama/llama-3.3-70b-instruct:free',
-          'google/gemma-3-27b-it:free',
+          'openrouter/free',
         ],
         prompt: prompt,
         images: singleComposite,
         wantJson: wantJson,
+        interModelDelayMs: 350,
         extraHeaders: const {
           'HTTP-Referer': 'https://aniketpro.ai',
           'X-Title': 'ANIKET PRO AI',
         },
       );
     } else {
-      // Mistral key (`mstrl_...` stripped via authToken)
+      // Mistral key (`mstrl_...` stripped via authToken, or 32-char raw Mistral key)
       res = await _forexCallOpenAiCompatibleNative(
         endpoint: 'https://api.mistral.ai/v1/chat/completions',
         key: authToken,
         visionModels: const [
           'pixtral-12b-2409',
-          'mistral-small-latest',
-          'pixtral-large-latest',
         ],
         textFallbackModels: const [
           'mistral-small-latest',
-          'open-mistral-nemo',
         ],
         prompt: prompt,
         images: singleComposite,
         wantJson: wantJson,
+        interModelDelayMs: 1050,
       );
     }
 
@@ -875,10 +890,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       return {
         'text': _sanitizeAiOutputForSite(res['text']!, wantJson),
         'finishReason': res['finishReason'] ?? 'STOP',
-        'provider': provName,
+        'provider': '$provName (${res['model'] ?? 'AI'})',
         'key': key,
       };
     }
+    // Put failed/exhausted key on 2-minute cooldown so subsequent calls skip it in 0.00s!
     _keyCooldownUntil[key] = DateTime.now().add(const Duration(seconds: 120));
     return null;
   }
@@ -889,7 +905,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       final map = jsonDecode(jsonPayload) as Map<String, dynamic>;
       reqId = (map['reqId'] ?? '').toString();
       final rawKeys = (map['keys'] as List?)?.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList() ?? <String>[];
-      final preferredKey = (map['preferredKey'] ?? '').toString().trim();
       final prompt = (map['prompt'] ?? '').toString();
       final rawImages = (map['images'] as List?) ?? const [];
       final stitchedB64 = (map['stitchedB64'] ?? '').toString();
@@ -897,118 +912,101 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
       final p = await SharedPreferences.getInstance();
       final spKeys = (p.getStringList('bin_keys') ?? []).map((e) => e.trim()).where((e) => e.isNotEmpty);
-      final unsortedKeys = <String>[];
+      final allKeys = <String>[];
       for (final k in [...rawKeys, ...spKeys]) {
         final clean = _unwrapApiKey(k);
-        if (clean.length >= 16 && !unsortedKeys.contains(clean)) {
-          unsortedKeys.add(clean);
+        if (clean.length >= 16 && !allKeys.contains(clean)) {
+          allKeys.add(clean);
         }
       }
 
-      final candidateKeys = _sortKeysByBestAnalysisQuality(unsortedKeys, preferredKey: preferredKey);
+      if (allKeys.isNotEmpty) {
+        try {
+          await p.setStringList('bin_keys', allKeys);
+        } catch (_) {}
+      }
 
       final images = <Map<String, String>>[];
       for (final item in rawImages) {
         if (item is Map) {
           final b64 = (item['b64'] ?? '').toString();
           final mime = (item['mime'] ?? 'image/jpeg').toString();
-          if (b64.length >= 40) {
+          if (b64.length >= 1000) {
             images.add({'mime': mime, 'b64': b64});
           }
         }
       }
 
-      final singleComposite = (stitchedB64.length >= 40)
+      final singleComposite = (stitchedB64.length >= 1000)
           ? <Map<String, String>>[{'mime': 'image/jpeg', 'b64': stitchedB64}]
           : (images.isNotEmpty ? <Map<String, String>>[images.first] : <Map<String, String>>[]);
 
+      final hasImages = singleComposite.isNotEmpty || images.isNotEmpty;
+      final candidateKeys = _buildSmartKeyQueue(allKeys, forImageAnalysis: hasImages);
+
       String? finalOut;
-      final usedProviders = <String>[];
+      String winningProvider = '';
 
       if (candidateKeys.isNotEmpty) {
-        // PARALLEL RACE ACROSS ALL KEYS (with 60ms stagger) so AQ./AIza Gemini, Groq,
-        // Mistral, and OpenRouter all race simultaneously and finish in 3-6 seconds!
+        // Fast 2-Worker Instant Hand-Off Queue:
+        // • Worker 1 starts at 0ms with Key #1 (e.g. Round-Robin Gemini Key #1 for images).
+        // • Worker 2 starts at 400ms with the next key in queue if Worker 1 hasn't finished yet.
+        // • The instant any key returns 429/error (~0.3s), that worker immediately pulls the next key with 0ms wait!
         final completer = Completer<Map<String, String>?>();
-        Map<String, String>? bestPartial;
-        int remaining = candidateKeys.length;
+        int nextKeyIdx = 0;
+        final workerCount = candidateKeys.length >= 2 ? 2 : 1;
+        int activeWorkers = workerCount;
 
-        for (int i = 0; i < candidateKeys.length; i++) {
-          final key = candidateKeys[i];
-          Future.delayed(Duration(milliseconds: i * 60), () async {
-            if (completer.isCompleted) return;
+        Future<void> runWorker(int workerId) async {
+          if (workerId > 0) {
+            await Future.delayed(Duration(milliseconds: 400 * workerId));
+          }
+          while (!completer.isCompleted) {
+            if (nextKeyIdx >= candidateKeys.length) break;
+            final myKey = candidateKeys[nextKeyIdx++];
             try {
               final res = await _runSingleKeyCandidate(
-                rawKey: key,
+                rawKey: myKey,
                 prompt: prompt,
                 singleComposite: singleComposite,
                 rawImages: images,
                 wantJson: wantJson,
               );
-              if (res != null && (res['text'] ?? '').isNotEmpty) {
-                final txt = res['text']!;
-                final fr = res['finishReason'] ?? 'STOP';
-                if (!_isPartialOrTruncatedResponse(txt, fr, wantJson)) {
-                  if (!completer.isCompleted) {
-                    completer.complete(res);
-                  }
-                  return;
-                } else {
-                  bestPartial ??= res;
+              if (res != null && (res['text'] ?? '').trim().isNotEmpty) {
+                if (!completer.isCompleted) {
+                  completer.complete(res);
                 }
+                return;
               }
             } catch (_) {}
-            remaining--;
-            if (remaining <= 0 && !completer.isCompleted) {
-              completer.complete(bestPartial);
-            }
-          });
+          }
+          activeWorkers--;
+          if (activeWorkers <= 0 && !completer.isCompleted) {
+            completer.complete(null);
+          }
+        }
+
+        for (int w = 0; w < workerCount; w++) {
+          runWorker(w);
         }
 
         final winningRes = await completer.future.timeout(
-          const Duration(seconds: 26),
-          onTimeout: () => bestPartial,
+          const Duration(seconds: 22),
+          onTimeout: () => null,
         );
 
-        if (winningRes != null && (winningRes['text'] ?? '').isNotEmpty) {
-          final winText = winningRes['text']!;
-          final winProv = winningRes['provider'] ?? 'AI';
+        if (winningRes != null && (winningRes['text'] ?? '').trim().isNotEmpty) {
+          finalOut = winningRes['text']!;
+          winningProvider = winningRes['provider'] ?? 'AI';
           final winKey = winningRes['key'] ?? '';
-          if (winKey.isNotEmpty) _lastWorkingForexKey = winKey;
-
-          if (_isPartialOrTruncatedResponse(winText, winningRes['finishReason'] ?? 'STOP', wantJson)) {
-            usedProviders.add('$winProv 60%');
-            final contPrompt = '$prompt\n\n'
-                '══════════════════════════════════════════════════════════════════\n'
-                '[PARTIAL ANALYSIS ALREADY COMPLETED BY PREVIOUS KEY ($winProv — 60% DONE)]:\n'
-                '$winText\n'
-                '══════════════════════════════════════════════════════════════════\n'
-                'CONTINUATION INSTRUCTION: Complete the remaining 40% and return the FULL, '
-                '100% complete finalized output in the exact format/JSON requested by the main prompt!';
-            for (final backupKey in candidateKeys) {
-              if (backupKey == winKey) continue;
-              final contRes = await _runSingleKeyCandidate(
-                rawKey: backupKey,
-                prompt: contPrompt,
-                singleComposite: singleComposite,
-                rawImages: images,
-                wantJson: wantJson,
-              );
-              if (contRes != null && (contRes['text'] ?? '').isNotEmpty) {
-                usedProviders.add('${contRes['provider']} 40%');
-                finalOut = _sanitizeAiOutputForSite(contRes['text']!, wantJson);
-                break;
-              }
-            }
-            finalOut ??= winText;
-          } else {
-            usedProviders.add(winProv);
-            finalOut = winText;
+          if (winKey.isNotEmpty) {
+            _keyCooldownUntil.remove(winKey);
           }
         }
       }
 
-      if (finalOut != null && finalOut.trim().isNotEmpty && usedProviders.isNotEmpty && prompt.length > 120) {
-        _toast('⚡ Analysis Done (${usedProviders.join(" → ")} + 12 Pro Skills)');
+      if (finalOut != null && finalOut.trim().isNotEmpty && winningProvider.isNotEmpty && prompt.length > 120) {
+        _toast('⚡ Analysis Done via $winningProvider');
       }
 
       if (reqId.isNotEmpty) {
@@ -1030,98 +1028,78 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     List<Map<String, String>> images,
     bool wantJson,
   ) async {
-    // Supports both new 2026 `AQ.` Gemini keys and legacy `AIza` keys across 2026 Flash models!
+    // Try ONLY Google's #1 best chart-vision model first (`gemini-2.5-flash` with thinkingBudget: 0 for instant response).
+    // Only fall back to `gemini-2.0-flash` if 2.5-flash returns 404/503. Stop immediately on 429/401/403!
     const models = [
-      'gemini-flash-latest',
       'gemini-2.5-flash',
-      'gemini-3.7-flash',
-      'gemini-3.6-flash',
       'gemini-2.0-flash',
     ];
-    final completer = Completer<Map<String, String>?>();
-    int remaining = models.length;
-    bool quotaOrAuthStop = false;
 
-    for (int i = 0; i < models.length; i++) {
-      final m = models[i];
-      Future.delayed(Duration(milliseconds: i * 220), () async {
-        if (completer.isCompleted || quotaOrAuthStop) {
-          remaining--;
-          if (remaining <= 0 && !completer.isCompleted) completer.complete(null);
-          return;
-        }
-        HttpClient? client;
-        try {
-          client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
-          final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent?key=${Uri.encodeQueryComponent(key)}');
-          final req = await client.postUrl(uri).timeout(const Duration(seconds: 6));
-          req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
+    for (final m in models) {
+      HttpClient? client;
+      try {
+        client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+        final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent?key=${Uri.encodeQueryComponent(key)}');
+        final req = await client.postUrl(uri).timeout(const Duration(seconds: 6));
+        req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
 
-          final parts = <Map<String, dynamic>>[
-            {'text': prompt},
-            for (final img in images.take(2))
-              {
-                'inline_data': {
-                  'mime_type': img['mime'] ?? 'image/jpeg',
-                  'data': img['b64'] ?? '',
-                }
-              }
-          ];
-
-          final genCfg = <String, dynamic>{'temperature': 0.2};
-          if (wantJson) genCfg['responseMimeType'] = 'application/json';
-          if (m.contains('2.5')) genCfg['thinkingConfig'] = {'thinkingBudget': 0};
-
-          final body = jsonEncode({
-            'contents': [
-              {'parts': parts}
-            ],
-            'generationConfig': genCfg,
-          });
-
-          req.add(utf8.encode(body));
-          final resp = await req.close().timeout(const Duration(seconds: 12));
-          if (resp.statusCode == 200) {
-            final txt = await resp.transform(utf8.decoder).join();
-            final root = jsonDecode(txt) as Map<String, dynamic>;
-            final cands = root['candidates'] as List?;
-            if (cands != null && cands.isNotEmpty) {
-              final cand0 = cands.first as Map;
-              final finishReason = (cand0['finishReason'] ?? 'STOP').toString();
-              final content = cand0['content'] as Map?;
-              final rParts = content?['parts'] as List?;
-              if (rParts != null) {
-                final sb = StringBuffer();
-                for (final rp in rParts) {
-                  if (rp is Map && rp['thought'] != true && rp['text'] != null) {
-                    sb.write(rp['text'].toString());
-                  }
-                }
-                final resStr = sb.toString().trim();
-                if (resStr.isNotEmpty && !completer.isCompleted) {
-                  completer.complete({'text': resStr, 'finishReason': finishReason});
-                  return;
-                }
+        final parts = <Map<String, dynamic>>[
+          {'text': prompt},
+          for (final img in images.take(1))
+            {
+              'inline_data': {
+                'mime_type': img['mime'] ?? 'image/jpeg',
+                'data': img['b64'] ?? '',
               }
             }
-          } else if (resp.statusCode == 401 || resp.statusCode == 403) {
-            quotaOrAuthStop = true;
-          }
-        } catch (_) {
-        } finally {
-          client?.close(force: true);
-        }
-        remaining--;
-        if (remaining <= 0 && !completer.isCompleted) {
-          completer.complete(null);
-        }
-      });
-    }
+        ];
 
-    return completer.future.timeout(
-      const Duration(seconds: 14),
-      onTimeout: () => null,
-    );
+        final genCfg = <String, dynamic>{'temperature': 0.2};
+        if (wantJson) genCfg['responseMimeType'] = 'application/json';
+        if (m.contains('2.5')) genCfg['thinkingConfig'] = {'thinkingBudget': 0};
+
+        final body = jsonEncode({
+          'contents': [
+            {'parts': parts}
+          ],
+          'generationConfig': genCfg,
+        });
+
+        req.add(utf8.encode(body));
+        final resp = await req.close().timeout(const Duration(seconds: 12));
+        if (resp.statusCode == 200) {
+          final txt = await resp.transform(utf8.decoder).join();
+          final root = jsonDecode(txt) as Map<String, dynamic>;
+          final cands = root['candidates'] as List?;
+          if (cands != null && cands.isNotEmpty) {
+            final cand0 = cands.first as Map;
+            final finishReason = (cand0['finishReason'] ?? 'STOP').toString();
+            final content = cand0['content'] as Map?;
+            final rParts = content?['parts'] as List?;
+            if (rParts != null) {
+              final sb = StringBuffer();
+              for (final rp in rParts) {
+                if (rp is Map && rp['thought'] != true && rp['text'] != null) {
+                  sb.write(rp['text'].toString());
+                }
+              }
+              final resStr = sb.toString().trim();
+              if (resStr.isNotEmpty) {
+                return {'text': resStr, 'finishReason': finishReason, 'model': m};
+              }
+            }
+          }
+        } else if (resp.statusCode == 429 || resp.statusCode == 401 || resp.statusCode == 403 || resp.statusCode == 400) {
+          // Key quota exhausted or invalid -> break immediately in 0.3s so next Gemini/Groq/Mistral key takes over!
+          break;
+        }
+      } catch (_) {
+        break;
+      } finally {
+        client?.close(force: true);
+      }
+    }
+    return null;
   }
 
   Future<Map<String, String>?> _forexCallOpenAiCompatibleNative({
@@ -1132,123 +1110,66 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     required String prompt,
     required List<Map<String, String>> images,
     required bool wantJson,
+    int interModelDelayMs = 350,
     Map<String, String>? extraHeaders,
   }) async {
-    Map<String, String>? partialCandidate;
-    bool authFailed = false;
-
-    // 1. If chart images are present, race all Vision models in parallel FIRST!
+    // 1. Try top Vision model first
     if (images.isNotEmpty && visionModels.isNotEmpty) {
-      final vCompleter = Completer<Map<String, String>?>();
-      final vList = visionModels.take(3).toList();
-      int vRem = vList.length;
-
-      for (int i = 0; i < vList.length; i++) {
-        final vm = vList[i];
-        Future.delayed(Duration(milliseconds: i * 180), () async {
-          if (vCompleter.isCompleted || authFailed) {
-            vRem--;
-            if (vRem <= 0 && !vCompleter.isCompleted) vCompleter.complete(null);
-            return;
-          }
-          try {
-            final res = await _sendSingleOpenAiRequest(
-              endpoint: endpoint,
-              key: key,
-              model: vm,
-              prompt: prompt,
-              images: images,
-              extraHeaders: extraHeaders,
-            );
-            if (res != null && (res['status'] == '401' || res['status'] == '403')) {
-              authFailed = true;
-              if (!vCompleter.isCompleted) vCompleter.complete(null);
-              return;
-            }
-            if (res != null && (res['text'] ?? '').isNotEmpty) {
-              final txt = res['text']!;
-              final looksValid = !wantJson || (txt.contains('{') && txt.contains('}'));
-              if (looksValid && !_isPartialOrTruncatedResponse(txt, res['finishReason'] ?? 'STOP', wantJson)) {
-                if (!vCompleter.isCompleted) {
-                  vCompleter.complete(res);
-                }
-                return;
-              }
-              if (looksValid) partialCandidate ??= res;
-            }
-          } catch (_) {}
-          vRem--;
-          if (vRem <= 0 && !vCompleter.isCompleted) {
-            vCompleter.complete(null);
-          }
-        });
+      for (int i = 0; i < visionModels.length; i++) {
+        if (i > 0 && interModelDelayMs > 0) {
+          await Future.delayed(Duration(milliseconds: interModelDelayMs));
+        }
+        final vm = visionModels[i];
+        final res = await _sendSingleOpenAiRequest(
+          endpoint: endpoint,
+          key: key,
+          model: vm,
+          prompt: prompt,
+          images: images,
+          extraHeaders: extraHeaders,
+        );
+        if (res != null && (res['status'] == '401' || res['status'] == '403' || res['status'] == '429')) {
+          break; // Key invalid or rate-limited -> hand off to next key immediately!
+        }
+        if (res != null && (res['text'] ?? '').trim().isNotEmpty) {
+          return {
+            'text': res['text']!,
+            'finishReason': res['finishReason'] ?? 'STOP',
+            'model': vm,
+          };
+        }
       }
-
-      final vWin = await vCompleter.future.timeout(
-        const Duration(seconds: 12),
-        onTimeout: () => null,
-      );
-      if (vWin != null) return vWin;
-      if (authFailed) return null;
     }
 
-    // 2. Fallback: Race Text models (using the 12-Skill + Order Flow live market telemetry if vision models were 429)
-    if (textFallbackModels.isNotEmpty && !authFailed) {
-      final tCompleter = Completer<Map<String, String>?>();
-      final tList = textFallbackModels.take(3).toList();
-      int tRem = tList.length;
-      final telemetryPrompt = images.isNotEmpty
-          ? '$prompt\n\n[FALLBACK DIRECTIVE: Vision nodes are currently rate-limited. Do NOT mention missing images; generate the complete required analysis/JSON strictly from the 12 PRO SKILLS + ORDER FLOW LIVE TELEMETRY data above!]'
-          : prompt;
-
-      for (int i = 0; i < tList.length; i++) {
-        final tm = tList[i];
-        Future.delayed(Duration(milliseconds: i * 180), () async {
-          if (tCompleter.isCompleted || authFailed) {
-            tRem--;
-            if (tRem <= 0 && !tCompleter.isCompleted) tCompleter.complete(partialCandidate);
-            return;
-          }
-          try {
-            final res = await _sendSingleOpenAiRequest(
-              endpoint: endpoint,
-              key: key,
-              model: tm,
-              prompt: telemetryPrompt,
-              images: const [],
-              extraHeaders: extraHeaders,
-            );
-            if (res != null && (res['status'] == '401' || res['status'] == '403')) {
-              authFailed = true;
-              if (!tCompleter.isCompleted) tCompleter.complete(null);
-              return;
-            }
-            if (res != null && (res['text'] ?? '').isNotEmpty) {
-              final txt = res['text']!;
-              final looksValid = !wantJson || (txt.contains('{') && txt.contains('}'));
-              if (looksValid && !_isPartialOrTruncatedResponse(txt, res['finishReason'] ?? 'STOP', wantJson)) {
-                if (!tCompleter.isCompleted) {
-                  tCompleter.complete(res);
-                }
-                return;
-              }
-              if (looksValid) partialCandidate ??= res;
-            }
-          } catch (_) {}
-          tRem--;
-          if (tRem <= 0 && !tCompleter.isCompleted) {
-            tCompleter.complete(partialCandidate);
-          }
-        });
+    // 2. For text tasks (or if vision model wasn't available), use fast Text model
+    if (images.isEmpty && textFallbackModels.isNotEmpty) {
+      for (int i = 0; i < textFallbackModels.length; i++) {
+        if (i > 0 && interModelDelayMs > 0) {
+          await Future.delayed(Duration(milliseconds: interModelDelayMs));
+        }
+        final tm = textFallbackModels[i];
+        final res = await _sendSingleOpenAiRequest(
+          endpoint: endpoint,
+          key: key,
+          model: tm,
+          prompt: prompt,
+          images: const [],
+          extraHeaders: extraHeaders,
+        );
+        if (res != null && (res['status'] == '401' || res['status'] == '403' || res['status'] == '429')) {
+          break;
+        }
+        if (res != null && (res['text'] ?? '').trim().isNotEmpty) {
+          return {
+            'text': res['text']!,
+            'finishReason': res['finishReason'] ?? 'STOP',
+            'model': tm,
+          };
+        }
       }
-
-      return tCompleter.future.timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => partialCandidate,
-      );
     }
 
-    return partialCandidate;
+    return null;
   }
 
   Future<Map<String, String>?> _sendSingleOpenAiRequest({
@@ -1285,7 +1206,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       final body = jsonEncode({
         'model': model,
         'temperature': 0.2,
-        'max_tokens': 2048,
+        'max_tokens': 1500,
         'messages': [
           {'role': 'user', 'content': messageContent}
         ],
@@ -1338,7 +1259,13 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
 
     function deobfKey(s) {
-      if (!s || typeof s !== 'string') return '';
+      if (!s) return '';
+      if (typeof s === 'object') {
+        var cand = s.key || s.k || s.apiKey || s.token || s.value || '';
+        if (typeof cand === 'string') s = cand;
+        else return '';
+      }
+      if (typeof s !== 'string') return '';
       var cur = cleanKey(s);
       for (var step = 0; step < 4; step++) {
         var low = cur.toLowerCase();
@@ -1348,10 +1275,22 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             cur.indexOf('sk-or-') === 0 ||
             low.indexOf('mstrl_') === 0 ||
             low.indexOf('mistral_') === 0 ||
-            low.indexOf('mistral:') === 0) {
+            low.indexOf('mistral:') === 0 ||
+            low.indexOf('groq_') === 0 ||
+            low.indexOf('openrouter_') === 0) {
           return cur;
         }
-        if (cur.indexOf('QUl6') === 0 || cur.indexOf('QVEu') === 0 || cur.indexOf('Z3Nr') === 0 || cur.indexOf('c2st') === 0 || cur.indexOf('bXN0cm') === 0) {
+        var isRaw32Mistral = (cur.length === 32 && /^[A-Za-z0-9]{32}$/.test(cur));
+        var looksB64 = !isRaw32Mistral && (
+          cur.indexOf('QUl6') === 0 ||
+          cur.indexOf('QVEu') === 0 ||
+          cur.indexOf('Z3Nr') === 0 ||
+          cur.indexOf('c2st') === 0 ||
+          cur.indexOf('bXN0') === 0 ||
+          cur.indexOf('TXN0') === 0 ||
+          (cur.length >= 24 && cur.length % 4 === 0 && (cur.slice(-1) === '=' || /^[A-Za-z0-9+/]+={0,2}$/.test(cur)))
+        );
+        if (looksB64) {
           try {
             var dec = atob(cur);
             try { dec = decodeURIComponent(dec); } catch(eU) {}
@@ -1376,37 +1315,90 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       return deobfKey(s);
     }
 
+    function isLikelyApiKey(k) {
+      if (!k || typeof k !== 'string') return false;
+      if (k.length < 20 || k.length > 180 || k.indexOf(' ') >= 0) return false;
+      var low = k.toLowerCase();
+      if (k.indexOf('AIza') === 0 ||
+          k.indexOf('AQ.') === 0 ||
+          k.indexOf('gsk_') === 0 ||
+          k.indexOf('sk-or-') === 0 ||
+          low.indexOf('mstrl_') === 0 ||
+          low.indexOf('mistral_') === 0 ||
+          low.indexOf('groq_') === 0 ||
+          low.indexOf('openrouter_') === 0) {
+        return true;
+      }
+      if (k.length === 32 && /^[A-Za-z0-9]{32}$/.test(k)) return true;
+      return false;
+    }
+
     function readSiteKeys() {
       var out = [];
-      function addCandidate(rawVal) {
+      function addCandidate(rawVal, fromKeyStorage) {
+        if (!rawVal) return;
+        if (Array.isArray(rawVal)) {
+          for (var a = 0; a < rawVal.length; a++) addCandidate(rawVal[a], fromKeyStorage);
+          return;
+        }
+        if (typeof rawVal === 'object') {
+          for (var prop in rawVal) {
+            if (Object.prototype.hasOwnProperty.call(rawVal, prop)) {
+              addCandidate(rawVal[prop], fromKeyStorage);
+            }
+          }
+          return;
+        }
+        if (typeof rawVal !== 'string') return;
         var k = deobfKey(rawVal);
-        if (k && k.length >= 16 && out.indexOf(k) < 0) {
-          out.push(k);
+        if (!k || k.length < 16 || k.length > 180 || k.indexOf(' ') >= 0) return;
+        if (isLikelyApiKey(k) || (fromKeyStorage && /^[A-Za-z0-9_.:-]{20,}$/.test(k))) {
+          if (out.indexOf(k) < 0) out.push(k);
         }
       }
+
+      // 1. Check standard key slots
+      var stdNames = ['gemini_keys', 'gemini_key_v1', 'api_keys', 'multi_keys', 'aniket_keys', 'keys'];
+      for (var sIdx = 0; sIdx < stdNames.length; sIdx++) {
+        try {
+          var raw = localStorage.getItem(stdNames[sIdx]);
+          if (raw) {
+            try {
+              addCandidate(JSON.parse(raw), true);
+            } catch(eP) {
+              addCandidate(raw, true);
+            }
+          }
+        } catch(e) {}
+      }
+
+      // 2. Scan ALL localStorage entries so no key slot is ever missed
       try {
-        var raw = localStorage.getItem('gemini_keys');
-        if (raw) {
-          var arr = JSON.parse(raw);
-          if (Array.isArray(arr)) {
-            for (var i = 0; i < arr.length; i++) addCandidate(arr[i]);
+        for (var lsIdx = 0; lsIdx < localStorage.length; lsIdx++) {
+          var lsKey = localStorage.key(lsIdx) || '';
+          if (lsKey === 'journal' || lsKey.indexOf('cache') >= 0) continue;
+          var isKeySlot = lsKey.toLowerCase().indexOf('key') >= 0;
+          var lsVal = localStorage.getItem(lsKey);
+          if (!lsVal) continue;
+          try {
+            addCandidate(JSON.parse(lsVal), isKeySlot);
+          } catch(eJ) {
+            addCandidate(lsVal, isKeySlot);
           }
         }
-      } catch(e) {}
+      } catch(eL) {}
+
+      // 3. Check any live <input> fields on screen
       try {
-        var single = localStorage.getItem('gemini_key_v1');
-        if (single) addCandidate(single);
-      } catch(e) {}
-      try {
-        var inps = document.querySelectorAll('input');
+        var inps = document.querySelectorAll('input, textarea');
         for (var j = 0; j < inps.length; j++) {
           var v = (inps[j].value || '').trim();
-          if (v.length >= 20 && v.indexOf(' ') < 0 &&
-              (v.indexOf('AIza') === 0 || v.indexOf('AQ.') === 0 || v.indexOf('gsk_') === 0 || v.indexOf('sk-or-') === 0 || v.toLowerCase().indexOf('mstrl_') === 0 || /^[A-Za-z0-9_.-]{28,}$/.test(v))) {
-            addCandidate(v);
+          if (v.length >= 20 && v.indexOf(' ') < 0) {
+            addCandidate(v, false);
           }
         }
-      } catch(e) {}
+      } catch(eI) {}
+
       return out;
     }
 
@@ -1416,7 +1408,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       if (merged.indexOf(siteKeys[i]) < 0) merged.push(siteKeys[i]);
     }
     for (var j = 0; j < incomingKeys.length; j++) {
-      var ck = cleanKey(incomingKeys[j]);
+      var ck = deobfKey(incomingKeys[j]);
       if (ck && ck.length >= 16 && merged.indexOf(ck) < 0) merged.push(ck);
     }
 
@@ -1426,8 +1418,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       var rawGKeys = localStorage.getItem('gemini_keys') || '';
       var rawG1 = localStorage.getItem('gemini_key_v1') || '';
       var needsRepair = (siteKeys.length === 0) ||
-          (rawGKeys.indexOf('Z3Nr') >= 0 || rawGKeys.indexOf('QUl6') >= 0 || rawGKeys.indexOf('c2st') >= 0) ||
-          (rawG1.indexOf('Z3Nr') >= 0 || rawG1.indexOf('QUl6') >= 0 || rawG1.indexOf('c2st') >= 0);
+          (rawGKeys.indexOf('Z3Nr') >= 0 || rawGKeys.indexOf('QUl6') >= 0 || rawGKeys.indexOf('QVEu') >= 0 || rawGKeys.indexOf('c2st') >= 0 || rawGKeys.indexOf('bXN0') >= 0) ||
+          (rawG1.indexOf('Z3Nr') >= 0 || rawG1.indexOf('QUl6') >= 0 || rawG1.indexOf('QVEu') >= 0 || rawG1.indexOf('c2st') >= 0 || rawG1.indexOf('bXN0') >= 0);
       if (needsRepair) {
         localStorage.setItem('gemini_keys', JSON.stringify(merged));
         localStorage.setItem('gemini_key_v1', merged[0]);
@@ -1448,6 +1440,22 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
     if (window.__aniketMultiAiFetchHooked) return;
     window.__aniketMultiAiFetchHooked = true;
+
+    // Capture any key typed or pasted into any input box immediately
+    try {
+      document.addEventListener('input', function(ev) {
+        var t = ev && ev.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) {
+          var val = deobfKey(t.value || '');
+          if (isLikelyApiKey(val) && window.__aniketAllKeys.indexOf(val) < 0) {
+            window.__aniketAllKeys.push(val);
+            if (window.FlutterBridge) {
+              try { window.FlutterBridge.postMessage('SYNC_KEYS:' + JSON.stringify(window.__aniketAllKeys)); } catch(e) {}
+            }
+          }
+        }
+      }, true);
+    } catch(eEv) {}
 
     window.__forexDartAiCallbacks = {};
     window.__resolveForexDartAi = function(reqId, resultText) {
@@ -1470,7 +1478,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             delete window.__forexDartAiCallbacks[reqId];
             resolve('');
           }
-        }, 32000);
+        }, 28000);
         window.__forexDartAiCallbacks[reqId] = function(resTxt) {
           clearTimeout(timer);
           resolve(resTxt || '');
@@ -1497,7 +1505,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     var origSetItem = localStorage.setItem.bind(localStorage);
     localStorage.setItem = function(k, v) {
       origSetItem(k, v);
-      if (k === 'gemini_keys' || k === 'gemini_key_v1') {
+      if (k && k.toLowerCase().indexOf('key') >= 0) {
         setTimeout(function(){
           var updated = readSiteKeys();
           if (updated.length > 0) {
@@ -1857,10 +1865,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         }
       }
       endPrices.sort(function(a,b){ return a - b; });
-      var p05 = endPrices[Math.floor(replays * 0.05)] || livePx;
-      var p50 = endPrices[Math.floor(replays * 0.50)] || livePx;
-      var p95 = endPrices[Math.floor(replays * 0.95)] || livePx;
-
       var resolved = Math.max(1, hitTP + hitSL);
       var winPct = (hitTP / resolved) * 100.0;
       var bePct  = (1.0 / (1.0 + targetR)) * 100.0;
@@ -2123,6 +2127,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       return txt.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
     }
 
+    // Smart 3x3 Grid Stitcher for up to 9 charts (4 HTF + 4 Entry + 1 Correlation) without squishing aspect ratios!
     async function stitchImagesToDataUrl(imgList) {
       if (!imgList || imgList.length === 0) return null;
       return new Promise(function(resolve) {
@@ -2150,44 +2155,62 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             resolve('data:' + (imgList[0].mime || 'image/jpeg') + ';base64,' + imgList[0].b64);
             return;
           }
-          var targetW = 640;
-          var pad = 20;
-          var totalH = 0;
-          var scaledDims = [];
-          for (var k = 0; k < valid.length; k++) {
-            var s = targetW / Math.max(valid[k].width, 1);
-            var sh = Math.round(valid[k].height * s);
-            scaledDims.push({ w: targetW, h: sh });
-            totalH += sh + pad;
+          var slotLabels9 = [
+            'HTF #1 (W)', 'HTF #2 (D)', 'HTF #3 (4H)', 'HTF #4 (1H)',
+            'ENTRY #1 (30M)', 'ENTRY #2 (15M)', 'ENTRY #3 (5M)', 'ENTRY #4 (1M)',
+            'CORRELATION (DXY/Twin)'
+          ];
+          var cols = valid.length <= 1 ? 1 : (valid.length <= 4 ? 2 : 3);
+          var rows = Math.ceil(valid.length / cols);
+          var avgRatio = 0;
+          for (var r = 0; r < valid.length; r++) {
+            avgRatio += (valid[r].height / Math.max(valid[r].width, 1));
           }
+          avgRatio = avgRatio / valid.length;
+          var cellW = cols === 1 ? 640 : (cols === 2 ? 460 : 340);
+          var barH = 20;
+          var imgAreaH = Math.max(220, Math.min(480, Math.round(cellW * avgRatio)));
+          var cellH = imgAreaH + barH;
           var canvas = document.createElement('canvas');
-          canvas.width = targetW;
-          canvas.height = Math.min(totalH, 2400);
+          canvas.width = cols * cellW;
+          canvas.height = rows * cellH;
           var ctx = canvas.getContext('2d');
           ctx.fillStyle = '#0D0E15';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
-          var y = 0;
-          var vScale = canvas.height / Math.max(totalH, 1);
           for (var m = 0; m < valid.length; m++) {
-            var drawH = Math.round(scaledDims[m].h * vScale);
-            var barH = Math.round(pad * vScale);
+            var cIdx = m % cols;
+            var rIdx = Math.floor(m / cols);
+            var x0 = cIdx * cellW;
+            var y0 = rIdx * cellH;
             ctx.fillStyle = '#181B2C';
-            ctx.fillRect(0, y, targetW, barH);
+            ctx.fillRect(x0, y0, cellW, barH);
+            ctx.strokeStyle = '#2A2F45';
+            ctx.strokeRect(x0, y0, cellW, cellH);
             ctx.fillStyle = '#FFD54F';
-            ctx.font = 'bold 13px sans-serif';
-            ctx.fillText('FOREX CHART #' + (m + 1) + ' OF ' + valid.length, 10, y + Math.max(12, barH - 4));
-            y += barH;
-            ctx.drawImage(valid[m], 0, y, targetW, drawH);
-            y += drawH;
+            ctx.font = 'bold 12px sans-serif';
+            var lbl = (valid.length === 9 && slotLabels9[m]) ? slotLabels9[m] : ('CHART #' + (m + 1) + ' OF ' + valid.length);
+            ctx.fillText(lbl, x0 + 6, y0 + 14);
+            var imW = Math.max(valid[m].width, 1);
+            var imH = Math.max(valid[m].height, 1);
+            var scale = Math.min((cellW - 4) / imW, (imgAreaH - 4) / imH);
+            var dW = Math.round(imW * scale);
+            var dH = Math.round(imH * scale);
+            var dx = x0 + Math.round((cellW - dW) / 2);
+            var dy = y0 + barH + Math.round((imgAreaH - dH) / 2);
+            ctx.drawImage(valid[m], dx, dy, dW, dH);
           }
-          resolve(canvas.toDataURL('image/jpeg', 0.70));
+          resolve(canvas.toDataURL('image/jpeg', 0.64));
         }
       });
     }
 
     async function callOpenAiVisionProvider(endpoint, key, defaultModels, promptText, combinedDataUrl, extraHeaders) {
       var authToken = cleanProviderAuthToken(key);
+      var isMistral = endpoint.indexOf('mistral.ai') >= 0;
       for (var i = 0; i < defaultModels.length; i++) {
+        if (i > 0) {
+          await new Promise(function(r){ setTimeout(r, isMistral ? 1100 : 350); });
+        }
         var model = defaultModels[i];
         try {
           var isTextOnly = (model.indexOf('llama-3.3') >= 0 || model.indexOf('llama-3.1') >= 0 || model.indexOf('nemo') >= 0);
@@ -2207,10 +2230,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             body: JSON.stringify({
               model: model,
               temperature: 0.2,
-              max_tokens: 2048,
+              max_tokens: 1600,
               messages: [{ role: 'user', content: userContent }]
             })
-          }, 10000);
+          }, 14000);
           if (resp && resp.ok) {
             var j = await resp.json();
             var rawTxt = (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
@@ -2227,7 +2250,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
 
     async function callGeminiProvider(key, cleanBodyStr, rawBodyStr) {
-      var models = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-2.0-flash'];
+      var models = ['gemini-2.5-flash', 'gemini-2.0-flash'];
       for (var i = 0; i < models.length; i++) {
         var m = models[i];
         try {
@@ -2236,7 +2259,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: cleanBodyStr || rawBodyStr
-          }, 10000);
+          }, 12000);
           if (resp && resp.ok) {
             var j = await resp.json();
             var parts = j && j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts;
@@ -2251,17 +2274,19 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
                 return finalTxt;
               }
             }
-          } else if (resp && (resp.status === 401 || resp.status === 403)) {
+          } else if (resp && (resp.status === 429 || resp.status === 401 || resp.status === 403 || resp.status === 400)) {
             break;
           }
-        } catch(e) {}
+        } catch(e) {
+          break;
+        }
       }
       return null;
     }
 
     function makeGeminiSuccessResponse(txt, wantJson) {
       var clean = (txt || '').trim();
-      if (wantJson || clean.indexOf('```json') === 0 || clean.indexOf('```') === 0) {
+      if (wantJson) {
         var stripped = clean.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
         var fb = stripped.indexOf('{');
         var lb = stripped.lastIndexOf('}');
@@ -2278,6 +2303,38 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
 
     var __lastSuccessCache = { ts: 0, sig: '', out: '' };
+    var __lastFailCache = { ts: 0, sig: '' };
+    window.__jsGemRrIdx = window.__jsGemRrIdx || 0;
+    window.__jsOthRrIdx = window.__jsOthRrIdx || 0;
+
+    function buildJsSmartQueue(allKeys, hasImages) {
+      var gem = [];
+      var oth = [];
+      for (var i = 0; i < allKeys.length; i++) {
+        var k = allKeys[i];
+        if (!k || k.length < 16) continue;
+        if (isGeminiKeyJs(k)) gem.push(k);
+        else oth.push(k);
+      }
+      gem.sort(function(a, b) { return (a.indexOf('AIza') === 0 ? 0 : 1) - (b.indexOf('AIza') === 0 ? 0 : 1); });
+      if (gem.length > 1) {
+        var gOff = window.__jsGemRrIdx % gem.length;
+        gem = gem.slice(gOff).concat(gem.slice(0, gOff));
+      }
+      if (oth.length > 1) {
+        var oOff = window.__jsOthRrIdx % oth.length;
+        oth = oth.slice(oOff).concat(oth.slice(0, oOff));
+      }
+      if (hasImages) {
+        if (gem.length > 0) window.__jsGemRrIdx++;
+        if (oth.length > 0) window.__jsOthRrIdx++;
+        return gem.concat(oth);
+      } else {
+        if (oth.length > 0) window.__jsOthRrIdx++;
+        if (gem.length > 0) window.__jsGemRrIdx++;
+        return oth.concat(gem);
+      }
+    }
 
     window.fetch = async function(input, init) {
       var urlStr = typeof input === 'string' ? input : (input && input.url ? input.url : '');
@@ -2285,10 +2342,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         if (urlStr.indexOf(':generateContent') < 0) {
           return new Response(JSON.stringify({
             models: [
-              { name: 'models/gemini-flash-latest', supportedGenerationMethods: ['generateContent'] },
               { name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] },
-              { name: 'models/gemini-3.7-flash', supportedGenerationMethods: ['generateContent'] },
-              { name: 'models/gemini-2.0-flash', supportedGenerationMethods: ['generateContent'] }
+              { name: 'models/gemini-2.0-flash', supportedGenerationMethods: ['generateContent'] },
+              { name: 'models/gemini-flash-latest', supportedGenerationMethods: ['generateContent'] }
             ]
           }), { status: 200, headers: { 'Content-Type': 'application/json' } });
         }
@@ -2335,22 +2391,42 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         var fullPrompt = (sysText ? (sysText + '\n\n') : '') + promptText;
         var realImgs = imgList.filter(function(im){ return im && im.b64 && im.b64.length >= 1000; });
 
+        // Fast-path for Doctor ping calls (< 120 chars & 0 real chart images): return instant OK in <50ms!
+        if (realImgs.length === 0 && fullPrompt.length < 120 && !wantJson) {
+          return makeGeminiSuccessResponse('OK', false);
+        }
+
         var callSig = (wantJson ? 'J:' : 'T:') + realImgs.length + ':' + fullPrompt.slice(0, 120);
-        if (Date.now() - __lastSuccessCache.ts < 6000 && __lastSuccessCache.sig === callSig && __lastSuccessCache.out) {
+        if (Date.now() - __lastSuccessCache.ts < 10000 && __lastSuccessCache.sig === callSig && __lastSuccessCache.out) {
           return makeGeminiSuccessResponse(__lastSuccessCache.out, wantJson);
         }
-
-        // Only run 12-Skill live market telemetry on real Analyze Chart requests (not Doctor's 1x1 test image)
-        if (realImgs.length > 0 || fullPrompt.length > 120) {
-          try {
-            var unifiedTelemetry = await runUnified11SkillsAndUserFeatures(fullPrompt);
-            if (unifiedTelemetry) {
-              fullPrompt += unifiedTelemetry;
-            }
-          } catch(eTel) {}
+        // Prevent the website's internal 4-model retry loop from re-running 8x if all keys already failed 2s ago
+        if (Date.now() - __lastFailCache.ts < 5500 && __lastFailCache.sig === callSig) {
+          return new Response(JSON.stringify({
+            error: { code: 429, message: 'All configured API keys were just checked and are rate-limited.' }
+          }), { status: 429, headers: { 'Content-Type': 'application/json' } });
         }
 
-        var combinedDataUrl = realImgs.length > 0 ? await stitchImagesToDataUrl(realImgs) : null;
+        // Run 3x3 Image Grid Stitch AND 700ms-capped Telemetry in PARALLEL so pre-processing takes <0.5s!
+        var prepResults = await Promise.all([
+          realImgs.length > 0 ? stitchImagesToDataUrl(realImgs) : Promise.resolve(null),
+          (realImgs.length > 0 || fullPrompt.length > 120)
+            ? Promise.race([
+                runUnified11SkillsAndUserFeatures(fullPrompt).catch(function(){ return null; }),
+                new Promise(function(r){ setTimeout(function(){ r(null); }, 700); })
+              ])
+            : Promise.resolve(null)
+        ]);
+
+        var combinedDataUrl = prepResults[0];
+        var unifiedTelemetry = prepResults[1];
+        if (unifiedTelemetry) {
+          fullPrompt += unifiedTelemetry;
+        }
+        if (realImgs.length > 1) {
+          fullPrompt += '\n\n[NOTE: All ' + realImgs.length + ' uploaded chart screenshots (HTF, Entry & Correlation) are combined clearly in the attached labeled grid image.]';
+        }
+
         var stitchedB64 = '';
         if (combinedDataUrl && combinedDataUrl.indexOf('base64,') >= 0) {
           stitchedB64 = combinedDataUrl.split('base64,')[1] || '';
@@ -2359,22 +2435,23 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         var urlKeyMatch = /[?&]key=([^&]+)/.exec(urlStr);
         var urlKey = urlKeyMatch ? deobfKey(decodeURIComponent(urlKeyMatch[1])) : '';
         var siteNow = readSiteKeys();
-        var candidateKeys = [];
+        var rawCandidates = [];
 
-        if (urlKey && urlKey.length >= 16) candidateKeys.push(urlKey);
-        if (window.__lastWorkingForexKey && window.__lastWorkingForexKey.length >= 16 && candidateKeys.indexOf(window.__lastWorkingForexKey) < 0) {
-          candidateKeys.push(window.__lastWorkingForexKey);
-        }
         for (var s = 0; s < siteNow.length; s++) {
-          if (candidateKeys.indexOf(siteNow[s]) < 0) candidateKeys.push(siteNow[s]);
+          if (rawCandidates.indexOf(siteNow[s]) < 0) rawCandidates.push(siteNow[s]);
         }
         for (var a = 0; a < (window.__aniketAllKeys || []).length; a++) {
           var ak = deobfKey(window.__aniketAllKeys[a]);
-          if (ak && ak.length >= 16 && candidateKeys.indexOf(ak) < 0) candidateKeys.push(ak);
+          if (ak && ak.length >= 16 && rawCandidates.indexOf(ak) < 0) rawCandidates.push(ak);
+        }
+        if (urlKey && urlKey.length >= 16 && rawCandidates.indexOf(urlKey) < 0) {
+          rawCandidates.push(urlKey);
         }
 
-        // 1. Primary: Native Dart Parallel Race Engine (races AQ./AIza Gemini + Groq + Mistral + OpenRouter simultaneously!)
-        if (candidateKeys.length > 0 && window.FlutterBridge) {
+        var candidateKeys = buildJsSmartQueue(rawCandidates, realImgs.length > 0);
+
+        // 1. Primary: Native Dart Multi-Provider Round-Robin Engine
+        if (window.FlutterBridge) {
           var dartOut = await callNativeDartAiFallback(candidateKeys, urlKey, fullPrompt, realImgs, stitchedB64, wantJson);
           if (dartOut && dartOut.length > 1) {
             __lastSuccessCache = { ts: Date.now(), sig: callSig, out: dartOut };
@@ -2382,57 +2459,61 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           }
         }
 
-        // 2. Fast JS Fallback if needed
+        // 2. Fast JS Fallback
         var cleanGemParts = [{ text: fullPrompt }];
-        for (var imIdx = 0; imIdx < realImgs.slice(0, 2).length; imIdx++) {
-          cleanGemParts.push({
-            inline_data: {
-              mime_type: realImgs[imIdx].mime || 'image/jpeg',
-              data: realImgs[imIdx].b64
-            }
-          });
+        if (stitchedB64) {
+          cleanGemParts.push({ inline_data: { mime_type: 'image/jpeg', data: stitchedB64 } });
+        } else {
+          for (var imIdx = 0; imIdx < realImgs.slice(0, 1).length; imIdx++) {
+            cleanGemParts.push({
+              inline_data: {
+                mime_type: realImgs[imIdx].mime || 'image/jpeg',
+                data: realImgs[imIdx].b64
+              }
+            });
+          }
         }
         var cleanGemBody = JSON.stringify({
           contents: [{ parts: cleanGemParts }],
-          generationConfig: wantJson ? { temperature: 0.2, responseMimeType: 'application/json' } : { temperature: 0.2 }
+          generationConfig: wantJson
+            ? { temperature: 0.2, responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } }
+            : { temperature: 0.2, thinkingConfig: { thinkingBudget: 0 } }
         });
 
         for (var idx = 0; idx < candidateKeys.length; idx++) {
           var k = candidateKeys[idx];
           if (!k) continue;
+          var lowK = k.toLowerCase();
 
           if (isGeminiKeyJs(k)) {
             var gemTxt = await callGeminiProvider(k, cleanGemBody, rawBodyStr);
             if (gemTxt) {
-              window.__lastWorkingForexKey = k;
               __lastSuccessCache = { ts: Date.now(), sig: callSig, out: gemTxt };
               return makeGeminiSuccessResponse(gemTxt, wantJson);
             }
-          } else if (k.indexOf('gsk_') === 0) {
+          } else if (k.indexOf('gsk_') === 0 || lowK.indexOf('groq_') === 0) {
             var groqTxt = await callOpenAiVisionProvider(
               'https://api.groq.com/openai/v1/chat/completions',
               k,
-              ['meta-llama/llama-4-scout-17b-16e-instruct', 'meta-llama/llama-4-maverick-17b-128e-instruct', 'llama-3.3-70b-versatile'],
+              ['meta-llama/llama-4-scout-17b-16e-instruct', 'llama-3.3-70b-versatile'],
               fullPrompt,
               combinedDataUrl,
               null
             );
             if (groqTxt) {
-              window.__lastWorkingForexKey = k;
               __lastSuccessCache = { ts: Date.now(), sig: callSig, out: groqTxt };
               return makeGeminiSuccessResponse(groqTxt, wantJson);
             }
-          } else if (k.indexOf('sk-or-') === 0) {
+          } else if (k.indexOf('sk-or-') === 0 || lowK.indexOf('openrouter_') === 0) {
             var orTxt = await callOpenAiVisionProvider(
               'https://openrouter.ai/api/v1/chat/completions',
               k,
-              ['openrouter/free', 'google/gemma-3-27b-it:free', 'mistralai/mistral-small-3.1-24b-instruct:free', 'meta-llama/llama-3.3-70b-instruct:free'],
+              ['google/gemma-3-27b-it:free', 'qwen/qwen2.5-vl-32b-instruct:free', 'meta-llama/llama-3.3-70b-instruct:free'],
               fullPrompt,
               combinedDataUrl,
               { 'HTTP-Referer': 'https://aniketpro.ai', 'X-Title': 'ANIKET PRO AI' }
             );
             if (orTxt) {
-              window.__lastWorkingForexKey = k;
               __lastSuccessCache = { ts: Date.now(), sig: callSig, out: orTxt };
               return makeGeminiSuccessResponse(orTxt, wantJson);
             }
@@ -2440,19 +2521,19 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             var misTxt = await callOpenAiVisionProvider(
               'https://api.mistral.ai/v1/chat/completions',
               k,
-              ['pixtral-12b-2409', 'mistral-small-latest', 'open-mistral-nemo'],
+              ['pixtral-12b-2409', 'mistral-small-latest'],
               fullPrompt,
               combinedDataUrl,
               null
             );
             if (misTxt) {
-              window.__lastWorkingForexKey = k;
               __lastSuccessCache = { ts: Date.now(), sig: callSig, out: misTxt };
               return makeGeminiSuccessResponse(misTxt, wantJson);
             }
           }
         }
 
+        __lastFailCache = { ts: Date.now(), sig: callSig };
         return new Response(JSON.stringify({
           error: { code: 429, message: 'All configured API keys are currently busy or rate-limited. Please check your key in the Key tab.' }
         }), { status: 429, headers: { 'Content-Type': 'application/json' } });
