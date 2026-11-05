@@ -613,6 +613,24 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
   final Map<String, DateTime> _keyCooldownUntil = {};
   int _geminiRoundRobinIdx = 0;
   int _otherRoundRobinIdx = 0;
+  // ── AI bridge settings (Nov 2026) ──
+  // Google model retire/rename korle SHUDHU ei list bodlao.
+  // gemini-2.0-flash*, gemini-1.5-flash = shutdown | gemini-2.5-flash = deprecated
+  static const List<String> _geminiChain = [
+    'gemini-3.8-flash',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-2.5-flash-lite',
+    'gemini-flash-latest', // alias: nijei newest Flash-e jay
+  ];
+  static const Duration _kAiReqTimeout = Duration(seconds: 55);   // 1 ta request
+  static const Duration _kAiTotalTimeout = Duration(seconds: 70); // pura analysis (JS 80s wait kore)
+  final List<String> _aiTrace = [];
+  int _lastAiStatus = 0;
+  String _lastAiErr = '';
+  bool _aiCancelled = false;
+  bool _keySaw429 = false;
+  bool _keySawOther = false;
 
   bool _isGeminiKey(String k) {
     return k.startsWith('AIza') || k.startsWith('AQ.');
@@ -642,9 +660,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           s.startsWith('Z3Nr') ||
           s.startsWith('c2st') ||
           s.startsWith('bXN0') ||
-          s.startsWith('TXN0') ||
-          (s.length >= 24 && s.length % 4 == 0 && (s.endsWith('=') || RegExp(r'^[A-Za-z0-9+/]+={0,2}$').hasMatch(s)));
-      if (looksB64 && !(s.length == 32 && RegExp(r'^[A-Za-z0-9]{32}$').hasMatch(s))) {
+          s.startsWith('TXN0');
+      if (looksB64) {
         try {
           final decodedBytes = base64Decode(s);
           var decodedStr = utf8.decode(decodedBytes, allowMalformed: false).trim();
@@ -798,7 +815,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         .replaceAll(RegExp(r'<think>[\s\S]*?</think>', caseSensitive: false), '')
         .trim();
     if (clean.isEmpty) return '';
-    if (wantJson) {
+    if (wantJson || clean.startsWith('```json') || (clean.startsWith('```') && clean.contains('{') && clean.contains('}'))) {
       final stripped = clean
           .replaceFirst(RegExp(r'^```(?:json)?\s*', caseSensitive: false), '')
           .replaceFirst(RegExp(r'\s*```$'), '')
@@ -818,6 +835,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     required List<Map<String, String>> singleComposite,
     required List<Map<String, String>> rawImages,
     required bool wantJson,
+    required bool allowTextFallback,
   }) async {
     final key = _unwrapApiKey(rawKey);
     final provName = _providerLabelForKey(key);
@@ -831,6 +849,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         prompt,
         singleComposite.isNotEmpty ? singleComposite : rawImages,
         wantJson,
+        allowTextFallback: allowTextFallback,
       );
     } else if (key.startsWith('gsk_') || key.toLowerCase().startsWith('groq_')) {
       res = await _forexCallOpenAiCompatibleNative(
@@ -838,14 +857,17 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         key: authToken,
         visionModels: const [
           'meta-llama/llama-4-scout-17b-16e-instruct',
+          'meta-llama/llama-4-maverick-17b-128e-instruct',
         ],
         textFallbackModels: const [
           'llama-3.3-70b-versatile',
+          'llama-3.1-8b-instant',
         ],
         prompt: prompt,
         images: singleComposite,
         wantJson: wantJson,
-        interModelDelayMs: 250,
+        allowTextFallback: allowTextFallback,
+        interModelDelayMs: 200,
       );
     } else if (key.startsWith('sk-or-') || key.toLowerCase().startsWith('openrouter_')) {
       res = await _forexCallOpenAiCompatibleNative(
@@ -854,15 +876,19 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         visionModels: const [
           'google/gemma-3-27b-it:free',
           'qwen/qwen2.5-vl-32b-instruct:free',
+          'mistralai/mistral-small-3.1-24b-instruct:free',
+          'openrouter/free',
         ],
         textFallbackModels: const [
           'meta-llama/llama-3.3-70b-instruct:free',
+          'google/gemma-3-27b-it:free',
           'openrouter/free',
         ],
         prompt: prompt,
         images: singleComposite,
         wantJson: wantJson,
-        interModelDelayMs: 350,
+        allowTextFallback: allowTextFallback,
+        interModelDelayMs: 250,
         extraHeaders: const {
           'HTTP-Referer': 'https://aniketpro.ai',
           'X-Title': 'ANIKET PRO AI',
@@ -875,14 +901,17 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         key: authToken,
         visionModels: const [
           'pixtral-12b-2409',
+          'mistral-small-latest',
         ],
         textFallbackModels: const [
           'mistral-small-latest',
+          'open-mistral-nemo',
         ],
         prompt: prompt,
         images: singleComposite,
         wantJson: wantJson,
-        interModelDelayMs: 1050,
+        allowTextFallback: allowTextFallback,
+        interModelDelayMs: 950,
       );
     }
 
@@ -894,32 +923,40 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         'key': key,
       };
     }
-    // Put failed/exhausted key on 2-minute cooldown so subsequent calls skip it in 0.00s!
-    _keyCooldownUntil[key] = DateTime.now().add(const Duration(seconds: 120));
+    _keyCooldownUntil[key] = DateTime.now().add(const Duration(seconds: 90));
     return null;
   }
 
+  // ═══ NEW: handler (1 key at a time, deadline, real error back to JS) ═══
   Future<void> _handleForexDartAiRequest(String jsonPayload) async {
     String reqId = '';
     try {
       final map = jsonDecode(jsonPayload) as Map<String, dynamic>;
       reqId = (map['reqId'] ?? '').toString();
-      final rawKeys = (map['keys'] as List?)?.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList() ?? <String>[];
+      final rawKeys = (map['keys'] as List?)
+              ?.map((e) => e.toString().trim())
+              .where((e) => e.isNotEmpty)
+              .toList() ??
+          <String>[];
       final prompt = (map['prompt'] ?? '').toString();
       final rawImages = (map['images'] as List?) ?? const [];
       final stitchedB64 = (map['stitchedB64'] ?? '').toString();
       final wantJson = map['wantJson'] == true;
 
+      _aiCancelled = false;
+      _aiTrace.clear();
+      _lastAiStatus = 0;
+      _lastAiErr = '';
+
       final p = await SharedPreferences.getInstance();
-      final spKeys = (p.getStringList('bin_keys') ?? []).map((e) => e.trim()).where((e) => e.isNotEmpty);
+      final spKeys = (p.getStringList('bin_keys') ?? [])
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty);
       final allKeys = <String>[];
       for (final k in [...rawKeys, ...spKeys]) {
         final clean = _unwrapApiKey(k);
-        if (clean.length >= 16 && !allKeys.contains(clean)) {
-          allKeys.add(clean);
-        }
+        if (clean.length >= 16 && !allKeys.contains(clean)) allKeys.add(clean);
       }
-
       if (allKeys.isNotEmpty) {
         try {
           await p.setStringList('bin_keys', allKeys);
@@ -931,173 +968,217 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         if (item is Map) {
           final b64 = (item['b64'] ?? '').toString();
           final mime = (item['mime'] ?? 'image/jpeg').toString();
-          if (b64.length >= 1000) {
-            images.add({'mime': mime, 'b64': b64});
-          }
+          if (b64.length >= 1500) images.add({'mime': mime, 'b64': b64});
         }
       }
-
-      final singleComposite = (stitchedB64.length >= 1000)
+      final singleComposite = (stitchedB64.length >= 1500)
           ? <Map<String, String>>[{'mime': 'image/jpeg', 'b64': stitchedB64}]
-          : (images.isNotEmpty ? <Map<String, String>>[images.first] : <Map<String, String>>[]);
-
+          : (images.isNotEmpty
+              ? <Map<String, String>>[images.first]
+              : <Map<String, String>>[]);
       final hasImages = singleComposite.isNotEmpty || images.isNotEmpty;
       final candidateKeys = _buildSmartKeyQueue(allKeys, forImageAnalysis: hasImages);
 
       String? finalOut;
       String winningProvider = '';
+      final deadline = DateTime.now().add(_kAiTotalTimeout);
+      bool skipGemini = false;
+      int gem429 = 0;
 
-      if (candidateKeys.isNotEmpty) {
-        // Fast 2-Worker Instant Hand-Off Queue:
-        // • Worker 1 starts at 0ms with Key #1 (e.g. Round-Robin Gemini Key #1 for images).
-        // • Worker 2 starts at 400ms with the next key in queue if Worker 1 hasn't finished yet.
-        // • The instant any key returns 429/error (~0.3s), that worker immediately pulls the next key with 0ms wait!
-        final completer = Completer<Map<String, String>?>();
-        int nextKeyIdx = 0;
-        final workerCount = candidateKeys.length >= 2 ? 2 : 1;
-        int activeWorkers = workerCount;
-
-        Future<void> runWorker(int workerId) async {
-          if (workerId > 0) {
-            await Future.delayed(Duration(milliseconds: 400 * workerId));
-          }
-          while (!completer.isCompleted) {
-            if (nextKeyIdx >= candidateKeys.length) break;
-            final myKey = candidateKeys[nextKeyIdx++];
-            try {
-              final res = await _runSingleKeyCandidate(
-                rawKey: myKey,
-                prompt: prompt,
-                singleComposite: singleComposite,
-                rawImages: images,
-                wantJson: wantJson,
-              );
-              if (res != null && (res['text'] ?? '').trim().isNotEmpty) {
-                if (!completer.isCompleted) {
-                  completer.complete(res);
-                }
-                return;
-              }
-            } catch (_) {}
-          }
-          activeWorkers--;
-          if (activeWorkers <= 0 && !completer.isCompleted) {
-            completer.complete(null);
-          }
+      // ONE key at a time: keys of one Google project share ONE quota,
+      // so parallel workers only double the burn.
+      for (final k in candidateKeys) {
+        final isGem = _isGeminiKey(k);
+        if (isGem && skipGemini) continue;
+        final left = deadline.difference(DateTime.now());
+        if (left <= Duration.zero) {
+          _noteAiErr(504, 'all', 'total timeout');
+          break;
         }
+        _keySaw429 = false;
+        _keySawOther = false;
+        Map<String, String>? res;
+        try {
+          res = await _runSingleKeyCandidate(
+            rawKey: k,
+            prompt: prompt,
+            singleComposite: singleComposite,
+            rawImages: images,
+            wantJson: wantJson,
+            allowTextFallback: false, // chart image kokhono chupchap drop korbe na
+          ).timeout(left);
+        } on TimeoutException {
+          _aiCancelled = true;
+          _noteAiErr(504, 'all', 'total timeout');
+          break;
+        } catch (_) {}
 
-        for (int w = 0; w < workerCount; w++) {
-          runWorker(w);
+        if (res != null && (res['text'] ?? '').trim().isNotEmpty) {
+          finalOut = res['text']!;
+          winningProvider = res['provider'] ?? 'AI';
+          final winKey = res['key'] ?? '';
+          if (winKey.isNotEmpty) _keyCooldownUntil.remove(winKey);
+          break;
         }
-
-        final winningRes = await completer.future.timeout(
-          const Duration(seconds: 22),
-          onTimeout: () => null,
-        );
-
-        if (winningRes != null && (winningRes['text'] ?? '').trim().isNotEmpty) {
-          finalOut = winningRes['text']!;
-          winningProvider = winningRes['provider'] ?? 'AI';
-          final winKey = winningRes['key'] ?? '';
-          if (winKey.isNotEmpty) {
-            _keyCooldownUntil.remove(winKey);
+        if (isGem) {
+          // 3 Gemini key porpor shudhu 429 => same project quota, ar hammer koro na
+          if (_keySaw429 && !_keySawOther) {
+            if (++gem429 >= 3) skipGemini = true;
+          } else {
+            gem429 = 0;
           }
         }
       }
 
-      if (finalOut != null && finalOut.trim().isNotEmpty && winningProvider.isNotEmpty && prompt.length > 120) {
+      final ok = finalOut != null && finalOut.trim().isNotEmpty;
+      if (ok && winningProvider.isNotEmpty && prompt.length > 120) {
         _toast('⚡ Analysis Done via $winningProvider');
       }
-
-      if (reqId.isNotEmpty) {
-        final encodedOut = jsonEncode(finalOut ?? '');
-        await _controller.runJavaScript('if(window.__resolveForexDartAi) window.__resolveForexDartAi("$reqId", $encodedOut);');
+      if (!ok) {
+        final why = _lastAiErr.isEmpty ? 'no key worked' : _lastAiErr;
+        _toast('❌ AI failed: ${why.length > 140 ? why.substring(0, 140) : why}');
       }
-    } catch (_) {
+      if (reqId.isNotEmpty) {
+        final out = ok
+            ? finalOut!
+            : '__ERR__:${_lastAiStatus == 0 ? 502 : _lastAiStatus}|${_lastAiErr.isEmpty ? "no key worked" : _lastAiErr}';
+        await _controller.runJavaScript(
+            'if(window.__resolveForexDartAi) window.__resolveForexDartAi("$reqId", ${jsonEncode(out)});');
+      }
+    } catch (e) {
       if (reqId.isNotEmpty) {
         try {
-          await _controller.runJavaScript('if(window.__resolveForexDartAi) window.__resolveForexDartAi("$reqId", "");');
+          final errOut = '__ERR__:502|bridge exception: $e';
+          await _controller.runJavaScript(
+              'if(window.__resolveForexDartAi) window.__resolveForexDartAi("$reqId", ${jsonEncode(errOut)});');
         } catch (_) {}
       }
     }
   }
 
+  // ═══ NEW: error helpers ═══
+  String _geminiErrMsg(String body) {
+    final qid = RegExp(r'"quotaId"\s*:\s*"([^"]+)"').firstMatch(body)?.group(1);
+    if (qid != null) {
+      final qv = RegExp(r'"quotaValue"\s*:\s*"([^"]+)"').firstMatch(body)?.group(1);
+      return 'QUOTA $qid${qv != null ? " limit=$qv" : ""}';
+    }
+    try {
+      final j = jsonDecode(body);
+      final e = (j is Map) ? j['error'] : null;
+      if (e is Map) {
+        final st = (e['status'] ?? '').toString();
+        final msg = (e['message'] ?? '').toString();
+        return st.isEmpty ? msg : '$st: $msg';
+      }
+    } catch (_) {}
+    return body.length > 120 ? body.substring(0, 120) : body;
+  }
+
+  void _noteAiErr(int status, String model, String msg) {
+    if (status == 429) {
+      _keySaw429 = true;
+    } else {
+      _keySawOther = true;
+    }
+    final short = msg.replaceAll(RegExp(r'\s+'), ' ').trim();
+    _aiTrace.add('$status $model ${short.length > 110 ? short.substring(0, 110) : short}');
+    if (_lastAiStatus != 429) _lastAiStatus = status;
+    _lastAiErr = _aiTrace.take(4).join(' | ') + (_aiTrace.length > 4 ? ' …' : '');
+  }
+
+  // ═══ NEW: Gemini call — current models, header-only key, long timeout, no 401-break ═══
   Future<Map<String, String>?> _forexCallGeminiNative(
     String key,
     String prompt,
     List<Map<String, String>> images,
-    bool wantJson,
-  ) async {
-    // Try ONLY Google's #1 best chart-vision model first (`gemini-2.5-flash` with thinkingBudget: 0 for instant response).
-    // Only fall back to `gemini-2.0-flash` if 2.5-flash returns 404/503. Stop immediately on 429/401/403!
-    const models = [
-      'gemini-2.5-flash',
-      'gemini-2.0-flash',
-    ];
+    bool wantJson, {
+    bool allowTextFallback = true, // intentionally unused (no silent text-only fallback)
+  }) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+    int authFails = 0;
+    try {
+      for (final m in _geminiChain) {
+        if (_aiCancelled) return null;
+        try {
+          final uri = Uri.parse(
+              'https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent');
+          final req = await client.postUrl(uri).timeout(const Duration(seconds: 10));
+          req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
+          req.headers.set('x-goog-api-key', key); // header only — key URL-e jabe na
 
-    for (final m in models) {
-      HttpClient? client;
-      try {
-        client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
-        final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent?key=${Uri.encodeQueryComponent(key)}');
-        final req = await client.postUrl(uri).timeout(const Duration(seconds: 6));
-        req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
+          final parts = <Map<String, dynamic>>[
+            {'text': prompt},
+            for (final img in images.take(1))
+              {
+                'inlineData': {
+                  'mimeType': img['mime'] ?? 'image/jpeg',
+                  'data': img['b64'] ?? '',
+                }
+              },
+          ];
+          final genCfg = <String, dynamic>{'temperature': 0.2};
+          if (wantJson) genCfg['responseMimeType'] = 'application/json';
+          req.add(utf8.encode(jsonEncode({
+            'contents': [
+              {'role': 'user', 'parts': parts}
+            ],
+            'generationConfig': genCfg,
+          })));
 
-        final parts = <Map<String, dynamic>>[
-          {'text': prompt},
-          for (final img in images.take(1))
-            {
-              'inline_data': {
-                'mime_type': img['mime'] ?? 'image/jpeg',
-                'data': img['b64'] ?? '',
-              }
-            }
-        ];
+          final resp = await req.close().timeout(_kAiReqTimeout);
+          final body = await resp.transform(utf8.decoder).join().timeout(_kAiReqTimeout);
+          final code = resp.statusCode;
 
-        final genCfg = <String, dynamic>{'temperature': 0.2};
-        if (wantJson) genCfg['responseMimeType'] = 'application/json';
-        if (m.contains('2.5')) genCfg['thinkingConfig'] = {'thinkingBudget': 0};
-
-        final body = jsonEncode({
-          'contents': [
-            {'parts': parts}
-          ],
-          'generationConfig': genCfg,
-        });
-
-        req.add(utf8.encode(body));
-        final resp = await req.close().timeout(const Duration(seconds: 12));
-        if (resp.statusCode == 200) {
-          final txt = await resp.transform(utf8.decoder).join();
-          final root = jsonDecode(txt) as Map<String, dynamic>;
-          final cands = root['candidates'] as List?;
-          if (cands != null && cands.isNotEmpty) {
-            final cand0 = cands.first as Map;
-            final finishReason = (cand0['finishReason'] ?? 'STOP').toString();
-            final content = cand0['content'] as Map?;
-            final rParts = content?['parts'] as List?;
-            if (rParts != null) {
+          if (code == 200) {
+            final root = jsonDecode(body) as Map<String, dynamic>;
+            final cands = root['candidates'] as List?;
+            if (cands != null && cands.isNotEmpty) {
+              final c0 = cands.first as Map;
+              final rParts = (c0['content'] as Map?)?['parts'] as List?;
               final sb = StringBuffer();
-              for (final rp in rParts) {
+              for (final rp in (rParts ?? const [])) {
                 if (rp is Map && rp['thought'] != true && rp['text'] != null) {
                   sb.write(rp['text'].toString());
                 }
               }
-              final resStr = sb.toString().trim();
-              if (resStr.isNotEmpty) {
-                return {'text': resStr, 'finishReason': finishReason, 'model': m};
+              final out = sb.toString().trim();
+              if (out.isNotEmpty) {
+                return {
+                  'text': out,
+                  'finishReason': (c0['finishReason'] ?? 'STOP').toString(),
+                  'model': m,
+                };
               }
+              _noteAiErr(200, m, 'empty reply (finish: ${c0['finishReason']})');
+            } else {
+              _noteAiErr(200, m, 'no candidates (blocked?)');
             }
+            continue;
           }
-        } else if (resp.statusCode == 429 || resp.statusCode == 401 || resp.statusCode == 403 || resp.statusCode == 400) {
-          // Key quota exhausted or invalid -> break immediately in 0.3s so next Gemini/Groq/Mistral key takes over!
-          break;
+
+          final msg = _geminiErrMsg(body);
+          _noteAiErr(code, m, msg);
+          if (code == 400 &&
+              (msg.contains('API key not valid') || msg.contains('API_KEY_INVALID'))) {
+            return null; // key-i dead, onno model-e labh nei
+          }
+          if (code == 401 || code == 403) {
+            // AQ. key + retired model-o 401 dey => ekta model-e hal chhere dio na,
+            // 2 ta porpor auth-fail hole tobe key bad
+            if (++authFails >= 2) return null;
+          }
+          if (code == 429 || code == 500 || code == 503) {
+            await Future.delayed(const Duration(milliseconds: 300));
+          }
+        } on TimeoutException {
+          _noteAiErr(504, m, 'timeout');
+        } catch (e) {
+          _noteAiErr(0, m, e.toString());
         }
-      } catch (_) {
-        break;
-      } finally {
-        client?.close(force: true);
       }
+    } finally {
+      client.close(force: true);
     }
     return null;
   }
@@ -1110,10 +1191,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     required String prompt,
     required List<Map<String, String>> images,
     required bool wantJson,
-    int interModelDelayMs = 350,
+    bool allowTextFallback = true,
+    int interModelDelayMs = 250,
     Map<String, String>? extraHeaders,
   }) async {
-    // 1. Try top Vision model first
+    // 1. Try Vision models first (NEVER break on 429/400/404 because rate limits on Groq/OpenRouter/Mistral are per-model!)
     if (images.isNotEmpty && visionModels.isNotEmpty) {
       for (int i = 0; i < visionModels.length; i++) {
         if (i > 0 && interModelDelayMs > 0) {
@@ -1128,8 +1210,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           images: images,
           extraHeaders: extraHeaders,
         );
-        if (res != null && (res['status'] == '401' || res['status'] == '403' || res['status'] == '429')) {
-          break; // Key invalid or rate-limited -> hand off to next key immediately!
+        if (res != null && (res['status'] == '401' || res['status'] == '403')) {
+          return null; // Key itself is unauthorized
         }
         if (res != null && (res['text'] ?? '').trim().isNotEmpty) {
           return {
@@ -1141,10 +1223,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       }
     }
 
-    // 2. For text tasks (or if vision model wasn't available), use fast Text model
-    if (images.isEmpty && textFallbackModels.isNotEmpty) {
+    // 2. Guaranteed Fallback: If vision models on this key were busy/rate-limited (or if this is a text call),
+    //    run the fast Text models using the 9-Chart Visual Scan + 12-Skill Live Market Telemetry in `prompt`!
+    if ((images.isEmpty || allowTextFallback) && textFallbackModels.isNotEmpty) {
+      final fallbackPrompt = images.isNotEmpty
+          ? '$prompt\n\n[DIRECTIVE: Complete the full required chart analysis and exact output format strictly using the 9-CHART VISUAL SCAN + 12 PRO SKILLS + LIVE ORDER FLOW TELEMETRY provided above!]'
+          : prompt;
       for (int i = 0; i < textFallbackModels.length; i++) {
-        if (i > 0 && interModelDelayMs > 0) {
+        if ((i > 0 || images.isNotEmpty) && interModelDelayMs > 0) {
           await Future.delayed(Duration(milliseconds: interModelDelayMs));
         }
         final tm = textFallbackModels[i];
@@ -1152,12 +1238,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           endpoint: endpoint,
           key: key,
           model: tm,
-          prompt: prompt,
+          prompt: fallbackPrompt,
           images: const [],
           extraHeaders: extraHeaders,
         );
-        if (res != null && (res['status'] == '401' || res['status'] == '403' || res['status'] == '429')) {
-          break;
+        if (res != null && (res['status'] == '401' || res['status'] == '403')) {
+          return null;
         }
         if (res != null && (res['text'] ?? '').trim().isNotEmpty) {
           return {
@@ -1229,6 +1315,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           }
         }
       } else {
+        final errBody = await resp.transform(utf8.decoder).join().timeout(const Duration(seconds: 5));
+        _noteAiErr(resp.statusCode, model, _geminiErrMsg(errBody));
         return {'text': '', 'finishReason': 'ERROR', 'status': '${resp.statusCode}'};
       }
     } catch (_) {
@@ -1280,15 +1368,13 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             low.indexOf('openrouter_') === 0) {
           return cur;
         }
-        var isRaw32Mistral = (cur.length === 32 && /^[A-Za-z0-9]{32}$/.test(cur));
-        var looksB64 = !isRaw32Mistral && (
+        var looksB64 = (
           cur.indexOf('QUl6') === 0 ||
           cur.indexOf('QVEu') === 0 ||
           cur.indexOf('Z3Nr') === 0 ||
           cur.indexOf('c2st') === 0 ||
           cur.indexOf('bXN0') === 0 ||
-          cur.indexOf('TXN0') === 0 ||
-          (cur.length >= 24 && cur.length % 4 === 0 && (cur.slice(-1) === '=' || /^[A-Za-z0-9+/]+={0,2}$/.test(cur)))
+          cur.indexOf('TXN0') === 0
         );
         if (looksB64) {
           try {
@@ -1478,7 +1564,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             delete window.__forexDartAiCallbacks[reqId];
             resolve('');
           }
-        }, 28000);
+        }, 80000);
         window.__forexDartAiCallbacks[reqId] = function(resTxt) {
           clearTimeout(timer);
           resolve(resTxt || '');
@@ -2016,6 +2102,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           cur = cur.parentElement;
         }
         if (cur && cur !== document.body && cur.tagName !== 'MAIN' && cur.tagName !== 'NAV') {
+          try {
+            var cbs = cur.querySelectorAll('input[type=checkbox]');
+            for (var cbi = 0; cbi < cbs.length; cbi++) {
+              if (cbs[cbi].checked) {
+                cbs[cbi].checked = false;
+                cbs[cbi].dispatchEvent(new Event('change', { bubbles: true }));
+              }
+            }
+          } catch(eCb) {}
           cur.style.setProperty('display', 'none', 'important');
         }
       }
@@ -2120,14 +2215,17 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       } catch(e) {}
     }
 
-    setInterval(cleanForexModeTabDom, 700);
+    setInterval(cleanForexModeTabDom, 3000);
 
     function stripThinkTags(txt) {
       if (!txt) return '';
       return txt.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
     }
 
-    // Smart 3x3 Grid Stitcher for up to 9 charts (4 HTF + 4 Entry + 1 Correlation) without squishing aspect ratios!
+    // Smart 3x3 Grid Stitcher + Per-Chart Pixel Candle Scanner for up to 9 charts (4 HTF + 4 Entry + 1 Correlation)
+    // Produces a compact ~30 KB JPEG (< 1,100 image tokens so Groq 6000-TPM & Mistral/OpenRouter never reject it)
+    // AND extracts visual candle/trend telemetry from every uploaded screenshot!
+    window.__lastChartVisualSummary = '';
     async function stitchImagesToDataUrl(imgList) {
       if (!imgList || imgList.length === 0) return null;
       return new Promise(function(resolve) {
@@ -2167,9 +2265,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             avgRatio += (valid[r].height / Math.max(valid[r].width, 1));
           }
           avgRatio = avgRatio / valid.length;
-          var cellW = cols === 1 ? 640 : (cols === 2 ? 460 : 340);
-          var barH = 20;
-          var imgAreaH = Math.max(220, Math.min(480, Math.round(cellW * avgRatio)));
+          // Compact dimensions so total image is <= 720x960 (~30 KB) and fits Groq's 6,000 TPM limit easily
+          var cellW = cols === 1 ? 900 : (cols === 2 ? 640 : 480);
+          var barH = 18;
+          var imgAreaH = Math.max(240, Math.min(900, Math.round(cellW * avgRatio)));
           var cellH = imgAreaH + barH;
           var canvas = document.createElement('canvas');
           canvas.width = cols * cellW;
@@ -2177,6 +2276,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           var ctx = canvas.getContext('2d');
           ctx.fillStyle = '#0D0E15';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          var visualLines = [];
           for (var m = 0; m < valid.length; m++) {
             var cIdx = m % cols;
             var rIdx = Math.floor(m / cols);
@@ -2187,9 +2288,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             ctx.strokeStyle = '#2A2F45';
             ctx.strokeRect(x0, y0, cellW, cellH);
             ctx.fillStyle = '#FFD54F';
-            ctx.font = 'bold 12px sans-serif';
+            ctx.font = 'bold 11px sans-serif';
             var lbl = (valid.length === 9 && slotLabels9[m]) ? slotLabels9[m] : ('CHART #' + (m + 1) + ' OF ' + valid.length);
-            ctx.fillText(lbl, x0 + 6, y0 + 14);
+            ctx.fillText(lbl, x0 + 5, y0 + 13);
             var imW = Math.max(valid[m].width, 1);
             var imH = Math.max(valid[m].height, 1);
             var scale = Math.min((cellW - 4) / imW, (imgAreaH - 4) / imH);
@@ -2198,8 +2299,37 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             var dx = x0 + Math.round((cellW - dW) / 2);
             var dy = y0 + barH + Math.round((imgAreaH - dH) / 2);
             ctx.drawImage(valid[m], dx, dy, dW, dH);
+
+            // Scan pixel candle colors (green/cyan vs red/magenta + right-side momentum) for this chart slot
+            try {
+              var imgData = ctx.getImageData(dx, dy, Math.max(1, dW), Math.max(1, dH)).data;
+              var bullPx = 0, bearPx = 0, rightBull = 0, rightBear = 0;
+              var rightStartCol = Math.floor(dW * 0.65);
+              var step = 4 * 4;
+              for (var p = 0; p < imgData.length; p += step) {
+                var pxIdx = p >> 2;
+                var colX = pxIdx % Math.max(1, dW);
+                var R = imgData[p], G = imgData[p + 1], B = imgData[p + 2];
+                if (G > R + 22 && G > 70) {
+                  bullPx++;
+                  if (colX >= rightStartCol) rightBull++;
+                } else if (R > G + 22 && R > 70) {
+                  bearPx++;
+                  if (colX >= rightStartCol) rightBear++;
+                }
+              }
+              var totC = Math.max(1, bullPx + bearPx);
+              var bullPct = Math.round((bullPx / totC) * 100);
+              var rTot = Math.max(1, rightBull + rightBear);
+              var rBullPct = Math.round((rightBull / rTot) * 100);
+              var biasStr = rBullPct >= 55 ? 'BULLISH IMPULSE' : (rBullPct <= 45 ? 'BEARISH IMPULSE' : 'CONSOLIDATION / EQUILIBRIUM');
+              visualLines.push('• ' + lbl + ': Overall Bull/Bear=' + bullPct + '%/' + (100 - bullPct) + '% | Right-Edge Live Candle Flow=' + rBullPct + '% Bullish (' + biasStr + ')');
+            } catch(ePx) {}
           }
-          resolve(canvas.toDataURL('image/jpeg', 0.64));
+          if (visualLines.length > 0) {
+            window.__lastChartVisualSummary = '\n\n[UPLOADED ' + valid.length + '-CHART VISUAL CANDLE SCAN]\n' + visualLines.join('\n');
+          }
+          resolve(canvas.toDataURL('image/jpeg', 0.7));
         }
       });
     }
@@ -2209,7 +2339,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       var isMistral = endpoint.indexOf('mistral.ai') >= 0;
       for (var i = 0; i < defaultModels.length; i++) {
         if (i > 0) {
-          await new Promise(function(r){ setTimeout(r, isMistral ? 1100 : 350); });
+          await new Promise(function(r){ setTimeout(r, isMistral ? 1000 : 250); });
         }
         var model = defaultModels[i];
         try {
@@ -2230,10 +2360,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             body: JSON.stringify({
               model: model,
               temperature: 0.2,
-              max_tokens: 1600,
+              max_tokens: 1500,
               messages: [{ role: 'user', content: userContent }]
             })
-          }, 14000);
+          }, 12000);
           if (resp && resp.ok) {
             var j = await resp.json();
             var rawTxt = (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
@@ -2250,35 +2380,41 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
     }
 
     async function callGeminiProvider(key, cleanBodyStr, rawBodyStr) {
-      var models = ['gemini-2.5-flash', 'gemini-2.0-flash'];
-      for (var i = 0; i < models.length; i++) {
-        var m = models[i];
-        try {
-          var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + m + ':generateContent?key=' + encodeURIComponent(key);
-          var resp = await fetchWithTimeout(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: cleanBodyStr || rawBodyStr
-          }, 12000);
-          if (resp && resp.ok) {
-            var j = await resp.json();
-            var parts = j && j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts;
-            if (parts && parts.length > 0) {
-              var finalTxt = '';
-              for (var p = 0; p < parts.length; p++) {
-                if (parts[p] && !parts[p].thought && parts[p].text) {
-                  finalTxt += parts[p].text;
+      var isAq = key.indexOf('AQ.') === 0;
+      var bases = isAq
+        ? ['https://aiplatform.googleapis.com/v1/publishers/google/models', 'https://generativelanguage.googleapis.com/v1beta/models']
+        : ['https://generativelanguage.googleapis.com/v1beta/models', 'https://aiplatform.googleapis.com/v1/publishers/google/models'];
+      var models = isAq
+        ? ['gemini-2.5-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash-lite', 'gemini-2.0-flash']
+        : ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash'];
+      for (var b = 0; b < bases.length; b++) {
+        for (var i = 0; i < models.length; i++) {
+          var m = models[i];
+          try {
+            var url = bases[b] + '/' + m + ':generateContent?key=' + encodeURIComponent(key);
+            var resp = await fetchWithTimeout(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+              body: cleanBodyStr || rawBodyStr
+            }, 11000);
+            if (resp && resp.ok) {
+              var j = await resp.json();
+              var parts = j && j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts;
+              if (parts && parts.length > 0) {
+                var finalTxt = '';
+                for (var p = 0; p < parts.length; p++) {
+                  if (parts[p] && !parts[p].thought && parts[p].text) {
+                    finalTxt += parts[p].text;
+                  }
+                }
+                if (finalTxt.length > 1) {
+                  return finalTxt;
                 }
               }
-              if (finalTxt.length > 1) {
-                return finalTxt;
-              }
+            } else if (resp && (resp.status === 401 || resp.status === 403)) {
+              break;
             }
-          } else if (resp && (resp.status === 429 || resp.status === 401 || resp.status === 403 || resp.status === 400)) {
-            break;
-          }
-        } catch(e) {
-          break;
+          } catch(e) {}
         }
       }
       return null;
@@ -2286,7 +2422,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
     function makeGeminiSuccessResponse(txt, wantJson) {
       var clean = (txt || '').trim();
-      if (wantJson) {
+      if (wantJson || clean.indexOf('```json') === 0 || (clean.indexOf('```') === 0 && clean.indexOf('{') >= 0)) {
         var stripped = clean.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
         var fb = stripped.indexOf('{');
         var lb = stripped.lastIndexOf('}');
@@ -2389,25 +2525,24 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         } catch(e) {}
 
         var fullPrompt = (sysText ? (sysText + '\n\n') : '') + promptText;
-        var realImgs = imgList.filter(function(im){ return im && im.b64 && im.b64.length >= 1000; });
-
-        // Fast-path for Doctor ping calls (< 120 chars & 0 real chart images): return instant OK in <50ms!
-        if (realImgs.length === 0 && fullPrompt.length < 120 && !wantJson) {
-          return makeGeminiSuccessResponse('OK', false);
+        // Fast-path for Doctor self-test (TEXT CALL has 0 images; IMAGE CALL has 1 test image and short prompt < 280 chars):
+        if (fullPrompt.length < 280 && imgList.length <= 1 && !wantJson) {
+          return origFetch(input, init);
         }
+        var realImgs = imgList.filter(function(im){ return im && im.b64 && im.b64.length >= 1500; });
 
         var callSig = (wantJson ? 'J:' : 'T:') + realImgs.length + ':' + fullPrompt.slice(0, 120);
         if (Date.now() - __lastSuccessCache.ts < 10000 && __lastSuccessCache.sig === callSig && __lastSuccessCache.out) {
           return makeGeminiSuccessResponse(__lastSuccessCache.out, wantJson);
         }
-        // Prevent the website's internal 4-model retry loop from re-running 8x if all keys already failed 2s ago
-        if (Date.now() - __lastFailCache.ts < 5500 && __lastFailCache.sig === callSig) {
+        if (Date.now() - __lastFailCache.ts < 4500 && __lastFailCache.sig === callSig) {
           return new Response(JSON.stringify({
             error: { code: 429, message: 'All configured API keys were just checked and are rate-limited.' }
           }), { status: 429, headers: { 'Content-Type': 'application/json' } });
         }
 
-        // Run 3x3 Image Grid Stitch AND 700ms-capped Telemetry in PARALLEL so pre-processing takes <0.5s!
+        // Run 3x3 Image Grid Stitch (+ Visual Pixel Scan) AND 700ms-capped Live Market Telemetry in PARALLEL
+        window.__lastChartVisualSummary = '';
         var prepResults = await Promise.all([
           realImgs.length > 0 ? stitchImagesToDataUrl(realImgs) : Promise.resolve(null),
           (realImgs.length > 0 || fullPrompt.length > 120)
@@ -2420,6 +2555,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
         var combinedDataUrl = prepResults[0];
         var unifiedTelemetry = prepResults[1];
+        if (window.__lastChartVisualSummary) {
+          fullPrompt += window.__lastChartVisualSummary;
+        }
         if (unifiedTelemetry) {
           fullPrompt += unifiedTelemetry;
         }
@@ -2453,6 +2591,18 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         // 1. Primary: Native Dart Multi-Provider Round-Robin Engine
         if (window.FlutterBridge) {
           var dartOut = await callNativeDartAiFallback(candidateKeys, urlKey, fullPrompt, realImgs, stitchedB64, wantJson);
+          if (!dartOut || dartOut.indexOf('__ERR__:') === 0 || dartOut.length < 2) {
+            var _em = (dartOut && dartOut.indexOf('__ERR__:') === 0)
+              ? dartOut.substring(8)
+              : '504|Dart AI bridge gave no reply';
+            var _bar = _em.indexOf('|');
+            var _st = parseInt(_em.substring(0, _bar), 10);
+            var _msg = _em.substring(_bar + 1);
+            if (!(_st >= 400 && _st <= 599)) _st = 502;
+            __lastFailCache = { ts: Date.now(), sig: callSig };
+            return new Response(JSON.stringify({ error: { code: _st, message: _msg } }),
+              { status: _st, headers: { 'Content-Type': 'application/json' } });
+          }
           if (dartOut && dartOut.length > 1) {
             __lastSuccessCache = { ts: Date.now(), sig: callSig, out: dartOut };
             return makeGeminiSuccessResponse(dartOut, wantJson);
@@ -2462,22 +2612,22 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         // 2. Fast JS Fallback
         var cleanGemParts = [{ text: fullPrompt }];
         if (stitchedB64) {
-          cleanGemParts.push({ inline_data: { mime_type: 'image/jpeg', data: stitchedB64 } });
+          cleanGemParts.push({ inlineData: { mimeType: 'image/jpeg', data: stitchedB64 } });
         } else {
           for (var imIdx = 0; imIdx < realImgs.slice(0, 1).length; imIdx++) {
             cleanGemParts.push({
-              inline_data: {
-                mime_type: realImgs[imIdx].mime || 'image/jpeg',
+              inlineData: {
+                mimeType: realImgs[imIdx].mime || 'image/jpeg',
                 data: realImgs[imIdx].b64
               }
             });
           }
         }
         var cleanGemBody = JSON.stringify({
-          contents: [{ parts: cleanGemParts }],
+          contents: [{ role: 'user', parts: cleanGemParts }],
           generationConfig: wantJson
-            ? { temperature: 0.2, responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } }
-            : { temperature: 0.2, thinkingConfig: { thinkingBudget: 0 } }
+            ? { temperature: 0.2, responseMimeType: 'application/json' }
+            : { temperature: 0.2 }
         });
 
         for (var idx = 0; idx < candidateKeys.length; idx++) {
@@ -2495,7 +2645,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             var groqTxt = await callOpenAiVisionProvider(
               'https://api.groq.com/openai/v1/chat/completions',
               k,
-              ['meta-llama/llama-4-scout-17b-16e-instruct', 'llama-3.3-70b-versatile'],
+              ['meta-llama/llama-4-scout-17b-16e-instruct', 'meta-llama/llama-4-maverick-17b-128e-instruct', 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
               fullPrompt,
               combinedDataUrl,
               null
@@ -2508,7 +2658,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             var orTxt = await callOpenAiVisionProvider(
               'https://openrouter.ai/api/v1/chat/completions',
               k,
-              ['google/gemma-3-27b-it:free', 'qwen/qwen2.5-vl-32b-instruct:free', 'meta-llama/llama-3.3-70b-instruct:free'],
+              ['google/gemma-3-27b-it:free', 'qwen/qwen2.5-vl-32b-instruct:free', 'mistralai/mistral-small-3.1-24b-instruct:free', 'meta-llama/llama-3.3-70b-instruct:free', 'openrouter/free'],
               fullPrompt,
               combinedDataUrl,
               { 'HTTP-Referer': 'https://aniketpro.ai', 'X-Title': 'ANIKET PRO AI' }
@@ -2521,7 +2671,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
             var misTxt = await callOpenAiVisionProvider(
               'https://api.mistral.ai/v1/chat/completions',
               k,
-              ['pixtral-12b-2409', 'mistral-small-latest'],
+              ['pixtral-12b-2409', 'mistral-small-latest', 'open-mistral-nemo'],
               fullPrompt,
               combinedDataUrl,
               null
@@ -2739,11 +2889,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
 
     scanRoot(document);
     if (!window.__nlObserver) {
-      window.__nlObserver = new MutationObserver(function() { scanRoot(document); });
+      window.__nlObserver = new MutationObserver(function() {
+        if (window.__nlT) return;
+        window.__nlT = setTimeout(function() { window.__nlT = null; scanRoot(document); }, 1500);
+      });
       window.__nlObserver.observe(document.documentElement || document, { childList: true, subtree: true });
     }
     if (!window.__nlInterval) {
-      window.__nlInterval = setInterval(function() { scanRoot(document); }, 450);
+      window.__nlInterval = setInterval(function() { scanRoot(document); }, 3000);
     }
   } catch(e) {}
 })();''';
@@ -3319,10 +3472,25 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   }
 
   // ── Market Clock Helper (NYSE Clock from alerts.py + BD Killzone Clock) ──
+  bool _isUsDst(DateTime utc) {
+    // US DST: March-er 2nd Sunday 02:00 EST (07:00 UTC) -> Nov-er 1st Sunday 02:00 EDT (06:00 UTC)
+    DateTime nthSunday(int year, int month, int n) {
+      var d = DateTime.utc(year, month, 1);
+      while (d.weekday != DateTime.sunday) {
+        d = d.add(const Duration(days: 1));
+      }
+      return d.add(Duration(days: 7 * (n - 1)));
+    }
+
+    final start = nthSunday(utc.year, 3, 2).add(const Duration(hours: 7));
+    final end = nthSunday(utc.year, 11, 1).add(const Duration(hours: 6));
+    return !utc.isBefore(start) && utc.isBefore(end);
+  }
+
   Map<String, String> _getMarketClockStatus() {
     final nowUtc = DateTime.now().toUtc();
     // New York EDT is UTC-4 (Mar-Nov), EST is UTC-5; Oct is EDT (UTC-4)
-    final isDst = nowUtc.month >= 3 && nowUtc.month <= 11;
+    final isDst = _isUsDst(nowUtc);
     final nyTime = nowUtc.add(Duration(hours: isDst ? -4 : -5));
     final bdTime = nowUtc.add(const Duration(hours: 6));
 
@@ -4664,7 +4832,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
 
       for (final k in keys) {
         if (k.startsWith('AIza') || k.startsWith('AQ.')) {
-          final url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${Uri.encodeComponent(k)}';
+          final url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${Uri.encodeComponent(k)}';
           final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
           try {
             final req = await client.postUrl(Uri.parse(url));
