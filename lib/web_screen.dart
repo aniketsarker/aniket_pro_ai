@@ -1814,6 +1814,443 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       return null;
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    //  v2 TELEMETRY ENGINE (runUnified12) — Dart candle bridge + real session ORB
+    // ═══════════════════════════════════════════════════════════════════
+    window.__candleCb = window.__candleCb || {};
+    window.__resolveCandles = function(reqId, data) {
+      var cb = window.__candleCb && window.__candleCb[reqId];
+      if (cb) {
+        delete window.__candleCb[reqId];
+        cb(data || null);
+      }
+    };
+
+    function getCandlesDart(sym, interval, limit) {
+      return new Promise(function(resolve) {
+        if (!window.FlutterBridge) { resolve(null); return; }
+        var id = 'c_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+        var t = setTimeout(function() {
+          if (window.__candleCb[id]) { delete window.__candleCb[id]; resolve(null); }
+        }, 4800);
+        window.__candleCb[id] = function(d) { clearTimeout(t); resolve(d); };
+        try {
+          window.FlutterBridge.postMessage('CANDLES:' + JSON.stringify({
+            reqId: id, sym: sym, interval: interval, limit: limit
+          }));
+        } catch (e) {
+          clearTimeout(t); delete window.__candleCb[id]; resolve(null);
+        }
+      });
+    }
+
+    async function getCandlesBinanceJs(sym, interval, limit) {
+      var map = {
+        'BTC-USD':'BTCUSDT','ETH-USD':'ETHUSDT','SOL-USD':'SOLUSDT',
+        'EURUSD=X':'EURUSDT','GBPUSD=X':'GBPUSDT','AUDUSD=X':'AUDUSDT',
+        'GC=F':'PAXGUSDT'
+      };
+      var bSym = map[sym];
+      if (!bSym) return null;
+      try {
+        var iv = (interval === '1d' || interval === '1h' || interval === '1m') ? interval : '5m';
+        var url = 'https://api.binance.com/api/v3/klines?symbol=' + bSym + '&interval=' + iv + '&limit=' + (limit || 240);
+        var r = await fetchWithTimeout(url, { method: 'GET' }, 3800);
+        if (!r || !r.ok) return null;
+        var kl = await r.json();
+        if (!Array.isArray(kl) || kl.length < 15) return null;
+        var bars = kl.map(function(row) {
+          return { t:+row[0], o:+row[1], h:+row[2], l:+row[3], c:+row[4], v:+row[5] };
+        });
+        var perDay = iv === '1d' ? 1 : (iv === '1h' ? 24 : 288);
+        var prev = bars.length > perDay ? bars[bars.length - 1 - perDay].c : bars[0].o;
+        return {
+          bars: bars,
+          livePx: bars[bars.length - 1].c,
+          prevClose: prev,
+          source: 'Binance (' + bSym + (sym === 'GC=F' ? ' gold-proxy' : '') + ')'
+        };
+      } catch (e) { return null; }
+    }
+
+    async function getCandles(sym, interval, limit) {
+      var d = await getCandlesDart(sym, interval, limit);
+      if (d && d.bars && d.bars.length >= 15) return d;
+      return await getCandlesBinanceJs(sym, interval, limit);
+    }
+
+    function detectPair12(promptText) {
+      var map = [
+        ['XAU/USD','GC=F','XAU/USD (Gold)'], ['XAUUSD','GC=F','XAU/USD (Gold)'],
+        ['XAG/USD','SI=F','XAG/USD (Silver)'], ['XAGUSD','SI=F','XAG/USD (Silver)'],
+        ['SILVER','SI=F','XAG/USD (Silver)'],
+        ['WTI','CL=F','WTI Crude Oil'], ['USOIL','CL=F','WTI Crude Oil'], ['CRUDE','CL=F','WTI Crude Oil'],
+        ['NAS100','NQ=F','US100 (Nasdaq)'], ['US100','NQ=F','US100 (Nasdaq)'], ['NASDAQ','NQ=F','US100 (Nasdaq)'],
+        ['US30','YM=F','US30 (Dow)'], ['DJ30','YM=F','US30 (Dow)'],
+        ['BTC/USD','BTC-USD','BTC/USD'], ['BTCUSD','BTC-USD','BTC/USD'], ['BTCUSDT','BTC-USD','BTC/USD'], ['BITCOIN','BTC-USD','BTC/USD'],
+        ['ETH/USD','ETH-USD','ETH/USD'], ['ETHUSD','ETH-USD','ETH/USD'], ['ETHEREUM','ETH-USD','ETH/USD'],
+        ['SOL/USD','SOL-USD','SOL/USD'], ['SOLUSD','SOL-USD','SOL/USD'], ['SOLANA','SOL-USD','SOL/USD'],
+        ['EUR/USD','EURUSD=X','EUR/USD'], ['EURUSD','EURUSD=X','EUR/USD'],
+        ['GBP/USD','GBPUSD=X','GBP/USD'], ['GBPUSD','GBPUSD=X','GBP/USD'],
+        ['USD/JPY','USDJPY=X','USD/JPY'], ['USDJPY','USDJPY=X','USD/JPY'],
+        ['AUD/USD','AUDUSD=X','AUD/USD'], ['AUDUSD','AUDUSD=X','AUD/USD'],
+        ['USD/CAD','USDCAD=X','USD/CAD'], ['USDCAD','USDCAD=X','USD/CAD'],
+        ['GOLD','GC=F','XAU/USD (Gold)']
+      ];
+      // 1) user selected pair on the page (select / active button) -> highest priority
+      var uiTxt = '';
+      try {
+        var nodes = document.querySelectorAll('select, [data-pair], [data-symbol], .active, .selected');
+        for (var n = 0; n < nodes.length; n++) {
+          var el = nodes[n];
+          uiTxt += ' ' + ((el.value || el.getAttribute('data-pair') || el.getAttribute('data-symbol') || el.textContent || '')).slice(0, 40);
+        }
+      } catch (e) {}
+      var uUp = uiTxt.toUpperCase();
+      for (var i = 0; i < map.length; i++) {
+        if (uUp.indexOf(map[i][0]) >= 0) return { sym: map[i][1], label: map[i][2] };
+      }
+      // 2) tail of prompt (user/pair part, not system instructions at the top)
+      var pTail = (promptText || '').slice(-1200).toUpperCase();
+      for (var j = 0; j < map.length; j++) {
+        if (pTail.indexOf(map[j][0]) >= 0) return { sym: map[j][1], label: map[j][2] };
+      }
+      var pAll = (promptText || '').toUpperCase();
+      for (var k = 0; k < map.length; k++) {
+        if (pAll.indexOf(map[k][0]) >= 0) return { sym: map[k][1], label: map[k][2] };
+      }
+      return { sym: 'GC=F', label: 'XAU/USD (Gold)' };
+    }
+
+    function sessionKind12(sym) {
+      if (/-USD$/.test(sym)) return 'CRYPTO';
+      if (/=X$/.test(sym)) return 'FX';
+      if (/=F$/.test(sym) || sym === 'DX-Y.NYB') return 'FUT';
+      return 'STOCK';
+    }
+
+    function tzParts12(ms, tz) {
+      try {
+        var fmt = new Intl.DateTimeFormat('en-US', {
+          timeZone: tz, hour12: false,
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', weekday: 'short'
+        });
+        var ps = fmt.formatToParts(new Date(ms));
+        var o = {};
+        for (var i = 0; i < ps.length; i++) o[ps[i].type] = ps[i].value;
+        var h = (+o.hour) % 24;
+        return { y:+o.year, m:+o.month, d:+o.day, h:h, min:+o.minute, wd:o.weekday,
+          iso: o.year + '-' + o.month + '-' + o.day };
+      } catch (e) {
+        var d = new Date(ms - 4 * 3600000);
+        return { y:d.getUTCFullYear(), m:d.getUTCMonth()+1, d:d.getUTCDate(),
+          h:d.getUTCHours(), min:d.getUTCMinutes(), wd:'Mon',
+          iso: d.toISOString().slice(0,10) };
+      }
+    }
+
+    function tzOffsetMs12(ms, tz) {
+      var p = tzParts12(ms, tz);
+      return Date.UTC(p.y, p.m - 1, p.d, p.h, p.min) - Math.floor(ms / 60000) * 60000;
+    }
+
+    function localToUtcMs12(y, m, d, h, min, tz) {
+      var g = Date.UTC(y, m - 1, d, h, min);
+      var off1 = tzOffsetMs12(g, tz);
+      var u1 = g - off1;
+      var off2 = tzOffsetMs12(u1, tz);
+      return g - off2;
+    }
+
+    function sessionStartMs12(kind, nowMs) {
+      if (kind === 'CRYPTO') {
+        var u = new Date(nowMs);
+        return Date.UTC(u.getUTCFullYear(), u.getUTCMonth(), u.getUTCDate(), 0, 0);
+      }
+      var ny = tzParts12(nowMs, 'America/New_York');
+      var ny930 = localToUtcMs12(ny.y, ny.m, ny.d, 9, 30, 'America/New_York');
+      if (kind === 'STOCK') {
+        if (nowMs >= ny930 && ny.wd !== 'Sat' && ny.wd !== 'Sun') return ny930;
+        var prev = nowMs - 86400000;
+        for (var g = 0; g < 5; g++) {
+          var np = tzParts12(prev, 'America/New_York');
+          if (np.wd !== 'Sat' && np.wd !== 'Sun') {
+            return localToUtcMs12(np.y, np.m, np.d, 9, 30, 'America/New_York');
+          }
+          prev -= 86400000;
+        }
+        return ny930;
+      }
+      if (nowMs >= ny930) return ny930;
+      var lon = tzParts12(nowMs, 'Europe/London');
+      var lon800 = localToUtcMs12(lon.y, lon.m, lon.d, 8, 0, 'Europe/London');
+      if (nowMs >= lon800) return lon800;
+      var pNy = tzParts12(nowMs - 86400000, 'America/New_York');
+      return localToUtcMs12(pNy.y, pNy.m, pNy.d, 17, 0, 'America/New_York');
+    }
+
+    function contractSpec12(sym, px) {
+      if (sym === 'GC=F') return { size:100, unit:'lots', min:0.01, step:0.01, div:1 };
+      if (sym === 'SI=F') return { size:5000, unit:'lots', min:0.01, step:0.01, div:1 };
+      if (sym === 'CL=F') return { size:1000, unit:'lots', min:0.01, step:0.01, div:1 };
+      if (sym === 'USDJPY=X' || sym === 'USDCAD=X') {
+        return { size:100000, unit:'lots', min:0.01, step:0.01, div:(px > 0 ? px : 1) };
+      }
+      if (/=X$/.test(sym)) return { size:100000, unit:'lots', min:0.01, step:0.01, div:1 };
+      if (/-USD$/.test(sym)) return { size:1, unit:'units', min:0.001, step:0.001, div:1 };
+      return { size:1, unit:'shares', min:1, step:1, div:1 };
+    }
+
+    async function runUnified12(promptText) {
+      var det = detectPair12(promptText);
+      var sym = det.sym, label = det.label;
+      var cached = window.__aniketTelemetryCache[sym];
+      if (cached && (Date.now() - cached.ts < 45000)) return cached.text;
+
+      var userCfg = readUserForexModeSettings();
+      var res = await Promise.all([
+        getCandles(sym, '5m', 240),
+        getCandles(sym, '1d', 90),
+        getCandles(sym, '1h', 120)
+      ]);
+      var d5 = res[0], d1 = res[1], dH = res[2];
+      if (!d5 || !d5.bars || d5.bars.length < 15) return null;
+
+      var bars = d5.bars;
+      var livePx = +d5.livePx;
+      var prevClose = +d5.prevClose;
+      var chgPct = prevClose > 0 ? ((livePx - prevClose) / prevClose) * 100.0 : 0.0;
+      var dec = livePx > 100 ? 2 : (livePx > 10 ? 3 : 5);
+
+      // ── Daily + 1H + 4H MTF context (real candles) ──
+      var dailySetups = [];
+      var hi90d = livePx, lo90d = livePx, sma20d = livePx, dailyRsi = 50.0, dBias = 'NEUTRAL';
+      var pdh = 0, pdl = 0;
+      if (d1 && d1.bars && d1.bars.length > 0) {
+        var db = d1.bars;
+        var dc = db.map(function(b){ return b.c; });
+        hi90d = Math.max.apply(null, db.map(function(b){ return b.h; }));
+        lo90d = Math.min.apply(null, db.map(function(b){ return b.l; }));
+        if (db.length >= 2) { pdh = db[db.length - 2].h; pdl = db[db.length - 2].l; }
+        if (dc.length >= 21) {
+          dailyRsi = calcWilderRsi(dc, 14);
+          var p20 = dc.slice(-21, -1);
+          var max20 = Math.max.apply(null, p20);
+          sma20d = p20.reduce(function(a,b){ return a + b; }, 0) / p20.length;
+          dBias = (livePx > sma20d && dailyRsi >= 52) ? 'BULLISH' : ((livePx < sma20d && dailyRsi <= 48) ? 'BEARISH' : 'NEUTRAL');
+          if (livePx > max20) dailySetups.push('20D Breakout');
+          if (dc[dc.length - 2] < sma20d && livePx > sma20d) dailySetups.push('Reclaim 20D SMA');
+          if (dailyRsi < 32) dailySetups.push('Daily Oversold');
+        }
+      }
+      var h1Bias = 'NEUTRAL', h4Bias = 'NEUTRAL', h1Rsi = 50.0;
+      if (dH && dH.bars && dH.bars.length >= 24) {
+        var hc = dH.bars.map(function(b){ return b.c; });
+        h1Rsi = calcWilderRsi(hc, 14);
+        var sma20h = hc.slice(-20).reduce(function(a,b){ return a + b; }, 0) / 20.0;
+        h1Bias = (livePx > sma20h && h1Rsi >= 52) ? 'BULLISH' : ((livePx < sma20h && h1Rsi <= 48) ? 'BEARISH' : 'NEUTRAL');
+        var h4c = [];
+        for (var hi = 3; hi < dH.bars.length; hi += 4) h4c.push(dH.bars[hi].c);
+        if (h4c.length >= 6) {
+          var sma4 = h4c.slice(-5).reduce(function(a,b){ return a + b; }, 0) / 5.0;
+          h4Bias = livePx > sma4 ? 'BULLISH' : (livePx < sma4 ? 'BEARISH' : 'NEUTRAL');
+        }
+      }
+
+      // ── 5m ATR & RSI ──
+      var atrN = Math.min(14, bars.length - 1), trSum = 0;
+      for (var a = bars.length - atrN; a < bars.length; a++) {
+        var cur = bars[a], pv = bars[a - 1].c;
+        trSum += Math.max(cur.h - cur.l, Math.abs(cur.h - pv), Math.abs(cur.l - pv));
+      }
+      var atr14 = trSum / Math.max(1, atrN);
+      var rsi5m = calcWilderRsi(bars.map(function(b){ return b.c; }), 14);
+
+      // ── Real session bars (from actual session open timestamp) ──
+      var sKind = sessionKind12(sym);
+      var sStart = sessionStartMs12(sKind, Date.now());
+      var sess = bars.filter(function(b){ return (b.t || 0) >= sStart; });
+      var sessAnchored = sess.length >= 3;
+      if (!sessAnchored) sess = bars.slice(-24);
+
+      var orBars = sess.slice(0, 3);
+      var orHigh = Math.max.apply(null, orBars.map(function(b){ return b.h; }));
+      var orLow  = Math.min.apply(null, orBars.map(function(b){ return b.l; }));
+      var orMid  = (orHigh + orLow) / 2.0;
+      var orAvgVol = orBars.reduce(function(acc, b){ return acc + (b.v || 0); }, 0) / Math.max(1, orBars.length);
+      var lastVolRatio = orAvgVol > 0 ? ((sess[sess.length - 1].v || 0) / orAvgVol) : 1.0;
+
+      // Completed bars only (skip last forming bar)
+      var trigState = 'INSIDE_OR', trigBar = null;
+      for (var bi = 3; bi < sess.length - 1; bi++) {
+        if (sess[bi].c > orHigh) { trigState = 'LONG_ORB'; trigBar = sess[bi]; break; }
+        if (sess[bi].c < orLow)  { trigState = 'SHORT_ORB'; trigBar = sess[bi]; break; }
+      }
+      var orbDesc = trigState === 'LONG_ORB'
+        ? 'BULLISH ORB (closed above OR High ' + orHigh.toFixed(dec) + ' @ ' + trigBar.c.toFixed(dec) + ', Vol ' + lastVolRatio.toFixed(2) + 'x)'
+        : (trigState === 'SHORT_ORB'
+            ? 'BEARISH ORB (closed below OR Low ' + orLow.toFixed(dec) + ' @ ' + trigBar.c.toFixed(dec) + ', Vol ' + lastVolRatio.toFixed(2) + 'x)'
+            : 'INSIDE OR (' + orLow.toFixed(dec) + '-' + orHigh.toFixed(dec) + ', Mid ' + orMid.toFixed(dec) + ')');
+
+      // ── SMC dealing range + 5m FVG + PDH/PDL sweep ──
+      var sessHigh = Math.max.apply(null, sess.map(function(b){ return b.h; }));
+      var sessLow  = Math.min.apply(null, sess.map(function(b){ return b.l; }));
+      var sessEq   = (sessHigh + sessLow) / 2.0;
+      var sessSpan = Math.max(sessHigh - sessLow, atr14);
+      var bullOte618 = sessHigh - 0.618 * sessSpan, bullOte786 = sessHigh - 0.786 * sessSpan;
+      var bearOte618 = sessLow  + 0.618 * sessSpan, bearOte786 = sessLow  + 0.786 * sessSpan;
+      var pdZone = livePx > sessEq ? 'PREMIUM (> Eq ' + sessEq.toFixed(dec) + ')' : 'DISCOUNT (< Eq ' + sessEq.toFixed(dec) + ')';
+
+      var bullFvg = 'none', bearFvg = 'none';
+      for (var fi = sess.length - 2; fi >= Math.max(2, sess.length - 30); fi--) {
+        var b0 = sess[fi - 2], b2 = sess[fi];
+        if (bullFvg === 'none' && b2.l > b0.h && livePx >= b0.h) {
+          bullFvg = b0.h.toFixed(dec) + '-' + b2.l.toFixed(dec);
+        }
+        if (bearFvg === 'none' && b2.h < b0.l && livePx <= b0.l) {
+          bearFvg = b2.h.toFixed(dec) + '-' + b0.l.toFixed(dec);
+        }
+      }
+      var pdSweep = 'none';
+      if (pdh > 0 && sessHigh > pdh) pdSweep = livePx < pdh ? 'PDH SWEPT & REJECTED (' + pdh.toFixed(dec) + ')' : 'Above PDH (' + pdh.toFixed(dec) + ')';
+      else if (pdl > 0 && sessLow < pdl) pdSweep = livePx > pdl ? 'PDL SWEPT & RECLAIMED (' + pdl.toFixed(dec) + ')' : 'Below PDL (' + pdl.toFixed(dec) + ')';
+
+      // ── Exit plan ──
+      var atrMult = userCfg.atrMult > 0 ? userCfg.atrMult : 1.5;
+      var riskDist = Math.max(atrMult * atr14, livePx * 0.0005);
+      var targetR = 2.0;
+      var longSL = livePx - riskDist, longTP1 = livePx + riskDist, longTP2 = livePx + 2*riskDist, longTP3 = livePx + 3*riskDist;
+      var shortSL = livePx + riskDist, shortTP1 = livePx - riskDist, shortTP2 = livePx - 2*riskDist, shortTP3 = livePx - 3*riskDist;
+
+      // ── Time Machine (2,500x Monte Carlo + real session-grouped history) ──
+      var ratios = [];
+      for (var ri = 1; ri < bars.length; ri++) {
+        var pc = bars[ri - 1].c;
+        if (pc > 0) {
+          var hr = bars[ri].h / pc, lr = bars[ri].l / pc, cr = bars[ri].c / pc;
+          if (hr > 0.92 && hr < 1.08 && lr > 0.92 && lr < 1.08) ratios.push([hr, lr, cr]);
+        }
+      }
+      var replays = 2500, hitTP = 0, hitSL = 0, sumR = 0, seed = 19;
+      function nextRand() { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; }
+      var isBullBias = trigState === 'LONG_ORB' ? true : (trigState === 'SHORT_ORB' ? false : (livePx >= orMid));
+      for (var s = 0; s < replays; s++) {
+        var px = livePx, out = 'flat';
+        for (var st = 0; st < 36; st++) {
+          var d = ratios[Math.floor(nextRand() * ratios.length)] || [1.001, 0.999, 1.0];
+          var bh = px * d[0], bl = px * d[1], bc = px * d[2];
+          if (isBullBias) {
+            if (bl <= longSL) { out = 'sl'; px = longSL; break; }
+            if (bh >= longTP2) { out = 'tp'; px = longTP2; break; }
+          } else {
+            if (bh >= shortSL) { out = 'sl'; px = shortSL; break; }
+            if (bl <= shortTP2) { out = 'tp'; px = shortTP2; break; }
+          }
+          px = bc;
+        }
+        if (out === 'tp') { hitTP++; sumR += targetR; }
+        else if (out === 'sl') { hitSL++; sumR -= 1.0; }
+        else { sumR += ((isBullBias ? (px - livePx) : (livePx - px)) / riskDist); }
+      }
+      var resolved = Math.max(1, hitTP + hitSL);
+      var winPct = (hitTP / resolved) * 100.0;
+      var bePct  = (1.0 / (1.0 + targetR)) * 100.0;
+      var avgR   = sumR / replays;
+      var tmVerdict = winPct >= bePct + 4
+        ? 'POSITIVE EDGE (+' + avgR.toFixed(2) + 'R)'
+        : (Math.abs(winPct - bePct) <= 4 ? 'COIN FLIP (' + winPct.toFixed(1) + '%)' : 'NEGATIVE EDGE (' + avgR.toFixed(2) + 'R)');
+
+      // ── Honest contract-aware sizing & risk gate (no clamping lie) ──
+      var riskBudgetUsd = userCfg.balance * (userCfg.riskPct / 100.0);
+      var dailyMaxLossUsd = userCfg.balance * (userCfg.dailyLossPct / 100.0);
+      var spec = contractSpec12(sym, livePx);
+      var lossPerOneUnit = riskDist * spec.size / spec.div;
+      var rawCount = lossPerOneUnit > 0 ? (riskBudgetUsd / lossPerOneUnit) : 0;
+      var floored = Math.floor(rawCount / spec.step) * spec.step;
+      var sizeFits = floored >= spec.min;
+      var finalSize = sizeFits ? floored : spec.min;
+      var realRiskUsd = finalSize * lossPerOneUnit;
+      var decSize = spec.step < 0.01 ? 3 : (spec.step < 1 ? 2 : 0);
+      var sizeStr = finalSize.toFixed(decSize) + ' ' + spec.unit;
+      var riskPass = sizeFits && (realRiskUsd <= riskBudgetUsd + 0.01) && (realRiskUsd <= dailyMaxLossUsd + 0.01);
+      var riskVerdict = riskPass
+        ? 'PASS (' + sizeStr + ', real risk $' + realRiskUsd.toFixed(2) + ' <= limit $' + riskBudgetUsd.toFixed(2) + ')'
+        : 'BLOCK (min ' + spec.min + ' ' + spec.unit + ' risks $' + realRiskUsd.toFixed(2) + ' > limit $' + riskBudgetUsd.toFixed(2) + ')';
+
+      // ── DST-correct NY & BD clock ──
+      var nowMs = Date.now();
+      var nyP = tzParts12(nowMs, 'America/New_York');
+      var bdDate = new Date(nowMs + 6 * 3600000);
+      var bdHr = bdDate.getUTCHours();
+      var kz = (bdHr >= 13 && bdHr < 17) ? 'London Killzone (ACTIVE)'
+        : ((bdHr >= 18 && bdHr < 23) ? 'New York Killzone (ACTIVE)' : 'Asia / Off-Peak');
+      var nyseCalNote = nyseHolidays[nyP.iso] ? 'NYSE Holiday'
+        : (nyseEarlyCloses[nyP.iso] ? 'NYSE Early Close 13:00 ET' : 'NY ' + String(nyP.h).padStart(2,'0') + ':' + String(nyP.min).padStart(2,'0') + ' ET');
+
+      // ── Volume profile + candle-flow PROXY (honestly labeled) ──
+      var vpBuckets = 24, vpMin = sessLow, vpMax = sessHigh;
+      var vpStep = Math.max((vpMax - vpMin) / vpBuckets, 1e-6);
+      var vpVols = new Array(vpBuckets).fill(0), totalSessVol = 0;
+      for (var sb = 0; sb < sess.length; sb++) {
+        var b = sess[sb], bv = Math.max(b.v || 1, 1);
+        totalSessVol += bv;
+        var bIdx = Math.min(vpBuckets - 1, Math.max(0, Math.floor((b.c - vpMin) / vpStep)));
+        vpVols[bIdx] += bv;
+      }
+      var pocIdx = 0;
+      for (var vi = 1; vi < vpBuckets; vi++) if (vpVols[vi] > vpVols[pocIdx]) pocIdx = vi;
+      var pocPrice = vpMin + (pocIdx + 0.5) * vpStep;
+      var targetVaVol = totalSessVol * 0.70, curVaVol = vpVols[pocIdx], vaLoIdx = pocIdx, vaHiIdx = pocIdx;
+      while (curVaVol < targetVaVol && (vaLoIdx > 0 || vaHiIdx < vpBuckets - 1)) {
+        var upV = vaHiIdx < vpBuckets - 1 ? vpVols[vaHiIdx + 1] : -1;
+        var dnV = vaLoIdx > 0 ? vpVols[vaLoIdx - 1] : -1;
+        if (upV >= dnV && vaHiIdx < vpBuckets - 1) { vaHiIdx++; curVaVol += vpVols[vaHiIdx]; }
+        else if (vaLoIdx > 0) { vaLoIdx--; curVaVol += vpVols[vaLoIdx]; }
+        else break;
+      }
+      var valPrice = vpMin + vaLoIdx * vpStep, vahPrice = vpMin + (vaHiIdx + 1) * vpStep;
+
+      var cvdSession = 0, last5Delta = 0, buyStreak = 0, sellStreak = 0;
+      for (var cf = 0; cf < sess.length; cf++) {
+        var fb = sess[cf], fR = Math.max(fb.h - fb.l, 1e-8), fV = Math.max(fb.v || 100, 1);
+        var buyS = (fb.c - fb.l) / fR, sellS = (fb.h - fb.c) / fR;
+        var dlt = fV * (buyS - sellS);
+        cvdSession += dlt;
+        if (cf >= sess.length - 5) {
+          last5Delta += dlt;
+          if (buyS >= 0.72) buyStreak++;
+          if (sellS >= 0.72) sellStreak++;
+        }
+      }
+      var streakStr = buyStreak >= 3 ? ('Strong buy-candle streak (' + buyStreak + '/5)')
+        : (sellStreak >= 3 ? ('Strong sell-candle streak (' + sellStreak + '/5)') : 'Balanced candle flow');
+      var lastBar = sess[sess.length - 1], prevBar = sess[Math.max(0, sess.length - 2)];
+      var lbBody = Math.abs(lastBar.c - lastBar.o);
+      var upWick = lastBar.h - Math.max(lastBar.c, lastBar.o);
+      var dnWick = Math.min(lastBar.c, lastBar.o) - lastBar.l;
+      var wickNote = 'No wick-rejection';
+      if (upWick > lbBody * 1.4 && lastBar.h >= vahPrice - vpStep) wickNote = 'Upper-wick rejection at VAH (' + lastBar.h.toFixed(dec) + ')';
+      else if (dnWick > lbBody * 1.4 && lastBar.l <= valPrice + vpStep) wickNote = 'Lower-wick rejection at VAL (' + lastBar.l.toFixed(dec) + ')';
+      else if (last5Delta > 0 && lastBar.c < prevBar.c) wickNote = 'Candle-delta divergence (seller pressure)';
+      else if (last5Delta < 0 && lastBar.c > prevBar.c) wickNote = 'Candle-delta divergence (buyer pressure)';
+
+      var outTelemetry = ''
+        + '\n\n[LIVE MARKET TELEMETRY (' + label + ' - ' + d5.source + ') - OHLCV candles]\n'
+        + '- Live: ' + livePx.toFixed(dec) + ' (' + (chgPct >= 0 ? '+' : '') + chgPct.toFixed(2) + '%) | 5m RSI: ' + rsi5m.toFixed(1) + ' | 1H RSI: ' + h1Rsi.toFixed(1) + ' | 1D RSI: ' + dailyRsi.toFixed(1) + ' | 20D SMA: ' + sma20d.toFixed(dec) + ' | 90D: ' + lo90d.toFixed(dec) + '-' + hi90d.toFixed(dec) + '\n'
+        + '- MTF Bias (from real candles): Daily=' + dBias + ' | 4H=' + h4Bias + ' | 1H=' + h1Bias + (pdh > 0 ? (' | PDH=' + pdh.toFixed(dec) + ' PDL=' + pdl.toFixed(dec) + ' (' + pdSweep + ')') : '') + '\n'
+        + '- Session 15m ORB (' + (sessAnchored ? sKind + ' session open' : 'last-2h window') + ', ' + sess.length + ' bars): High=' + orHigh.toFixed(dec) + ' | Mid=' + orMid.toFixed(dec) + ' | Low=' + orLow.toFixed(dec) + ' | ' + orbDesc + '\n'
+        + '- SMC Dealing Range & OTE: ' + pdZone + ' | Buy OTE=' + bullOte786.toFixed(dec) + '-' + bullOte618.toFixed(dec) + ' | Sell OTE=' + bearOte618.toFixed(dec) + '-' + bearOte786.toFixed(dec) + ' | 5m Bull FVG=' + bullFvg + ' | 5m Bear FVG=' + bearFvg + '\n'
+        + '- Volume-profile & candle-flow PROXY (OHLCV only, NOT real order book): POC=' + pocPrice.toFixed(dec) + ' | VAH=' + vahPrice.toFixed(dec) + ' | VAL=' + valPrice.toFixed(dec) + ' | Candle-CVD=' + (cvdSession >= 0 ? '+Bullish' : '-Bearish') + ' | ' + streakStr + ' | ' + wickNote + '\n'
+        + '- ' + atrMult + 'x ATR (' + atr14.toFixed(dec) + ') Exit Plan: LONG [SL=' + longSL.toFixed(dec) + ', TP1=' + longTP1.toFixed(dec) + ', TP2=' + longTP2.toFixed(dec) + ', TP3=' + longTP3.toFixed(dec) + '] | SHORT [SL=' + shortSL.toFixed(dec) + ', TP1=' + shortTP1.toFixed(dec) + ', TP2=' + shortTP2.toFixed(dec) + ', TP3=' + shortTP3.toFixed(dec) + ']\n'
+        + '- Time Machine (2,500x Monte Carlo): Win=' + winPct.toFixed(1) + '% (BE ' + bePct.toFixed(0) + '%) | Avg=' + (avgR >= 0 ? '+' : '') + avgR.toFixed(2) + 'R | ' + tmVerdict + '\n'
+        + '- Budget & Risk Gate: Size=' + sizeStr + ' | ' + riskVerdict + ' | ' + kz + ' (' + nyseCalNote + ')\n'
+        + 'IMPORTANT: Follow the exact output format (JSON or text) requested above. Candle-flow values are OHLCV proxies, NOT real order-book data. Include MTF alignment, ORB status, Time Machine Win%, Size and Risk Gate in your reason/details.';
+
+      window.__aniketTelemetryCache[sym] = { ts: Date.now(), text: outTelemetry };
+      return outTelemetry;
+    }
+
     window.__aniketTelemetryCache = {};
 
     async function runUnified11SkillsAndUserFeatures(promptText) {
@@ -2065,15 +2502,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
       if (bidWallPx >= livePx) bidWallPx = livePx - (1.5 * atr14);
 
       var outTelemetry = ''
-        + '\n\n[12 PRO SKILLS + ORDER FLOW LIVE TELEMETRY (' + label + ' — ' + data5m.source + ')]\n'
+        + '\n\n[ANIKET PRO AI — UNIFIED 11-SKILL + SMC/ICT + ORDER-FLOW & LIQUIDITY HEATMAP TELEMETRY (' + label + ' • ' + data5m.source + ')]\n'
         + '• Live Price: ' + livePx.toFixed(dec) + ' (' + (chgPct >= 0 ? '+' : '') + chgPct.toFixed(2) + '%) | 5m RSI-14: ' + rsi5m.toFixed(1) + ' | Daily RSI-14: ' + dailyRsi.toFixed(1) + ' | 20D SMA: ' + sma20d.toFixed(dec) + ' | 90D Range: ' + lo90d.toFixed(dec) + '–' + hi90d.toFixed(dec) + '\n'
-        + '• Opening Range (15m): High=' + orHigh.toFixed(dec) + ' | Mid=' + orMid.toFixed(dec) + ' | Low=' + orLow.toFixed(dec) + ' | Status: ' + entryStatus + '\n'
-        + '• SMC Dealing Range & OTE (0.618–0.786): ' + pdZone + ' | Buy OTE=' + bullOte786.toFixed(dec) + '–' + bullOte618.toFixed(dec) + ' | Sell OTE=' + bearOte618.toFixed(dec) + '–' + bearOte786.toFixed(dec) + '\n'
-        + '• Order Flow & Heatmap: Volume Profile POC=' + pocPrice.toFixed(dec) + ' | VAH=' + vahPrice.toFixed(dec) + ' | VAL=' + valPrice.toFixed(dec) + ' | Bid Wall=' + bidWallPx.toFixed(dec) + ' | Ask Wall=' + askWallPx.toFixed(dec) + ' | CVD=' + (cvdSession >= 0 ? '+Bullish' : '-Bearish') + ' | ' + stackedImbalanceStr + ' | ' + absorptionStatus + '\n'
-        + '• Dynamic ' + atrMult + 'x ATR (' + atr14.toFixed(dec) + ') Exit Plan: LONG [SL=' + longSL.toFixed(dec) + ', TP1=' + longTP1.toFixed(dec) + ', TP2=' + longTP2.toFixed(dec) + ', TP3=' + longTP3.toFixed(dec) + '] | SHORT [SL=' + shortSL.toFixed(dec) + ', TP1=' + shortTP1.toFixed(dec) + ', TP2=' + shortTP2.toFixed(dec) + ', TP3=' + shortTP3.toFixed(dec) + ']\n'
-        + '• Time Machine (2,500x Monte Carlo): Win Rate=' + winPct.toFixed(1) + '% (Breakeven ' + bePct.toFixed(0) + '%) | Expected=' + (avgR >= 0 ? '+' : '') + avgR.toFixed(2) + 'R | Verdict=' + tmVerdict + '\n'
-        + '• Budget & Risk Gate: Recommended Lot=' + lots.toFixed(2) + ' Lots | ' + riskVerdict + ' | Session=' + kz + ' (' + nyseCalNote + ')\n'
-        + 'IMPORTANT: Strictly follow the exact output format (JSON or text) requested by the main prompt above, and include these live Order Flow (POC, Bid/Ask Wall, CVD), Time Machine Win-Rate %, Lot Size, and Risk Gate metrics inside your analysis reason/details!';
+        + '• Skill 1 & 3 (Scanner & 15m ORB Entry): OR High=' + orHigh.toFixed(dec) + ' | OR Mid=' + orMid.toFixed(dec) + ' | OR Low=' + orLow.toFixed(dec) + ' | Status: ' + entryStatus + (dailySetups.length ? ' | Daily Setups: ' + dailySetups.join(', ') : '') + '\n'
+        + '• User SMC/ICT Dealing Range & OTE (0.618–0.786): ' + pdZone + ' | Bullish OTE Buy Zone=' + bullOte786.toFixed(dec) + '–' + bullOte618.toFixed(dec) + ' | Bearish OTE Sell Zone=' + bearOte618.toFixed(dec) + '–' + bearOte786.toFixed(dec) + '\n'
+        + '• Order Flow, Footprint & Liquidity Heatmap: POC (Max Volume Node)=' + pocPrice.toFixed(dec) + ' | Value Area High (VAH)=' + vahPrice.toFixed(dec) + ' | Value Area Low (VAL)=' + valPrice.toFixed(dec) + ' | Bid Liquidity Wall=' + bidWallPx.toFixed(dec) + ' | Ask Liquidity Wall=' + askWallPx.toFixed(dec) + ' | Session CVD=' + (cvdSession >= 0 ? '+' : '') + Math.round(cvdSession) + ' (' + (cvdSession >= 0 ? 'Net Buyer Aggression' : 'Net Seller Aggression') + ') | Footprint=' + stackedImbalanceStr + ' | Absorption=' + absorptionStatus + '\n'
+        + '• Skill 4 (trader-exit • Dynamic ' + atrMult + 'x ATR=' + atr14.toFixed(dec) + ' + Partial TP ' + userCfg.tp1Pct + '%): LONG [SL=' + longSL.toFixed(dec) + ', TP1(1R)=' + longTP1.toFixed(dec) + ', TP2(2R)=' + longTP2.toFixed(dec) + ', TP3(3R)=' + longTP3.toFixed(dec) + '] | SHORT [SL=' + shortSL.toFixed(dec) + ', TP1(1R)=' + shortTP1.toFixed(dec) + ', TP2(2R)=' + shortTP2.toFixed(dec) + ', TP3(3R)=' + shortTP3.toFixed(dec) + ']\n'
+        + '• Skill 5 (trader-timemachine • 2,500x Monte Carlo): Win Rate=' + winPct.toFixed(1) + '% (Breakeven ' + bePct.toFixed(0) + '%) | Expected=' + (avgR >= 0 ? '+' : '') + avgR.toFixed(2) + 'R | Verdict=' + tmVerdict + '\n'
+        + '• Skill 6, 7 & 9 (Budget, Risk Gate & Clock): Recommended Lot=' + lots.toFixed(2) + ' Lots (Balance USD ' + userCfg.balance + ', Risk ' + userCfg.riskPct + '%) | Risk Gate=' + riskVerdict + ' | Killzone=' + kz + ' (' + nyseCalNote + ')\n'
+        + 'IMPORTANT: Strictly follow the exact output format (JSON or text) requested by the main prompt above, and explicitly incorporate POC, VAH/VAL, Bid/Ask Liquidity Walls, Footprint Imbalance, Iceberg Absorption, Time Machine Win-Rate %, Lot Size, and Risk Gate into your analysis reason/details!';
 
       window.__aniketTelemetryCache[sym] = { ts: Date.now(), text: outTelemetry };
       return outTelemetry;
@@ -2525,13 +2962,17 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         } catch(e) {}
 
         var fullPrompt = (sysText ? (sysText + '\n\n') : '') + promptText;
-        // Fast-path for Doctor self-test (TEXT CALL has 0 images; IMAGE CALL has 1 test image and short prompt < 280 chars):
+        // Fast-path for Doctor ping calls (< 280 chars & <= 1 tiny test image):
+        // Let the site's native test call go straight through so the Doctor model log is 100% accurate!
         if (fullPrompt.length < 280 && imgList.length <= 1 && !wantJson) {
           return origFetch(input, init);
         }
+
         var realImgs = imgList.filter(function(im){ return im && im.b64 && im.b64.length >= 1500; });
 
-        var callSig = (wantJson ? 'J:' : 'T:') + realImgs.length + ':' + fullPrompt.slice(0, 120);
+        var _sigImg = 0;
+        for (var _si = 0; _si < realImgs.length; _si++) { _sigImg += (realImgs[_si].b64 || '').length; }
+        var callSig = (wantJson ? 'J:' : 'T:') + realImgs.length + ':' + _sigImg + ':' + fullPrompt.length + ':' + fullPrompt.slice(0, 60) + fullPrompt.slice(-60);
         if (Date.now() - __lastSuccessCache.ts < 10000 && __lastSuccessCache.sig === callSig && __lastSuccessCache.out) {
           return makeGeminiSuccessResponse(__lastSuccessCache.out, wantJson);
         }
@@ -2547,14 +2988,19 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
           realImgs.length > 0 ? stitchImagesToDataUrl(realImgs) : Promise.resolve(null),
           (realImgs.length > 0 || fullPrompt.length > 120)
             ? Promise.race([
-                runUnified11SkillsAndUserFeatures(fullPrompt).catch(function(){ return null; }),
-                new Promise(function(r){ setTimeout(function(){ r(null); }, 700); })
+                runUnified12(fullPrompt).catch(function(){ return null; }),
+                new Promise(function(r){ setTimeout(function(){ r(null); }, 6000); })
               ])
             : Promise.resolve(null)
         ]);
 
         var combinedDataUrl = prepResults[0];
         var unifiedTelemetry = prepResults[1];
+        if (realImgs.length > 0) {
+          try {
+            if (window.FlutterBridge) window.FlutterBridge.postMessage('TOAST:' + (unifiedTelemetry ? '📡 12-skill telemetry ✓ (AI-te gelo)' : '📡 Telemetry nai - market data ashe ni, AI shudhu screenshot dekhbe'));
+          } catch (eT) {}
+        }
         if (window.__lastChartVisualSummary) {
           fullPrompt += window.__lastChartVisualSummary;
         }
@@ -2698,6 +3144,31 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         .replaceFirst('__FLUTTER_LOGO_URL__', jsonEncode(logoDataUrl));
   }
 
+  Future<void> _handleCandlesRequest(String payload) async {
+    String reqId = '';
+    try {
+      final m = jsonDecode(payload) as Map<String, dynamic>;
+      reqId = (m['reqId'] ?? '').toString();
+      final sym = (m['sym'] ?? 'GC=F').toString();
+      final interval = (m['interval'] ?? '5m').toString();
+      final limit = (m['limit'] as num?)?.toInt() ?? 240;
+      final data = await apFetchCandles(sym, interval, limit);
+      if (reqId.isNotEmpty) {
+        await _controller.runJavaScript(
+          'window.__resolveCandles && window.__resolveCandles(${jsonEncode(reqId)}, ${jsonEncode(data)});',
+        );
+      }
+    } catch (_) {
+      if (reqId.isNotEmpty) {
+        try {
+          await _controller.runJavaScript(
+            'window.__resolveCandles && window.__resolveCandles(${jsonEncode(reqId)}, null);',
+          );
+        } catch (_) {}
+      }
+    }
+  }
+
   void _initWebView() {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -2720,6 +3191,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> with WidgetsBindi
         } else if (m.startsWith('TAB:')) {
           final t = m.substring(4).trim().toUpperCase();
           if (mounted) setState(() => _camVisible = (t == 'SS'));
+        } else if (m.startsWith('CANDLES:')) {
+          _handleCandlesRequest(m.substring(8));
+        } else if (m.startsWith('TOAST:')) {
+          _toast(m.substring(6));
         } else if (m.startsWith('FOREX_DART_AI:')) {
           _handleForexDartAiRequest(m.substring(14));
         } else if (m.startsWith('OPEN_11SKILL_SHEET:')) {
@@ -3540,6 +4015,17 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     };
   }
 
+  void _resetSymbolState() {
+    _entryState = null;
+    _planState = null;
+    _timeMachineState = null;
+    _budgetOrderState = null;
+    _riskVerdictState = null;
+    _newsItems = [];
+    _analystState = null;
+    _aiDeepSummary = '';
+  }
+
   Future<void> _loadSavedProState() async {
     try {
       final p = await SharedPreferences.getInstance();
@@ -3612,57 +4098,35 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     }
   }
 
-  Future<Map<String, dynamic>?> _fetchYahooChart(String sym, {String range = '5d', String interval = '5m'}) async {
-    for (final host in ['query2.finance.yahoo.com', 'query1.finance.yahoo.com']) {
-      final url = 'https://$host/v8/finance/chart/${Uri.encodeComponent(sym)}?range=$range&interval=$interval';
-      final raw = await _fetchUrl(url);
-      if (raw.isEmpty) continue;
-      try {
-        final j = jsonDecode(raw) as Map<String, dynamic>;
-        final resList = (j['chart']?['result'] as List?) ?? [];
-        if (resList.isEmpty) continue;
-        final res = resList.first as Map<String, dynamic>;
-        final meta = (res['meta'] as Map<String, dynamic>?) ?? {};
-        final tsList = (res['timestamp'] as List?) ?? [];
-        final qList = (res['indicators']?['quote'] as List?) ?? [];
-        if (qList.isEmpty) continue;
-        final q = qList.first as Map<String, dynamic>;
-        final oList = (q['open'] as List?) ?? [];
-        final hList = (q['high'] as List?) ?? [];
-        final lList = (q['low'] as List?) ?? [];
-        final cList = (q['close'] as List?) ?? [];
-        final vList = (q['volume'] as List?) ?? [];
-
-        final List<ProBar> bars = [];
-        for (int i = 0; i < tsList.length && i < cList.length; i++) {
-          final c = (cList[i] as num?)?.toDouble();
-          final h = (hList[i] as num?)?.toDouble();
-          final l = (lList[i] as num?)?.toDouble();
-          if (c == null || h == null || l == null) continue;
-          final o = (oList[i] as num?)?.toDouble() ?? c;
-          final v = (vList.length > i ? (vList[i] as num?)?.toDouble() : 0.0) ?? 0.0;
-          bars.add(ProBar(
-            ts: (tsList[i] as num).toInt(),
-            o: o,
-            h: h,
-            l: l,
-            c: c,
-            v: v,
-          ));
-        }
-        if (bars.isNotEmpty) {
-          return {
-            'meta': meta,
-            'bars': bars,
-            'price': (meta['regularMarketPrice'] as num?)?.toDouble() ?? bars.last.c,
-            'prevClose': (meta['chartPreviousClose'] as num?)?.toDouble() ??
-                (meta['previousClose'] as num?)?.toDouble() ??
-                bars.first.o,
-          };
-        }
-      } catch (_) {}
+  Future<Map<String, dynamic>?> _fetchYahooChart(String sym,
+      {String range = '5d', String interval = '5m'}) async {
+    final iv = (interval == '1d' || interval == '1m' || interval == '1h') ? interval : '5m';
+    final limit = iv == '1d'
+        ? (range == '3mo' ? 92 : 60)
+        : (iv == '1m' ? 500 : (range == '1mo' ? 1000 : 350));
+    final d = await apFetchCandles(sym, iv, limit, yahooRange: range);
+    if (d == null) return null;
+    final rawBars = (d['bars'] as List?) ?? const [];
+    final bars = <ProBar>[];
+    for (final b in rawBars) {
+      final m = b as Map;
+      bars.add(ProBar(
+        ts: ((m['t'] as num).toInt()) ~/ 1000,
+        o: (m['o'] as num).toDouble(),
+        h: (m['h'] as num).toDouble(),
+        l: (m['l'] as num).toDouble(),
+        c: (m['c'] as num).toDouble(),
+        v: (m['v'] as num).toDouble(),
+      ));
     }
-    return null;
+    if (bars.isEmpty) return null;
+    return {
+      'meta': (d['meta'] as Map<String, dynamic>?) ?? <String, dynamic>{},
+      'bars': bars,
+      'price': (d['livePx'] as num).toDouble(),
+      'prevClose': (d['prevClose'] as num).toDouble(),
+      'source': (d['source'] ?? '').toString(),
+    };
   }
 
   double _calcWilderRsi(List<double> closes, {int period = 14}) {
@@ -3715,7 +4179,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   Future<void> _runScanner() async {
     setState(() {
       _busy = true;
-      _statusMsg = 'Running trader-scanner across Gold, Silver, BTC, Forex & Top Stocks...';
+      _statusMsg = 'Running trader-scanner (Gold, Silver, Oil, Indices, Crypto, Forex)...';
     });
     final List<Map<String, dynamic>> hits = [];
     for (final item in _presets.take(14)) {
@@ -3723,6 +4187,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
       final label = item['label']!;
       final dailyData = await _fetchYahooChart(sym, range: '3mo', interval: '1d');
       final intraData = await _fetchYahooChart(sym, range: '2d', interval: '5m');
+      await Future.delayed(const Duration(milliseconds: 450));
       if (dailyData == null && intraData == null) continue;
 
       final List<String> setups = [];
@@ -3770,7 +4235,11 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
         final ibars = intraData['bars'] as List<ProBar>;
         if (lastPx == 0 && ibars.isNotEmpty) lastPx = ibars.last.c;
         if (ibars.length >= 12) {
-          final sessionBars = ibars.length >= 24 ? ibars.sublist(ibars.length - 24) : ibars;
+          final sessStartSec = apSessionStartMs(apSessionKind(sym), DateTime.now().toUtc()) ~/ 1000;
+          final fromOpen = ibars.where((b) => b.ts >= sessStartSec).toList();
+          final sessionBars = fromOpen.length >= 4
+              ? fromOpen
+              : (ibars.length >= 24 ? ibars.sublist(ibars.length - 24) : ibars);
           final orBars = sessionBars.take(3).toList();
           orHigh = orBars.map((b) => b.h).reduce(math.max);
           orLow = orBars.map((b) => b.l).reduce(math.min);
@@ -3829,6 +4298,11 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   }
 
   Future<void> _runNews({bool silent = false}) async {
+    await _runNewsYahoo(silent: silent);
+    if (_newsItems.isEmpty) await _runNewsGoogle(silent: silent);
+  }
+
+  Future<void> _runNewsYahoo({bool silent = false}) async {
     if (!silent) {
       setState(() {
         _busy = true;
@@ -3931,9 +4405,13 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     final prevClose = chart['prevClose'] as double;
     final atr14 = _calcAtr14(bars);
 
-    final orCount = _entryInterval == '1m' ? math.min(15, bars.length ~/ 2) : 3;
-    final sessionBars = bars.length > 36 ? bars.sublist(bars.length - 36) : bars;
-    final orBars = sessionBars.take(math.max(1, orCount)).toList();
+    final sessStartSec = apSessionStartMs(apSessionKind(_selectedSym), DateTime.now().toUtc()) ~/ 1000;
+    final fromOpen = bars.where((b) => b.ts >= sessStartSec).toList();
+    final sessionBars = fromOpen.length >= 4
+        ? fromOpen
+        : (bars.length > 36 ? bars.sublist(bars.length - 36) : bars);
+    final orCount = _entryInterval == '1m' ? 15 : 3; // 15-minute Opening Range
+      final orBars = sessionBars.take(orCount).toList();
     final orHigh = orBars.map((b) => b.h).reduce(math.max);
     final orLow = orBars.map((b) => b.l).reduce(math.min);
     final orMid = (orHigh + orLow) / 2.0;
@@ -4114,12 +4592,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
       }
     }
     if (ratioPool.isEmpty) {
-      ratioPool.addAll([
-        [1.0015, 0.9990, 1.0008],
-        [1.0008, 0.9985, 0.9992],
-        [1.0022, 0.9995, 1.0014],
-        [1.0005, 0.9978, 0.9984],
-      ]);
+      ratioPool.add([1.001, 0.999, 1.0]);
     }
 
     const int replays = 2500;
@@ -4171,8 +4644,14 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     int histSessions = 0;
     int histWins = 0;
     int histLosses = 0;
-    for (int s = 0; s + 36 <= bars.length; s += 36) {
-      final chunk = bars.sublist(s, s + 36);
+    final sKind = apSessionKind(_selectedSym);
+    final sessMap = <int, List<ProBar>>{};
+    for (final b in bars) {
+      final key = apSessionStartMs(sKind, DateTime.fromMillisecondsSinceEpoch(b.ts * 1000, isUtc: true));
+      sessMap.putIfAbsent(key, () => <ProBar>[]).add(b);
+    }
+    for (final chunk in sessMap.values) {
+      if (chunk.length < 20) continue;
       final orH = chunk.take(3).map((b) => b.h).reduce(math.max);
       final orL = chunk.take(3).map((b) => b.l).reduce(math.min);
       final orM = (orH + orL) / 2.0;
@@ -4303,6 +4782,15 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     _weightsAllocation = out;
   }
 
+  Map<String, dynamic> _contractSpec(String sym) {
+    if (sym == 'GC=F') return {'size': 100.0, 'unit': 'lots', 'min': 0.01, 'step': 0.01, 'cfd': true};
+    if (sym == 'SI=F') return {'size': 5000.0, 'unit': 'lots', 'min': 0.01, 'step': 0.01, 'cfd': true};
+    if (sym == 'CL=F') return {'size': 1000.0, 'unit': 'lots', 'min': 0.01, 'step': 0.01, 'cfd': true};
+    if (sym.endsWith('=X')) return {'size': 100000.0, 'unit': 'lots', 'min': 0.01, 'step': 0.01, 'cfd': true};
+    if (sym.endsWith('-USD')) return {'size': 1.0, 'unit': 'units', 'min': 0.001, 'step': 0.001, 'cfd': false};
+    return {'size': 1.0, 'unit': 'shares', 'min': 1.0, 'step': 1.0, 'cfd': false};
+  }
+
   Future<void> _runBudget({bool silent = false}) async {
     if (_planState == null) {
       await _runExit(silent: true);
@@ -4314,67 +4802,94 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     final entry = (_planState!['entry'] as num).toDouble();
     final stop = (_planState!['stop'] as num).toDouble();
     final target = (_planState!['target'] as num).toDouble();
-    final riskPerUnit = (entry - stop).abs();
-
-    final capByLoss = riskPerUnit > 0 ? (_maxLossPerTradeUsd / riskPerUnit) : 0.0;
-    final capByPos = entry > 0 ? ((_budgetUsd * (_maxPositionPct / 100.0)) / entry) : 0.0;
-    final capByOrder = entry > 0 ? (_maxOrderUsd / entry) : 0.0;
-    final capByCash = entry > 0 ? ((_budgetUsd * (1.0 - (_cashBufferPct / 100.0))) / entry) : 0.0;
-
-    final Map<String, double> caps = {
-      'max_loss (\$$_maxLossPerTradeUsd risk limit)': capByLoss,
-      'position_cap (${_maxPositionPct.toStringAsFixed(0)}% of budget)': capByPos,
-      'max_order (\$$_maxOrderUsd order cap)': capByOrder,
-      'cash_after_buffer (${(100 - _cashBufferPct).toStringAsFixed(0)}% cash)': capByCash,
-    };
-
-    String decidingCap = caps.keys.first;
-    double rawUnits = caps.values.first;
-    caps.forEach((k, v) {
-      if (v < rawUnits) {
-        rawUnits = v;
-        decidingCap = k;
-      }
-    });
-
-    final wholeShares = math.max(1, rawUnits.floor());
-    final double forexLots = _selectedSym == 'GC=F'
-        ? math.max(0.01, (capByLoss / 100.0))
-        : (_selectedSym.endsWith('=X')
-            ? math.max(0.01, (capByLoss / 100000.0))
-            : double.parse(rawUnits.toStringAsFixed(4)));
-
-    final totalRiskUsd = math.min(_maxLossPerTradeUsd, rawUnits * riskPerUnit);
+    final riskPerPriceUnit = (entry - stop).abs();
     final dec = _decimalsFor(entry);
+
+    final spec = _contractSpec(_selectedSym);
+    final contractSize = (spec['size'] as num).toDouble();
+    final minSize = (spec['min'] as num).toDouble();
+    final step = (spec['step'] as num).toDouble();
+    final isCfd = spec['cfd'] == true;
+    final unitName = spec['unit'] as String;
+    final usdBase = _selectedSym == 'USDJPY=X' || _selectedSym == 'USDCAD=X';
+    final quoteToUsd = (usdBase && entry > 0) ? (1.0 / entry) : 1.0;
+
+    // 1.0 lot/share/unit-e koto USD risk
+    final lossPerOneUnit = riskPerPriceUnit * contractSize * quoteToUsd;
+    final rawByLoss = lossPerOneUnit > 0 ? (_maxLossPerTradeUsd / lossPerOneUnit) : 0.0;
+
+    String decidingCap = 'max_loss (\$$_maxLossPerTradeUsd risk limit)';
+    double chosenRaw = rawByLoss;
+    if (!isCfd && entry > 0) {
+      final capByPos = (_budgetUsd * (_maxPositionPct / 100.0)) / entry;
+      final capByOrder = _maxOrderUsd / entry;
+      final capByCash = (_budgetUsd * (1.0 - (_cashBufferPct / 100.0))) / entry;
+      final caps = <String, double>{
+        'max_loss (\$$_maxLossPerTradeUsd risk limit)': rawByLoss,
+        'position_cap (${_maxPositionPct.toStringAsFixed(0)}% of budget)': capByPos,
+        'max_order (\$$_maxOrderUsd order cap)': capByOrder,
+        'cash_after_buffer (${(100 - _cashBufferPct).toStringAsFixed(0)}% cash)': capByCash,
+      };
+      caps.forEach((k, v) {
+        if (v < chosenRaw) {
+          chosenRaw = v;
+          decidingCap = k;
+        }
+      });
+    }
+
+    final steps = step > 0 ? (chosenRaw / step).floor() : 0;
+    final flooredSize = steps * step;
+    final sizeFits = flooredSize >= minSize - 1e-9;
+    final finalSize = sizeFits ? flooredSize : minSize;
+    final realRiskUsd = finalSize * lossPerOneUnit;
+    if (!sizeFits) {
+      decidingCap =
+          'STOP TOO WIDE: min $minSize $unitName risks \$${realRiskUsd.toStringAsFixed(2)} > limit \$${_maxLossPerTradeUsd.toStringAsFixed(0)}';
+    }
+
+    final wholeShares = isCfd
+        ? math.max(1, (finalSize * contractSize).round())
+        : (step >= 1.0 ? math.max(1, finalSize.round()) : 1);
+    final lotsDisp = step < 0.01
+        ? double.parse(finalSize.toStringAsFixed(3))
+        : double.parse(finalSize.toStringAsFixed(2));
+    final notionalUsd = isCfd
+        ? finalSize * contractSize * entry * quoteToUsd
+        : finalSize * entry;
 
     _budgetOrderState = {
       'symbol': _selectedSym,
       'label': _selectedLabel,
       'side': 'buy',
-      'qty': wholeShares.toString(),
-      'exact_units': double.parse(rawUnits.toStringAsFixed(4)),
-      'forex_lots': double.parse(forexLots.toStringAsFixed(2)),
+      'qty': step >= 1.0 ? wholeShares.toString() : lotsDisp.toString(),
+      'exact_units': double.parse(chosenRaw.toStringAsFixed(4)),
+      'forex_lots': lotsDisp,
+      'size_fits': sizeFits,
+      'is_cfd': isCfd,
       'type': 'market',
       'time_in_force': 'day',
       'order_class': 'bracket',
       'entry_price': entry.toStringAsFixed(dec),
       'stop_loss_stop_price': stop.toStringAsFixed(dec),
       'take_profit_limit_price': target.toStringAsFixed(dec),
-      'max_loss_usd': double.parse(totalRiskUsd.toStringAsFixed(2)),
+      'max_loss_usd': double.parse(realRiskUsd.toStringAsFixed(2)),
       'deciding_limit': decidingCap,
-      'notional_usd': double.parse((wholeShares * entry).toStringAsFixed(2)),
+      'notional_usd': double.parse(notionalUsd.toStringAsFixed(2)),
     };
 
     if (!mounted) return;
     setState(() {
       if (!silent) {
-        _statusMsg = 'trader-budget: Sized $wholeShares units (${forexLots.toStringAsFixed(2)} lots) • Max Risk \$${totalRiskUsd.toStringAsFixed(2)}';
+        _statusMsg = sizeFits
+            ? 'trader-budget: $lotsDisp $unitName • Real Risk \$${realRiskUsd.toStringAsFixed(2)}'
+            : 'trader-budget: REFUSED — min $minSize $unitName risks \$${realRiskUsd.toStringAsFixed(2)} > \$$_maxLossPerTradeUsd';
       }
     });
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  SKILL 7: trader-risk (10-Rule Pre-Trade Compliance Check)
+  //  SKILL 7: trader-risk (Pre-Trade Compliance Check)
   // ═══════════════════════════════════════════════════════════════════
   Future<void> _runRiskCheck({bool silent = false}) async {
     if (_budgetOrderState == null) {
@@ -4382,61 +4897,96 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     }
     if (_budgetOrderState == null || _planState == null) return;
 
-    final List<String> passedRules = [];
-    final List<String> blockedReasons = [];
+    final passed = <String>[];
+    final blocked = <String>[];
 
+    final b = _budgetOrderState!;
     final entry = (_planState!['entry'] as num).toDouble();
     final stop = (_planState!['stop'] as num).toDouble();
     final target = (_planState!['target'] as num).toDouble();
-    final rr = (_planState!['reward_risk'] as num).toDouble();
-    final maxLossUsd = (_budgetOrderState!['max_loss_usd'] as num).toDouble();
+    final dec = _decimalsFor(entry);
+    final riskPerUnit = (entry - stop).abs();
+    final rr = riskPerUnit > 0 ? (target - entry).abs() / riskPerUnit : 0.0;
+    final tradeRisk = (b['max_loss_usd'] as num).toDouble();
+    final notional = (b['notional_usd'] as num).toDouble();
+    final sizeFits = b['size_fits'] != false;
+    final isCfd = b['is_cfd'] == true;
 
     if (stop > 0 && stop < entry) {
-      passedRules.add('Stop-Loss present and below entry (${stop.toStringAsFixed(_decimalsFor(stop))})');
+      passed.add('Stop-Loss below entry (${stop.toStringAsFixed(dec)})');
     } else {
-      blockedReasons.add('Stop-Loss missing or at/above entry price');
+      blocked.add('Stop-Loss missing or at/above entry');
     }
 
     if (target > entry) {
-      passedRules.add('Take-Profit above entry (${target.toStringAsFixed(_decimalsFor(target))})');
+      passed.add('Take-Profit above entry (${target.toStringAsFixed(dec)})');
     } else {
-      blockedReasons.add('Take-Profit must be strictly above entry');
+      blocked.add('Take-Profit must be above entry');
     }
 
-    if (maxLossUsd <= _maxLossPerTradeUsd + 0.01) {
-      passedRules.add('Trade risk (\$${maxLossUsd.toStringAsFixed(2)}) fits Max Loss limit (\$$_maxLossPerTradeUsd)');
+    if (sizeFits && tradeRisk <= _maxLossPerTradeUsd + 0.01) {
+      passed.add('Real trade risk \$${tradeRisk.toStringAsFixed(2)} <= limit \$${_maxLossPerTradeUsd.toStringAsFixed(0)}');
     } else {
-      blockedReasons.add('Trade risk (\$${maxLossUsd.toStringAsFixed(2)}) exceeds Max Loss limit (\$$_maxLossPerTradeUsd)');
+      blocked.add('Real trade risk \$${tradeRisk.toStringAsFixed(2)} EXCEEDS limit \$${_maxLossPerTradeUsd.toStringAsFixed(0)} (stop too wide for min lot)');
     }
 
-    if (rr >= _minRewardRisk) {
-      passedRules.add('Reward:Risk (${rr.toStringAsFixed(2)}R) meets minimum (${_minRewardRisk}R)');
+    if (rr >= _minRewardRisk - 0.001) {
+      passed.add('Reward:Risk ${rr.toStringAsFixed(2)}R >= ${_minRewardRisk}R');
     } else {
-      blockedReasons.add('Reward:Risk (${rr.toStringAsFixed(2)}R) is below minimum (${_minRewardRisk}R)');
+      blocked.add('Reward:Risk ${rr.toStringAsFixed(2)}R < ${_minRewardRisk}R');
     }
 
-    final todayTrades = _brokerLog.length;
-    final usedDailyRisk = todayTrades * maxLossUsd;
-    if (usedDailyRisk + maxLossUsd <= _maxDailyLossUsd) {
-      passedRules.add('Fits Daily Loss Limit (\$${(usedDailyRisk + maxLossUsd).toStringAsFixed(2)} / \$$_maxDailyLossUsd)');
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    double usedToday = 0.0;
+    for (final t in _brokerLog) {
+      final when = (t['approved_at'] ?? '').toString();
+      final st = (t['status'] ?? '').toString();
+      final r = t['max_loss_usd'];
+      if (when.startsWith(today) && st.contains('PAPER FILLED') && r is num) {
+        usedToday += r.toDouble();
+      }
+    }
+    final projected = usedToday + tradeRisk;
+    if (projected <= _maxDailyLossUsd + 0.01) {
+      passed.add('Today risk \$${projected.toStringAsFixed(2)} / \$${_maxDailyLossUsd.toStringAsFixed(0)}');
     } else {
-      blockedReasons.add('Would exceed Daily Loss Limit (\$$_maxDailyLossUsd)');
+      blocked.add('Exceeds Daily Loss Limit (\$${projected.toStringAsFixed(2)} > \$${_maxDailyLossUsd.toStringAsFixed(0)})');
     }
 
-    passedRules.add('Cash buffer (${_cashBufferPct.toStringAsFixed(0)}%) & Position Cap (${_maxPositionPct.toStringAsFixed(0)}%) preserved');
+    if (isCfd) {
+      passed.add('CFD/Futures (${b['forex_lots']} lots): sized by risk-per-trade');
+    } else {
+      final maxPos = _budgetUsd * (_maxPositionPct / 100.0);
+      final maxInvest = _budgetUsd * (1.0 - _cashBufferPct / 100.0);
+      if (notional > maxPos + 0.01) {
+        blocked.add('Position \$${notional.toStringAsFixed(0)} > cap \$${maxPos.toStringAsFixed(0)}');
+      } else {
+        passed.add('Position \$${notional.toStringAsFixed(0)} <= cap \$${maxPos.toStringAsFixed(0)}');
+      }
+      if (notional > _maxOrderUsd + 0.01) {
+        blocked.add('Order \$${notional.toStringAsFixed(0)} > max order \$${_maxOrderUsd.toStringAsFixed(0)}');
+      } else {
+        passed.add('Order <= max order \$${_maxOrderUsd.toStringAsFixed(0)}');
+      }
+      if (notional > maxInvest + 0.01) {
+        blocked.add('Cash buffer ${_cashBufferPct.toStringAsFixed(0)}% breached');
+      } else {
+        passed.add('Cash buffer ${_cashBufferPct.toStringAsFixed(0)}% preserved');
+      }
+    }
 
-    final verdict = blockedReasons.isEmpty ? 'PASS' : 'BLOCK';
+    final verdict = blocked.isEmpty ? 'PASS' : 'BLOCK';
     _riskVerdictState = {
       'verdict': verdict,
-      'passed': passedRules,
-      'blocked': blockedReasons,
+      'passed': passed,
+      'blocked': blocked,
       'checked_at': DateTime.now().toIso8601String(),
     };
 
     if (!mounted) return;
     setState(() {
       if (!silent) {
-        _statusMsg = 'trader-risk verdict: $verdict (${passedRules.length} rules passed, ${blockedReasons.length} blocked)';
+        _statusMsg = 'trader-risk: $verdict (${passed.length} passed, ${blocked.length} blocked)';
       }
     });
   }
@@ -4556,40 +5106,59 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
 
   void _startBackgroundAlertWatcher() {
     _alertWatchTimer = Timer.periodic(const Duration(seconds: 45), (_) async {
+      bool anyChanged = false;
+
+      // 1) Time alerts (Flat-by-Close)
+      final nowUtc = DateTime.now().toUtc();
+      final ny = nowUtc.add(Duration(hours: apIsUsDst(nowUtc) ? -4 : -5));
+      final nyMin = ny.hour * 60 + ny.minute;
+      final isWeekday = ny.weekday != DateTime.saturday && ny.weekday != DateTime.sunday;
+      for (final a in _alertsList) {
+        if (a['triggered'] == true || a['rule'] != 'time') continue;
+        final ps = (a['price_str'] ?? '15:55').toString();
+        final m = RegExp(r'(\d{1,2}):(\d{2})').firstMatch(ps);
+        final targetMin = m != null ? (int.parse(m.group(1)!) * 60 + int.parse(m.group(2)!)) : (15 * 60 + 55);
+        if (isWeekday && nyMin >= targetMin && nyMin <= targetMin + 30) {
+          a['triggered'] = true;
+          anyChanged = true;
+          _notifyToast('🔔 TIME ALERT: ${a['label']} ($ps)');
+        }
+      }
+
+      // 2) Price alerts
       final active = _alertsList.where((a) => a['triggered'] != true && a['rule'] != 'time').toList();
-      if (active.isEmpty) return;
       final syms = active.map((a) => a['symbol'].toString()).toSet();
       for (final s in syms) {
         final chart = await _fetchYahooChart(s, range: '1d', interval: '5m');
         if (chart == null) continue;
         final px = chart['price'] as double;
         final prevC = chart['prevClose'] as double;
-        bool changed = false;
         for (final a in _alertsList) {
-          if (a['symbol'] == s && a['triggered'] != true) {
+          if (a['symbol'] == s && a['triggered'] != true && a['rule'] != 'time') {
             final lvl = (a['price'] as num).toDouble();
             if (a['rule'] == 'above' && px >= lvl) {
               a['triggered'] = true;
-              changed = true;
+              anyChanged = true;
               _notifyToast('🔔 ALERT HIT: ${a['label']} @ $px');
             } else if (a['rule'] == 'below' && px <= lvl) {
               a['triggered'] = true;
-              changed = true;
+              anyChanged = true;
               _notifyToast('🔔 STOP ALERT HIT: ${a['label']} @ $px');
             } else if (a['rule'] == 'pct_move' && prevC > 0) {
               final chg = ((px - prevC) / prevC * 100.0).abs();
               if (chg >= lvl) {
                 a['triggered'] = true;
-                changed = true;
+                anyChanged = true;
                 _notifyToast('🔔 % MOVE ALERT HIT: ${a['label']} (${chg.toStringAsFixed(2)}%)');
               }
             }
           }
         }
-        if (changed && mounted) {
-          setState(() {});
-          await _saveProState();
-        }
+      }
+
+      if (anyChanged && mounted) {
+        setState(() {});
+        await _saveProState();
       }
     });
   }
@@ -4608,6 +5177,33 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     'GOOGL': '0001652044',
   };
 
+  List<Map<String, dynamic>> _xbrlQuarters(List<dynamic> units) {
+    final byEnd = <String, Map<String, dynamic>>{};
+    for (final raw in units) {
+      if (raw is! Map) continue;
+      final form = (raw['form'] ?? '').toString();
+      if (form != '10-Q' && form != '10-K') continue;
+      final s = (raw['start'] ?? '').toString();
+      final e = (raw['end'] ?? '').toString();
+      if (s.isEmpty || e.isEmpty) continue;
+      try {
+        final days = DateTime.parse(e).difference(DateTime.parse(s)).inDays;
+        if (days < 75 || days > 105) continue; // shudhu ~90-day single quarter
+      } catch (_) {
+        continue;
+      }
+      final m = Map<String, dynamic>.from(raw);
+      final prev = byEnd[e];
+      if (prev == null ||
+          (m['filed'] ?? '').toString().compareTo((prev['filed'] ?? '').toString()) >= 0) {
+        byEnd[e] = m;
+      }
+    }
+    final list = byEnd.values.toList()
+      ..sort((a, b) => (a['end'] as String).compareTo(b['end'] as String));
+    return list;
+  }
+
   Future<void> _runAnalyst({bool silent = false}) async {
     if (!silent) {
       setState(() {
@@ -4615,6 +5211,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
         _statusMsg = 'Running trader-analyst for $_selectedLabel...';
       });
     }
+    _analystState = null;
 
     final cik = _knownCiks[_selectedSym];
     if (cik != null) {
@@ -4631,45 +5228,71 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
             'Revenues',
             'SalesRevenueNet',
           ]) {
-            if (gaap[k]?['units']?['USD'] is List) {
-              revUnits = gaap[k]['units']['USD'] as List;
+            final u = gaap[k]?['units']?['USD'];
+            if (u is List && u.isNotEmpty) {
+              revUnits = u;
               break;
             }
           }
           final netUnits = (gaap['NetIncomeLoss']?['units']?['USD'] as List?) ?? [];
-          final qRevs = revUnits.where((e) => (e['form'] == '10-Q' || e['form'] == '10-K') && e['val'] != null).toList();
-          final qNets = netUnits.where((e) => (e['form'] == '10-Q' || e['form'] == '10-K') && e['val'] != null).toList();
+          final qRevs = _xbrlQuarters(revUnits);
+          final qNets = _xbrlQuarters(netUnits);
 
-          final lastRev = qRevs.isNotEmpty ? (qRevs.last['val'] as num).toDouble() : 0.0;
-          final prevYearRev = qRevs.length >= 5 ? (qRevs[qRevs.length - 5]['val'] as num).toDouble() : 0.0;
-          final revYoy = prevYearRev > 0 ? (((lastRev - prevYearRev) / prevYearRev) * 100.0) : 0.0;
-          final lastNet = qNets.isNotEmpty ? (qNets.last['val'] as num).toDouble() : 0.0;
-          final lastEnd = qRevs.isNotEmpty ? (qRevs.last['end'] ?? '').toString() : 'Latest Filing';
-          final netMargin = lastRev > 0 ? ((lastNet / lastRev) * 100.0) : 0.0;
+          if (qRevs.isNotEmpty) {
+            final lastRev = (qRevs.last['val'] as num).toDouble();
+            final lastEnd = (qRevs.last['end'] ?? '').toString();
+            final lastDt = DateTime.tryParse(lastEnd);
+            double prevYearRev = 0.0;
+            if (lastDt != null) {
+              for (final q in qRevs) {
+                final dt = DateTime.tryParse((q['end'] ?? '').toString());
+                if (dt != null) {
+                  final diff = lastDt.difference(dt).inDays;
+                  if (diff >= 330 && diff <= 400) {
+                    prevYearRev = (q['val'] as num).toDouble();
+                  }
+                }
+              }
+            }
+            if (prevYearRev == 0 && qRevs.length >= 5) {
+              prevYearRev = (qRevs[qRevs.length - 5]['val'] as num).toDouble();
+            }
+            final revYoy = prevYearRev > 0 ? (((lastRev - prevYearRev) / prevYearRev) * 100.0) : 0.0;
 
-          final List<String> recentQuarters = [];
-          for (int idx = math.max(0, qRevs.length - 4); idx < qRevs.length; idx++) {
-            final rItem = qRevs[idx];
-            final rVal = ((rItem['val'] as num).toDouble() / 1e9).toStringAsFixed(2);
-            final rEnd = (rItem['end'] ?? '').toString();
-            final rForm = (rItem['form'] ?? '10-Q').toString();
-            recentQuarters.add('$rEnd ($rForm): \$$rVal Bn');
+            double lastNet = qNets.isNotEmpty ? (qNets.last['val'] as num).toDouble() : 0.0;
+            for (final n in qNets) {
+              if (n['end'] == lastEnd) {
+                lastNet = (n['val'] as num).toDouble();
+                break;
+              }
+            }
+            final netMargin = lastRev > 0 ? ((lastNet / lastRev) * 100.0) : 0.0;
+
+            final recentQuarters = <String>[];
+            for (int idx = math.max(0, qRevs.length - 4); idx < qRevs.length; idx++) {
+              final rItem = qRevs[idx];
+              final rVal = ((rItem['val'] as num).toDouble() / 1e9).toStringAsFixed(2);
+              final rEnd = (rItem['end'] ?? '').toString();
+              final rFp = (rItem['fp'] ?? rItem['form'] ?? '10-Q').toString();
+              recentQuarters.add('$rEnd ($rFp): \$$rVal Bn');
+            }
+
+            _analystState = {
+              'mode': 'SEC EDGAR XBRL (90-day quarters)',
+              'entity': entity,
+              'period_end': lastEnd,
+              'revenue_bn':
+                  '\$${(lastRev / 1e9).toStringAsFixed(2)} Bn (${revYoy >= 0 ? "+" : ""}${revYoy.toStringAsFixed(1)}% YoY)',
+              'net_income_bn': '\$${(lastNet / 1e9).toStringAsFixed(2)} Bn',
+              'net_margin_pct': '${netMargin.toStringAsFixed(1)}% Net Margin',
+              'quarters': recentQuarters,
+            };
           }
-
-          _analystState = {
-            'mode': 'SEC EDGAR XBRL (10-Q / 10-K)',
-            'entity': entity,
-            'period_end': lastEnd,
-            'revenue_bn': '\$${(lastRev / 1e9).toStringAsFixed(2)} Bn (${revYoy >= 0 ? "+" : ""}${revYoy.toStringAsFixed(1)}% YoY)',
-            'net_income_bn': '\$${(lastNet / 1e9).toStringAsFixed(2)} Bn',
-            'net_margin_pct': '${netMargin.toStringAsFixed(1)}% Net Margin',
-            'quarters': recentQuarters,
-          };
         } catch (_) {}
       }
     }
 
-    if (_analystState == null || _analystState!['entity'] == null) {
+    if (_analystState == null) {
       final daily = await _fetchYahooChart(_selectedSym, range: '3mo', interval: '1d');
       final bars = (daily?['bars'] as List<ProBar>?) ?? [];
       if (bars.isNotEmpty) {
@@ -4680,15 +5303,15 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
         final perf3m = startPx > 0 ? (((endPx - startPx) / startPx) * 100.0) : 0.0;
         final dec = _decimalsFor(endPx);
         _analystState = {
-          'mode': 'MACRO & SEASONAL FUNDAMENTAL PROFILE',
+          'mode': '90-DAY PRICE RANGE (SEC XBRL shudhu US stocks-er jonno)',
           'entity': _selectedLabel,
-          'period_end': 'Trailing 90 Days (Daily Bars)',
+          'period_end': '${bars.length} Daily Bars',
           'revenue_bn': '90D High: ${hi3m.toStringAsFixed(dec)}',
           'net_income_bn': '90D Low: ${lo3m.toStringAsFixed(dec)}',
-          'net_margin_pct': '${perf3m >= 0 ? "+" : ""}${perf3m.toStringAsFixed(2)}% (90D Performance)',
+          'net_margin_pct': '${perf3m >= 0 ? "+" : ""}${perf3m.toStringAsFixed(2)}% (90D Change)',
           'quarters': <String>[
-            'Current Price: ${endPx.toStringAsFixed(dec)}',
-            '90D Range Midpoint: ${((hi3m + lo3m) / 2).toStringAsFixed(dec)}',
+            'Current: ${endPx.toStringAsFixed(dec)}',
+            '90D Midpoint: ${((hi3m + lo3m) / 2).toStringAsFixed(dec)}',
           ],
         };
       }
@@ -4707,73 +5330,13 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
   //  SKILL 11: trader-pelosi (Congress & Nancy Pelosi PTR Tracker)
   // ═══════════════════════════════════════════════════════════════════
   Future<void> _runPelosiTracker({bool silent = false}) async {
-    if (!silent) {
-      setState(() {
-        _busy = true;
-        _statusMsg = 'Running trader-pelosi (US House Clerk STOCK Act Disclosures)...';
-      });
-    }
-    _pelosiRows = [
-      {
-        'member': 'Hon. Nancy Pelosi (CA-11)',
-        'ticker': 'NVDA',
-        'asset': 'NVIDIA Corporation — Common Stock & Call Options',
-        'type': 'BUY / CALL EXERCISE',
-        'amount': '\$1,000,001 – \$5,000,000',
-        'filed': '2026-10-02',
-        'doc_id': '20035553',
-      },
-      {
-        'member': 'Hon. Nancy Pelosi (CA-11)',
-        'ticker': 'AVGO',
-        'asset': 'Broadcom Inc. — Call Options (20 Contracts)',
-        'type': 'BUY (CALL OPTIONS)',
-        'amount': '\$1,000,001 – \$5,000,000',
-        'filed': '2026-08-21',
-        'doc_id': '20035143',
-      },
-      {
-        'member': 'Hon. Nancy Pelosi (CA-11)',
-        'ticker': 'PANW',
-        'asset': 'Palo Alto Networks, Inc. — Call Options',
-        'type': 'BUY',
-        'amount': '\$500,001 – \$1,000,000',
-        'filed': '2026-06-23',
-        'doc_id': '20034836',
-      },
-      {
-        'member': 'Hon. Nancy Pelosi (CA-11)',
-        'ticker': 'MSFT / GOOGL',
-        'asset': 'Microsoft & Alphabet — Long-Dated LEAPS',
-        'type': 'BUY / HOLD',
-        'amount': '\$500,001 – \$1,000,000',
-        'filed': '2026-01-23',
-        'doc_id': '20033725',
-      },
-      {
-        'member': 'Hon. Josh Gottheimer (NJ-05)',
-        'ticker': 'MSFT / AAPL / NVDA',
-        'asset': 'Tech Mega-Cap Common Stock',
-        'type': 'BUY',
-        'amount': '\$15,001 – \$50,000',
-        'filed': '2026-09-18',
-        'doc_id': '20035410',
-      },
-      {
-        'member': 'Hon. Michael McCaul (TX-10)',
-        'ticker': 'TSM / META',
-        'asset': 'Semiconductor & AI Infrastructure Shares',
-        'type': 'BUY',
-        'amount': '\$100,001 – \$250,000',
-        'filed': '2026-09-11',
-        'doc_id': '20035312',
-      },
-    ];
+    _pelosiRows = [];
     if (!mounted) return;
     setState(() {
       if (!silent) {
         _busy = false;
-        _statusMsg = 'trader-pelosi loaded ${_pelosiRows.length} House Clerk PTR filings.';
+        _statusMsg =
+            'trader-pelosi: House Clerk PTRs are PDF filings - check disclosures-clerk.house.gov (no fake rows shown).';
       }
     });
   }
@@ -4786,6 +5349,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
       _busy = true;
       _aiDeepSummary = '';
       _statusMsg = 'Step 1/6: Running trader-entry & trader-exit on $_selectedLabel...';
+      _resetSymbolState();
     });
 
     await _runEntry(silent: true);
@@ -5009,6 +5573,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
                               setState(() {
                                 _selectedSym = v;
                                 _selectedLabel = match['label']!;
+                                _resetSymbolState();
                               });
                             },
                           ),
@@ -5215,6 +5780,50 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
     );
   }
 
+  void _showLevelDialog() {
+    final c = TextEditingController(
+      text: _customBreakoutLevel > 0 ? _customBreakoutLevel.toString() : '',
+    );
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A202C),
+        title: Text('Breakout Level ($_selectedLabel)',
+            style: const TextStyle(color: kGold, fontSize: 15, fontWeight: FontWeight.bold)),
+        content: TextField(
+          controller: c,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            labelText: 'Price level (e.g. 20D high / resistance)',
+            labelStyle: TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: kGold, foregroundColor: Colors.black),
+            onPressed: () {
+              final v = double.tryParse(c.text.trim()) ?? 0.0;
+              Navigator.pop(ctx);
+              if (v > 0) {
+                setState(() {
+                  _customBreakoutLevel = v;
+                  _entrySetupMode = 'level';
+                });
+                _runEntry();
+              }
+            },
+            child: const Text('Use Level', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildEntryCard() {
     final e = _entryState;
     final px = (e?['price'] as num?)?.toDouble() ?? 0.0;
@@ -5236,6 +5845,13 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
                   setState(() => _entryInterval = '5m');
                   _runEntry();
                 }),
+                _chipChoice(
+                  _customBreakoutLevel > 0
+                      ? 'Level (${_customBreakoutLevel.toStringAsFixed(dec)})'
+                      : 'Set Level...',
+                  _entrySetupMode == 'level',
+                  _showLevelDialog,
+                ),
                 _chipChoice('1m Bars', _entryInterval == '1m', () {
                   setState(() => _entryInterval = '1m');
                   _runEntry();
@@ -5622,7 +6238,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
         child: const Text('Scan All Markets', style: TextStyle(color: kGold, fontSize: 12)),
       ),
       child: _watchlist.isEmpty
-          ? const Text('Tap "Scan All Markets" to scan Gold, Silver, BTC, Forex Majors & Top Stocks for ORB, 20D Breakout, Bull Flag & RSI Bounces.',
+          ? const Text('Tap "Scan All Markets" - Gold, Silver, Oil, Indices, Crypto & Forex Majors scan hoy (stocks na): ORB, 20D Breakout, Bull Flag, RSI Bounce.',
               style: TextStyle(color: Colors.white54, fontSize: 12))
           : Column(
               children: [
@@ -5684,6 +6300,62 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
               ],
             ),
     );
+  }
+
+  Future<void> _runNewsGoogle({bool silent = false}) async {
+    final qMap = <String, String>{
+      'GC=F': 'gold XAUUSD price Federal Reserve',
+      'SI=F': 'silver XAGUSD price',
+      'CL=F': 'WTI crude oil price OPEC',
+      'NQ=F': 'Nasdaq 100 futures',
+      'YM=F': 'Dow Jones futures',
+      'DX-Y.NYB': 'US dollar index DXY Federal Reserve',
+      'BTC-USD': 'Bitcoin BTC price ETF',
+      'ETH-USD': 'Ethereum ETH price',
+      'SOL-USD': 'Solana SOL crypto',
+      'EURUSD=X': 'EUR USD euro dollar ECB',
+      'GBPUSD=X': 'GBP USD pound Bank of England',
+      'USDJPY=X': 'USD JPY yen Bank of Japan',
+      'AUDUSD=X': 'AUD USD Australian dollar RBA',
+      'USDCAD=X': 'USD CAD Canadian dollar BoC',
+    };
+    final q = qMap[_selectedSym] ?? '$_selectedLabel stock market';
+    final url =
+        'https://news.google.com/rss/search?q=${Uri.encodeComponent(q)}&hl=en-US&gl=US&ceid=US:en';
+    final xml = await _fetchUrl(url, userAgent: _apBrowserUa);
+    if (xml.isEmpty) return;
+
+    final items = <Map<String, dynamic>>[];
+    final itemReg = RegExp(r'<item>([\s\S]*?)</item>', caseSensitive: false);
+    final titleReg = RegExp(
+        r'<title><!\[CDATA\[([\s\S]*?)\]\]></title>|<title>([\s\S]*?)</title>',
+        caseSensitive: false);
+    final pubReg = RegExp(r'<pubDate>([\s\S]*?)</pubDate>', caseSensitive: false);
+    for (final m in itemReg.allMatches(xml).take(10)) {
+      final b = m.group(1) ?? '';
+      final tm = titleReg.firstMatch(b);
+      final t = (tm?.group(1) ?? tm?.group(2) ?? '')
+          .trim()
+          .replaceAll('&amp;', '&')
+          .replaceAll('&quot;', '"')
+          .replaceAll('&#39;', "'");
+      if (t.isEmpty) continue;
+      final pub = (pubReg.firstMatch(b)?.group(1) ?? '').trim();
+      items.add({
+        'sym': _selectedLabel,
+        'title': t,
+        'tag': _tagHeadline(t),
+        'time': pub,
+        'link': '',
+      });
+    }
+    if (!mounted || items.isEmpty) return;
+    setState(() {
+      _newsItems = items;
+      if (!silent) {
+        _statusMsg = 'trader-news loaded ${items.length} headlines (Google News RSS).';
+      }
+    });
   }
 
   Widget _buildNewsCard() {
@@ -5799,7 +6471,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
                 r['ticker'].toString().toLowerCase().contains(_pelosiFilter.toLowerCase()))
             .toList();
     return _card(
-      title: '11. TRADER-PELOSI • US Congress STOCK Act PTR Tracker',
+      title: '11. TRADER-PELOSI • Congress STOCK Act PTR Disclosures',
       trailing: TextButton(
         onPressed: _busy ? null : () => _runPelosiTracker(),
         child: const Text('Refresh PTRs', style: TextStyle(color: kGold, fontSize: 12)),
@@ -5821,7 +6493,7 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
           ),
           const SizedBox(height: 8),
           if (filtered.isEmpty)
-            const Text('Tap "Refresh PTRs" to load House Clerk Periodic Transaction Reports.',
+            const Text('Live feed connected na (ager list code-e likha FIXED chhilo, real na). Real PTR: disclosures-clerk.house.gov (House) / efdsearch.senate.gov (Senate). Chaile Quiver/FMP API key diye feed jure dewa jabe.',
                 style: TextStyle(color: Colors.white54, fontSize: 12))
           else
             for (final r in filtered)
@@ -6127,4 +6799,218 @@ class _ProTraderDeskScreenState extends State<ProTraderDeskScreen> {
       ),
     );
   }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+//  ANIKET PRO AI — SHARED MARKET DATA + SESSION CLOCK (Patch 2)
+// ═══════════════════════════════════════════════════════════════════
+
+const String _apBrowserUa =
+    'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 '
+    '(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36';
+
+// Crypto + USD-quoted FX majors (spot-er sathe ~1:1).
+// Gold (GC=F) ekhane NEI — Yahoo GC=F age chesta hobe, fail korle PAXG fallback.
+const Map<String, String> _apBinance = {
+  'BTC-USD': 'BTCUSDT',
+  'ETH-USD': 'ETHUSDT',
+  'SOL-USD': 'SOLUSDT',
+  'EURUSD=X': 'EURUSDT',
+  'GBPUSD=X': 'GBPUSDT',
+  'AUDUSD=X': 'AUDUSDT',
+};
+
+Future<String> apNativeGet(String url, {String? ua, int timeoutSec = 10}) async {
+  HttpClient? c;
+  try {
+    c = HttpClient()..connectionTimeout = Duration(seconds: timeoutSec);
+    final req = await c.getUrl(Uri.parse(url)).timeout(Duration(seconds: timeoutSec));
+    req.headers.set(HttpHeaders.userAgentHeader, ua ?? _apBrowserUa);
+    req.headers.set(HttpHeaders.acceptHeader, 'application/json,text/plain,*/*');
+    final resp = await req.close().timeout(Duration(seconds: timeoutSec));
+    if (resp.statusCode != 200) return '';
+    return await resp.transform(utf8.decoder).join().timeout(Duration(seconds: timeoutSec));
+  } catch (_) {
+    return '';
+  } finally {
+    c?.close(force: true);
+  }
+}
+
+bool apIsUsDst(DateTime utc) {
+  DateTime nthSun(int y, int m, int n) {
+    var d = DateTime.utc(y, m, 1);
+    while (d.weekday != DateTime.sunday) {
+      d = d.add(const Duration(days: 1));
+    }
+    return d.add(Duration(days: 7 * (n - 1)));
+  }
+  final s = nthSun(utc.year, 3, 2).add(const Duration(hours: 7));
+  final e = nthSun(utc.year, 11, 1).add(const Duration(hours: 6));
+  return !utc.isBefore(s) && utc.isBefore(e);
+}
+
+bool apIsUkDst(DateTime utc) {
+  DateTime lastSun(int y, int m) {
+    var d = DateTime.utc(y, m + 1, 0);
+    while (d.weekday != DateTime.sunday) {
+      d = d.subtract(const Duration(days: 1));
+    }
+    return d;
+  }
+  final s = lastSun(utc.year, 3).add(const Duration(hours: 1));
+  final e = lastSun(utc.year, 10).add(const Duration(hours: 1));
+  return !utc.isBefore(s) && utc.isBefore(e);
+}
+
+String apSessionKind(String sym) {
+  if (sym.endsWith('-USD')) return 'CRYPTO';
+  if (sym.endsWith('=X')) return 'FX';
+  if (sym.endsWith('=F') || sym == 'DX-Y.NYB') return 'FUT';
+  return 'STOCK';
+}
+
+int apSessionStartMs(String kind, DateTime nowUtc) {
+  if (kind == 'CRYPTO') {
+    return DateTime.utc(nowUtc.year, nowUtc.month, nowUtc.day).millisecondsSinceEpoch;
+  }
+  final etOff = apIsUsDst(nowUtc) ? -4 : -5;
+  final ny = nowUtc.add(Duration(hours: etOff));
+  DateTime nyLocalToUtc(int y, int m, int d, int h, int min) {
+    final guess = DateTime.utc(y, m, d, h - etOff, min);
+    final off2 = apIsUsDst(guess) ? -4 : -5;
+    return DateTime.utc(y, m, d, h - off2, min);
+  }
+  final ny930 = nyLocalToUtc(ny.year, ny.month, ny.day, 9, 30);
+
+  if (kind == 'STOCK') {
+    if (!nowUtc.isBefore(ny930) &&
+        ny.weekday != DateTime.saturday &&
+        ny.weekday != DateTime.sunday) {
+      return ny930.millisecondsSinceEpoch;
+    }
+    var d = DateTime.utc(ny.year, ny.month, ny.day).subtract(const Duration(days: 1));
+    while (d.weekday == DateTime.saturday || d.weekday == DateTime.sunday) {
+      d = d.subtract(const Duration(days: 1));
+    }
+    return nyLocalToUtc(d.year, d.month, d.day, 9, 30).millisecondsSinceEpoch;
+  }
+
+  // FX / Gold / Futures: NY 09:30 -> London 08:00 -> NY 17:00 rollover
+  if (!nowUtc.isBefore(ny930)) return ny930.millisecondsSinceEpoch;
+  final ukOff = apIsUkDst(nowUtc) ? 1 : 0;
+  final lon = nowUtc.add(Duration(hours: ukOff));
+  final lon800 = DateTime.utc(lon.year, lon.month, lon.day, 8 - ukOff, 0);
+  if (!nowUtc.isBefore(lon800)) return lon800.millisecondsSinceEpoch;
+  final prev = DateTime.utc(ny.year, ny.month, ny.day).subtract(const Duration(days: 1));
+  return nyLocalToUtc(prev.year, prev.month, prev.day, 17, 0).millisecondsSinceEpoch;
+}
+
+Future<Map<String, dynamic>?> apFetchCandles(
+    String sym, String interval, int limit, {String? yahooRange}) async {
+  final iv = (interval == '1d' || interval == '1m' || interval == '1h') ? interval : '5m';
+
+  Future<Map<String, dynamic>?> fromBinance(String bSym, {String note = ''}) async {
+    final lim = limit.clamp(20, 1000);
+    for (final host in ['api.binance.com', 'api1.binance.com', 'api3.binance.com', 'data-api.binance.vision']) {
+      final raw = await apNativeGet(
+        'https://$host/api/v3/klines?symbol=$bSym&interval=$iv&limit=$lim',
+        timeoutSec: 7,
+      );
+      if (raw.isEmpty) continue;
+      try {
+        final rows = jsonDecode(raw) as List;
+        if (rows.length < 15) continue;
+        final bars = <Map<String, dynamic>>[];
+        for (final r in rows) {
+          final a = r as List;
+          bars.add({
+            't': (a[0] as num).toInt(),
+            'o': double.parse(a[1].toString()),
+            'h': double.parse(a[2].toString()),
+            'l': double.parse(a[3].toString()),
+            'c': double.parse(a[4].toString()),
+            'v': double.parse(a[5].toString()),
+          });
+        }
+        final perDay = iv == '1d' ? 1 : (iv == '1h' ? 24 : (iv == '1m' ? 1440 : 288));
+        final prev = bars.length > perDay
+            ? (bars[bars.length - 1 - perDay]['c'] as double)
+            : (bars.first['o'] as double);
+        return {
+          'bars': bars,
+          'livePx': bars.last['c'],
+          'prevClose': prev,
+          'source': 'Binance ($bSym$note)',
+        };
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> fromYahoo() async {
+    final range = yahooRange ?? (iv == '1d' ? '3mo' : (iv == '1h' ? '1mo' : (iv == '1m' ? '1d' : '5d')));
+    for (final host in ['query2.finance.yahoo.com', 'query1.finance.yahoo.com']) {
+      final raw = await apNativeGet(
+        'https://$host/v8/finance/chart/${Uri.encodeComponent(sym)}?range=$range&interval=$iv',
+        timeoutSec: 8,
+      );
+      if (raw.isEmpty) continue;
+      try {
+        final j = jsonDecode(raw) as Map<String, dynamic>;
+        final resList = (j['chart']?['result'] as List?) ?? const [];
+        if (resList.isEmpty) continue;
+        final r0 = resList.first as Map<String, dynamic>;
+        final meta = (r0['meta'] as Map<String, dynamic>?) ?? const {};
+        final ts = (r0['timestamp'] as List?) ?? const [];
+        final qList = (r0['indicators']?['quote'] as List?) ?? const [];
+        if (qList.isEmpty) continue;
+        final q = qList.first as Map<String, dynamic>;
+        final oL = (q['open'] as List?) ?? const [];
+        final hL = (q['high'] as List?) ?? const [];
+        final lL = (q['low'] as List?) ?? const [];
+        final cL = (q['close'] as List?) ?? const [];
+        final vL = (q['volume'] as List?) ?? const [];
+        final bars = <Map<String, dynamic>>[];
+        for (int i = 0; i < ts.length && i < cL.length; i++) {
+          final c = (cL[i] as num?)?.toDouble();
+          final h = (hL[i] as num?)?.toDouble();
+          final l = (lL[i] as num?)?.toDouble();
+          if (c == null || h == null || l == null) continue;
+          final o = (oL.length > i ? (oL[i] as num?)?.toDouble() : null) ?? c;
+          final v = (vL.length > i ? (vL[i] as num?)?.toDouble() : null) ?? 0.0;
+          bars.add({'t': (ts[i] as num).toInt() * 1000, 'o': o, 'h': h, 'l': l, 'c': c, 'v': v});
+        }
+        if (bars.length >= 15) {
+          final trimmed = bars.length > limit ? bars.sublist(bars.length - limit) : bars;
+          return {
+            'bars': trimmed,
+            'livePx': (meta['regularMarketPrice'] as num?)?.toDouble() ?? (trimmed.last['c'] as double),
+            'prevClose': (meta['chartPreviousClose'] as num?)?.toDouble() ??
+                (meta['previousClose'] as num?)?.toDouble() ??
+                (trimmed.first['o'] as double),
+            'source': 'Yahoo ($sym)',
+            'meta': meta,
+          };
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  // 1) Crypto / EUR / GBP / AUD -> Binance direct
+  final bn = _apBinance[sym];
+  if (bn != null) {
+    final r = await fromBinance(bn);
+    if (r != null) return r;
+  }
+  // 2) Gold, Silver, Oil, Indices, JPY/CAD, Stocks -> Yahoo via Dart HttpClient (no CORS)
+  final y = await fromYahoo();
+  if (y != null) return y;
+  // 3) Gold last-resort fallback -> Binance PAXG (explicitly labeled as proxy)
+  if (sym == 'GC=F') {
+    return await fromBinance('PAXGUSDT', note: ' gold-proxy');
+  }
+  return null;
 }
